@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple, Union
+import numpy as np
 import random
 
 # ------------------------- AST classes -------------------------
@@ -13,7 +14,7 @@ class Formula:
     def __str__(self) -> str:
         raise NotImplementedError
     
-    def eval(self) -> bool:
+    def eval_trace(self, trace : np.ndarray) -> bool:
         raise NotImplementedError
 
 
@@ -26,7 +27,9 @@ class Atom(Formula):
 
     def __str__(self) -> str:
         return self.name[0]
-    
+
+    def eval_trace(self, trace : np.ndarray) -> np.ndarray:
+        return trace[self.name[1], :]
 
 
 
@@ -38,7 +41,11 @@ class Not(Formula):
         return self.child.atoms()
 
     def __str__(self) -> str:
-        return f"(!{paren(self.child)})"
+        return f"(~{paren(self.child)})"
+    
+    def eval_trace(self, trace : np.ndarray) -> np.ndarray:
+        return np.logical_not(self.child.eval_trace(trace))
+
 
 
 @dataclass(frozen=True)
@@ -51,6 +58,10 @@ class And(Formula):
 
     def __str__(self) -> str:
         return f"({self.left} & {self.right})"
+    
+    def eval_trace(self, trace : np.ndarray) -> np.ndarray:
+        return np.logical_and(self.left.eval_trace(trace), self.right.eval_trace(trace))
+
 
 
 @dataclass(frozen=True)
@@ -63,6 +74,9 @@ class Or(Formula):
 
     def __str__(self) -> str:
         return f"({self.left} | {self.right})"
+    
+    def eval_trace(self, trace : np.ndarray) -> np.ndarray:
+        return np.logical_or(self.left.eval_trace(trace), self.right.eval_trace(trace))
 
 
 @dataclass(frozen=True)
@@ -75,41 +89,10 @@ class Implies(Formula):
 
     def __str__(self) -> str:
         return f"({self.left} -> {self.right})"
+    
+    def eval_trace(self, trace : np.ndarray) -> np.ndarray:
+        return np.logical_or(np.logical_not(self.left.eval_trace(trace)), self.right.eval_trace(trace))
 
-
-
-# Temporal unary
-@dataclass(frozen=True)
-class Next(Formula):
-    child: Formula
-
-    def atoms(self) -> Set[tuple]:
-        return self.child.atoms()
-
-    def __str__(self) -> str:
-        return f"(X {self.child})"
-
-
-@dataclass(frozen=True)
-class Finally(Formula):
-    child: Formula
-
-    def atoms(self) -> Set[tuple]:
-        return self.child.atoms()
-
-    def __str__(self) -> str:
-        return f"(F {self.child})"
-
-
-@dataclass(frozen=True)
-class Eventually(Formula):
-    child: Formula
-
-    def atoms(self) -> Set[tuple]:
-        return self.child.atoms()
-
-    def __str__(self) -> str:
-        return f"(E {self.child})"
 
 
 # Temporal binary
@@ -123,7 +106,89 @@ class Until(Formula):
 
     def __str__(self) -> str:
         return f"({self.left} U {self.right})"
+    
+    def eval_trace(self, trace : np.ndarray) -> np.ndarray:
+        T = trace.shape[1]
+        L = self.left.eval_trace(trace)
+        R = self.right.eval_trace(trace)
+        out = np.zeros(T, dtype=bool)
 
+        for t in range(T-1, -1, -1):
+            if t == T-1:
+                out[t] = R[t]
+            else:
+                out[t] = R[t] or (L[t] and out[t + 1])
+        
+        return out
+
+
+
+# Temporal unary
+@dataclass(frozen=True)
+class Next(Formula):
+    """
+    A strong implementation of the Next operator for finite traces.
+    """
+    child: Formula
+
+    def atoms(self) -> Set[tuple]:
+        return self.child.atoms()
+
+    def __str__(self) -> str:
+        return f"(X {self.child})"
+    
+    def eval_trace(self, trace : np.ndarray) -> np.ndarray:
+        return np.append(self.child.eval_trace(trace)[1:], False)
+
+
+
+@dataclass(frozen=True)
+class Eventually(Formula):
+    child: Formula
+
+    def atoms(self) -> Set[tuple]:
+        return self.child.atoms()
+
+    def __str__(self) -> str:
+        return f"(E {self.child})"
+    
+    def eval_trace(self, trace) -> np.ndarray:
+        T = trace.shape[1]
+        sub = self.child.eval_trace(trace)
+        out = np.zeros(T, dtype=bool)
+
+        for t in range(T-1, -1, -1):
+            if t == T-1:
+                out[t] = sub[t]
+            else:
+                out[t] = out[t+1] or sub[t]
+
+        return out
+    
+
+
+@dataclass(frozen=True)
+class Globally(Formula):
+    child: Formula
+
+    def atoms(self) -> Set[tuple]:
+        return self.child.atoms()
+
+    def __str__(self) -> str:
+        return f"(G {self.child})"
+    
+    def eval_trace(self, trace) -> np.ndarray:
+        T = trace.shape[1]
+        sub = self.child.eval_trace(trace)
+        out = np.zeros(T, dtype=bool)
+
+        for t in range(T-1, -1, -1):
+            if t == T-1:
+                out[t] = sub[t]
+            else:
+                out[t] = out[t+1] and sub[t]
+
+        return out
 
 
 
@@ -138,7 +203,7 @@ def paren(f: Formula) -> str:
 # ------------------------- Random formula generator -------------------------
 
 # Operator classes and arities. We'll sample uniformly among these names.
-_UNARY_OPS = ['NOT', 'X', 'F', 'E']
+_UNARY_OPS = ['NOT', 'X', 'E', 'G']
 _BINARY_OPS = ['AND', 'OR', 'IMPLIES', 'U']
 _ALL_OPS = _UNARY_OPS + _BINARY_OPS
 
@@ -181,10 +246,10 @@ def random_formula(p_leaf: float = 0.3,
                 return Not(child)
             if op == 'X':
                 return Next(child)
-            if op == 'F':
-                return Finally(child)
             if op == 'E':
                 return Eventually(child)
+            if op == 'G':
+                return Globally(child)
         else:
             # binary
             left = gen(depth + 1, force_internal=False)
