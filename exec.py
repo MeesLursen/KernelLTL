@@ -2,31 +2,36 @@ import numpy as np
 import math
 #import tensorflow as tf
 from kernel_class import LTLKernel
-from formula_class import random_formula, Formula, Atom, Not, And
+from formula_class import eval_traces_batch
+
 import time
 
 start = time.time()
-len_tr  = 20
-n_ap    = 5
+T       = 20
+AP      = 5
+seed    = 1
 eps     = 0.01
 delta   = 1 - 0.99
 N       = math.ceil((2 / eps**2) * np.log(2 / delta))
+m       = 2000
 
 
-kernel = LTLKernel(len_tr, n_ap)
-# sampled_tr = kernel.sample_traces_1(N, seed = 1)
-# sampled_tr = kernel.sample_traces_2(N, seed = 1)
-sampled_formula = random_formula(n_atoms = n_ap)
-# test_trace : np.ndarray = sampled_tr[0]
+kernel = LTLKernel(T, AP, seed)
+kernel.sample_traces_kernel(N)
+kernel.sample_formulas_kernel(m)
 
 
-print(sampled_formula)
-print(sampled_formula.atoms())
 
-# for (_,i) in sampled_formula.atoms():
-#     print(f"val for p_{i}: {test_trace[i,:]}")
+kernel.build_F()
+print(kernel.F.shape)
+print(np.unique(kernel.F))
+kernel.build_K()
+print(kernel.K.shape)
+print(kernel.K)
 
-# print(f"formula val: {sampled_formula.eval_trace(test_trace)}")
+print("K diag (should equal N):", np.unique(np.round(np.diag(kernel.K))))
+print("K symmetric?", np.all(np.abs(kernel.K-kernel.K.T) == 0))
+print("K sample values:", kernel.K[:5,:5])
 
 
 

@@ -5,10 +5,9 @@ from formula_class import Atom
 
 # print(atom.atoms())
 
-rng = np.random.default_rng(seed = 1)
+trace = np.asarray([0,0,0,0,1,0,1,1,1,1],dtype=bool)
+T = trace.shape[0]
 
-_UNARY_OPS = ['NOT', 'X', 'E', 'G']
-_BINARY_OPS = ['AND', 'OR', 'IMPLIES', 'U']
-_ALL_OPS = _UNARY_OPS + _BINARY_OPS
-op = rng.choice(_ALL_OPS)
-print(op)
+trace[-1] = False
+print(trace)
+

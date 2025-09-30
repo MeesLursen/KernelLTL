@@ -1,139 +1,125 @@
-from typing import List, Dict, Optional
 import numpy as np
+from formula_class import sample_traces, sample_formulas, eval_traces_batch
 #import tensorflow as tf
 
 class LTLKernel:
-    def __init__(self, L: int, n_ap: int):
+    def __init__(self, T: int, AP: int, seed: int):
         """
         Kernel for LTL formulas based on sampled traces.
 
-        Args:
-            L (int): Maximum trace length.
-            n_ap (int): Number of atomic propositions.
+        - T: Maximum trace length.
+        - AP: Number of atomic propositions.
+        - seed: Specifies the seed used in each of the random number generators, for reproducability.
         """
-        self.L = L
-        self.n_ap = n_ap
+        self.T: int     = T
+        self.AP: int    = AP
+        self.seed: int  = seed
 
-        self.traces = None       # (N, L, n_ap), bool
-        self.formulas = []       # list of parsed formula objects or strings
-        self.F = None            # feature matrix (m, N), ±1 as tf.Tensor
-        self.K = None            # kernel matrix (m, m), tf.Tensor
+        self.traces: np.ndarray | None  = None          # (N, AP, T), bool
+        self.formulas: list             = []            # list of parsed formula objects or strings
+        self.F: np.ndarray | None       = None          # feature matrix (m, N), ±1
+        self.K: np.ndarray | None       = None          # kernel matrix (m, m)
 
-    
-    
+
+
     # ----------- Sampling -----------
-    def sample_traces_1(
-        self,
-        N: int,
-        seed: Optional[int] = None
-    ) -> np.ndarray:
+    def sample_traces_kernel(self, N: int) -> np.ndarray:
         """
-        Sample N traces uniformly at random.
-        Each trace is shape (n_ap, L), with values in {0,1}.
+        Method for adding a random sample of traces to the kernel.
+        - N: specifies the number of sampled traces.
+        Implicit arguments are, AP, T, seed:
+        - AP: specifies the number of atomic propositions in each trace.
+        - T: specifies the length of each of the sampled traces.
+        - seed: specifies the seed used for the random number generator, for reproducibility.
         """
-        rng = np.random.default_rng(seed)
-        self.traces = rng.integers(0, 2, size=(N, self.n_ap, self.L), dtype=np.uint8).astype(bool)
+        self.traces = sample_traces(N, 
+                                    n_ap=self.AP, 
+                                    trace_length=self.T, 
+                                    seed=self.seed)
 
-        return self.traces
-    
-    
-    def sample_traces_2(
-        self,
-        N: int,
-        props: Optional[List[str]] = None,
-        seed: Optional[int] = None
-    ) -> List[List[Dict[str, bool]]]:
+
+
+    def add_formulas(self, formulas: list):
         """
-        Return N traces, each a List[Dict[str, bool]] of length `length`.
-        Each timestep is a dict mapping each proposition name in `props` to a bool.
-        Sampling is uniform over all valuations (each proposition is an independent fair bit).
-        """
-        
-        if props == None:
-            props = [f"p{i}" for i in range(self.n_ap)]        
-        rng = np.random.default_rng(seed)
-        ls_traces = []
-
-        for _ in range(N):
-            trace = []
-
-            for _ in range(self.L):
-                valuation = {a: bool(rng.bit_generator) for a in props}
-                trace.append(valuation)
-
-            ls_traces.append(trace)
-
-        self.trace = trace
-        return self.trace
-        
-
-'''
-    # ----------- Formula Management -----------
-    def add_formulas(self, formulas):
-        """
-        Add formulas (strings or ASTs).
-        In future, parsing can be done here.
+        Method for manually adding (a list of) formulae.
         """
         self.formulas.extend(formulas)
 
+
+
+    def sample_formulas_kernel(self, 
+                               m: int,
+                               p_leaf: float    = 0.5,
+                               max_depth: int   = 6,
+                               force_tree: bool = True
+                               ):
+        """
+        Method for adding a random sample of formulae to the kernel.
+        - m: specifies the number of sampled formulae.
+        - p_leaf: (Default = 0.5) specifies the odds of each node being a leaf. Higher probability reduces average (bounded) formula complexity.
+        - max_depth: (Default = 6) specifies the maximum formula complexity.
+        - force_tree: (Default = True) forces the root of the syntax tree to be an operator. Without this, p_leaf percent of the sample will be just an AP.
+
+        Implicit arguments are: AP, T, seed.
+        - AP: specifies the number of atomic propositions available to each formula.
+        - seed: specifies the seed used for the random number generator, for reproducibility.
+        """
+        sample = sample_formulas(n_formula=m, 
+                                 p_leaf=p_leaf, 
+                                 max_depth=max_depth, 
+                                 n_ap=self.AP, 
+                                 force_tree=force_tree, 
+                                 seed=self.seed)
+
+        self.add_formulas(sample)
+
+
+
     # ----------- Evaluation -----------
-    def eval_formula_on_trace(self, phi, trace) -> int:
+    def build_F(self, batch_size: int = 512, time_index: int = 0) -> np.ndarray:
         """
-        Evaluate formula phi on a single trace.
-        Must return ±1. Placeholder for now.
+        Method for building the feature matrix F from the sampled formulae and traces.
+        - formulas: list of formulae length m.
+        - all_traces: ndarray shape (N, AP, T), dtype=bool.
+        Returns: 
+        - F: ndarray of shape (m, N) with ±1 values, dtype=int8.
         """
-        raise NotImplementedError("Formula evaluation not implemented yet.")
+        if self.traces is None and self.formulas is []:
+            raise ValueError('Please first sample traces and formulas, using the sample_traces(N) and sample_formulas() method respectively.')
 
-    def build_feature_matrix(self):
-        """
-        Build F (m, N) where F[i,j] = ±1 = s(phi_i, trace_j).
-        Stored as a TensorFlow tensor for GPU support.
-        """
-        if self.traces is None or not self.formulas:
-            raise ValueError("Need both traces and formulas before building feature matrix.")
+        if not(self.traces is None) and self.formulas is []:
+            raise ValueError('You have not yet sampled formulas. Please do so using the sample_formulas() method.')
+        
+        if self.traces is None and not(self.formulas is []):
+            raise ValueError('You have not yet sampled traces. Please do so using the sample_traces() method.')
+        
 
-        m = len(self.formulas)
         N = self.traces.shape[0]
+        m = len(self.formulas)
+        F = np.empty((m, N), dtype=np.int8)
+        for i, phi in enumerate(self.formulas):
+            # fill column i across batches
+            j = 0
+            while j < N:
+                j1 = min(N, j + batch_size)
+                batch = self.traces[j:j1]  # (B, AP, T)
+                sats = eval_traces_batch(phi, batch)  # (B, T)
+                vals = np.where(sats[:, time_index], 1, -1).astype(np.int8)  # (B,)
+                F[i, j:j1] = vals
+                j = j1
+        
+        self.F = F
 
-        # placeholder with +1 everywhere (to be replaced by evaluator)
-        F = np.ones((m, N), dtype=np.int8)
 
-        # TODO: loop over formulas and traces to fill F
-        # for i, phi in enumerate(self.formulas):
-        #     for j, trace in enumerate(self.traces):
-        #         F[i, j] = self.eval_formula_on_trace(phi, trace)
 
-        self.F = tf.convert_to_tensor(F, dtype=tf.float32)
-        return self.F
-
-    # ----------- Kernel Computation -----------
-    def compute_kernel(self, normalize: bool = False):
+    def build_K(self):
         """
-        Compute kernel K = F @ F.T (optionally normalized).
+        Method for building the kernel matrix from feature matrix F. 
+        Returns: 
+        - K: npdarray (m, m) with values in [-N, N].
         """
         if self.F is None:
-            raise ValueError("Feature matrix F not built yet.")
-
-        K = tf.matmul(self.F, self.F, transpose_b=True)
-
-        if normalize:
-            diag = tf.linalg.diag_part(K)
-            norm = tf.sqrt(tf.expand_dims(diag, 1) * tf.expand_dims(diag, 0))
-            K = tf.math.divide_no_nan(K, norm)
-
-        self.K = K
-        return self.K
-
-    # ----------- Diagnostics -----------
-    def diagnostics(self):
-        """
-        Print simple diagnostics about traces and feature matrix.
-        """
-        print(f"L={self.L}, n_ap={self.n_ap}")
-        if self.traces is not None:
-            print(f"Traces: {self.traces.shape}")
-        if self.F is not None:
-            print(f"Feature matrix: {self.F.shape}")
-        if self.K is not None:
-            print(f"Kernel matrix: {self.K.shape}")
-'''
+            raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
+        
+        F32 = self.F.astype(np.int32)
+        self.K = F32 @ F32.T

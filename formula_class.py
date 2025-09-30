@@ -1,14 +1,13 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set, Tuple, Union
 import numpy as np
-import random
 
-# ------------------------- AST classes -------------------------
+
+# ------------------------- formula classes -------------------------
 
 @dataclass(frozen=True)
 class Formula:
-    def atoms(self) -> Set[tuple]:
+    def atoms(self) -> set[tuple]:
         raise NotImplementedError
 
     def __str__(self) -> str:
@@ -26,7 +25,7 @@ class Formula:
 class Atom(Formula):
     name: tuple
 
-    def atoms(self) -> Set[tuple]:
+    def atoms(self) -> set[tuple]:
         return {self.name}
 
     def __str__(self) -> str:
@@ -44,7 +43,7 @@ class Atom(Formula):
 class Not(Formula):
     child: Formula
 
-    def atoms(self) -> Set[tuple]:
+    def atoms(self) -> set[tuple]:
         return self.child.atoms()
 
     def __str__(self) -> str:
@@ -63,7 +62,7 @@ class And(Formula):
     left: Formula
     right: Formula
 
-    def atoms(self) -> Set[tuple]:
+    def atoms(self) -> set[tuple]:
         return self.left.atoms() | self.right.atoms()
 
     def __str__(self) -> str:
@@ -84,7 +83,7 @@ class Or(Formula):
     left: Formula
     right: Formula
 
-    def atoms(self) -> Set[tuple]:
+    def atoms(self) -> set[tuple]:
         return self.left.atoms() | self.right.atoms()
 
     def __str__(self) -> str:
@@ -105,7 +104,7 @@ class Implies(Formula):
     left: Formula
     right: Formula
 
-    def atoms(self) -> Set[tuple]:
+    def atoms(self) -> set[tuple]:
         return self.left.atoms() | self.right.atoms()
 
     def __str__(self) -> str:
@@ -121,37 +120,6 @@ class Implies(Formula):
 
 
 
-# Temporal binary
-@dataclass(frozen=True)
-class Until(Formula):
-    left: Formula
-    right: Formula
-
-    def atoms(self) -> Set[tuple]:
-        return self.left.atoms() | self.right.atoms()
-
-    def __str__(self) -> str:
-        return f"({self.left} U {self.right})"
-    
-    def __eq__(self, other) -> bool:
-        return isinstance(other, Until) and self.left == other.left and self.right == other.right
-    
-    def eval_trace(self, trace : np.ndarray) -> np.ndarray:
-        T = trace.shape[1]
-        L = self.left.eval_trace(trace)
-        R = self.right.eval_trace(trace)
-        out = np.zeros(T, dtype=bool)
-
-        for t in range(T-1, -1, -1):
-            if t == T-1:
-                out[t] = R[t]
-            else:
-                out[t] = R[t] or (L[t] and out[t + 1])
-        
-        return out
-
-
-
 # Temporal unary
 @dataclass(frozen=True)
 class Next(Formula):
@@ -160,7 +128,7 @@ class Next(Formula):
     """
     child: Formula
 
-    def atoms(self) -> Set[tuple]:
+    def atoms(self) -> set[tuple]:
         return self.child.atoms()
 
     def __str__(self) -> str:
@@ -179,11 +147,11 @@ class Next(Formula):
 class Eventually(Formula):
     child: Formula
 
-    def atoms(self) -> Set[tuple]:
+    def atoms(self) -> set[tuple]:
         return self.child.atoms()
 
     def __str__(self) -> str:
-        return f"(E {self.child})"
+        return f"(F {self.child})"
     
     def __eq__(self, other) -> bool:
         return isinstance(other, Eventually) and self.child == other.child
@@ -193,11 +161,9 @@ class Eventually(Formula):
         sub = self.child.eval_trace(trace)
         out = np.zeros(T, dtype=bool)
 
-        for t in range(T-1, -1, -1):
-            if t == T-1:
-                out[t] = sub[t]
-            else:
-                out[t] = out[t+1] or sub[t]
+        out[-1] = sub[-1]
+        for t in range(T-2, -1, -1):
+            out[t] = out[t+1] or sub[t]
 
         return out
     
@@ -207,7 +173,7 @@ class Eventually(Formula):
 class Globally(Formula):
     child: Formula
 
-    def atoms(self) -> Set[tuple]:
+    def atoms(self) -> set[tuple]:
         return self.child.atoms()
 
     def __str__(self) -> str:
@@ -221,12 +187,39 @@ class Globally(Formula):
         sub = self.child.eval_trace(trace)
         out = np.zeros(T, dtype=bool)
 
-        for t in range(T-1, -1, -1):
-            if t == T-1:
-                out[t] = sub[t]
-            else:
-                out[t] = out[t+1] and sub[t]
+        out[-1] = sub[-1]
+        for t in range(T-2, -1, -1):
+            out[t] = out[t+1] and sub[t]
 
+        return out
+
+
+
+# Temporal binary
+@dataclass(frozen=True)
+class Until(Formula):
+    left: Formula
+    right: Formula
+
+    def atoms(self) -> set[tuple]:
+        return self.left.atoms() | self.right.atoms()
+
+    def __str__(self) -> str:
+        return f"({self.left} U {self.right})"
+    
+    def __eq__(self, other) -> bool:
+        return isinstance(other, Until) and self.left == other.left and self.right == other.right
+    
+    def eval_trace(self, trace : np.ndarray) -> np.ndarray:
+        T = trace.shape[1]
+        L = self.left.eval_trace(trace)
+        R = self.right.eval_trace(trace)
+        out = np.zeros(T, dtype=bool)
+        
+        out[-1] = R[-1]
+        for t in range(T-2, -1, -1):
+            out[t] = R[t] or (L[t] and out[t + 1])
+        
         return out
 
 
@@ -239,34 +232,117 @@ def paren(f: Formula) -> str:
     return f"({s})"
 
 
-# ------------------------- Random formula generator -------------------------
 
+# ------------------------- vectorized batch evaluator -------------------------
+def eval_traces_batch(formula: Formula, traces_batch: np.ndarray) -> np.ndarray:
+    """
+    Evaluate formula on a batch of traces.
+
+    - formula: AST formula (Atom/Not/And/Or/Next/Eventually/Globally/Until)
+    - traces_batch: np.ndarray, shape (batch_size=B, n_ap, T), dtype=bool
+    Returns:
+    - out: np.ndarray, shape (B, T), dtype=bool,
+            out[i, t] == True iff trace i suffix at time t satisfies formula.
+    """
+    _, _, T = traces_batch.shape
+
+    # atoms
+    if isinstance(formula, Atom):
+        idx = formula.name[1]
+        return traces_batch[:, idx, :]
+
+    # boolean connectives
+    if isinstance(formula, Not):
+        child = eval_traces_batch(formula.child, traces_batch)
+        return np.logical_not(child)
+
+    if isinstance(formula, And):
+        L = eval_traces_batch(formula.left, traces_batch)
+        R = eval_traces_batch(formula.right, traces_batch)
+        return np.logical_and(L, R)
+
+    if isinstance(formula, Or):
+        L = eval_traces_batch(formula.left, traces_batch)
+        R = eval_traces_batch(formula.right, traces_batch)
+        return np.logical_or(L, R)
+    
+    if isinstance(formula, Implies):
+        L = eval_traces_batch(formula.left, traces_batch)
+        R = eval_traces_batch(formula.right, traces_batch)
+        return np.logical_or(np.logical_not(L), R)
+
+
+    # temporal-unary
+    if isinstance(formula, Next):
+        child = eval_traces_batch(formula.child, traces_batch)  # (B,T)
+        out = np.zeros_like(child)
+        if T >= 2:
+            out[:, :-1] = child[:, 1:]
+        return out
+
+    if isinstance(formula, Eventually):
+        child = eval_traces_batch(formula.child, traces_batch)  # (B,T)
+        rev = child[:, ::-1]
+        cum = np.logical_or.accumulate(rev, axis=1)
+        out = cum[:, ::-1]
+        return out
+
+    if isinstance(formula, Globally):
+        child = eval_traces_batch(formula.child, traces_batch)  # (B,T)
+        rev = child[:, ::-1]
+        cum = np.logical_and.accumulate(rev, axis=1)
+        out = cum[:, ::-1]
+        return out
+
+    # temporal-2ary
+    if isinstance(formula, Until):
+        L = eval_traces_batch(formula.left, traces_batch)  # (B,T)
+        R = eval_traces_batch(formula.right, traces_batch)  # (B,T)
+        out = np.empty_like(R)
+        out[:, -1] = R[:, -1]
+        for t in range(T-2, -1, -1):
+            out[:, t] = np.logical_or(R[:, t], np.logical_and(L[:, t], out[:, t + 1]))
+        return out
+
+    raise NotImplementedError(f"Unknown formula type: {type(formula)}")
+
+
+
+# ------------------------- random formula generator -------------------------
 # Operator classes and arities. We'll sample uniformly among these names.
-_UNARY_OPS = ['NOT', 'X', 'E', 'G']
+_UNARY_OPS = ['NOT', 'X', 'F', 'G']
 _BINARY_OPS = ['AND', 'OR', 'IMPLIES', 'U']
 _ALL_OPS = _UNARY_OPS + _BINARY_OPS
 
 
-# TODO: Figure out if we want a force_tree argument or not!
-def random_formula(p_leaf: float = 0.3,
-                   max_depth: int = 6,
-                   n_atoms: int = 5,
-                   seed: Optional[int] = None) -> Formula:
+def sample_formulas(n_formula: int,
+                    p_leaf: float,
+                    max_depth: int,
+                    n_ap: int,
+                    force_tree: bool,
+                    seed: int | None = None) -> Formula:
     """Generate a random formula.
-
+    - n_formula: Specifies the number of sampled formulae.
     - p_leaf: probability to create an atomic proposition at a *non-root* node.
     - max_depth: maximum recursion depth (root at depth 0). When depth >= max_depth, we force a leaf.
-    - n_atoms: number of distinct atomic proposition names (p0..p{n_atoms-1}).
+    - n_ap: maximum number of distinct atomic proposition names (p0..p{n_ap-1}).
+    - force_tree: specifies whether the root is forced to be an operator.
+    - seed: specifies the seed used for the random number generator, for reproducibility.
+    Returns:
+    - ls: a list of formulae
     """
     rng = np.random.default_rng(seed)
-    atoms = [(f"p{i}",i) for i in range(n_atoms)]
+    atoms = [(f"p{i}",i) for i in range(n_ap)]
 
-    def gen(depth: int) -> Formula:
+    def gen(depth: int, root_must_be_operator: bool = False) -> Formula:
         # If we're at max depth -> force leaf
         if depth >= max_depth:
             return Atom(atoms[rng.integers(len(atoms))])
-
-        make_leaf = rng.random() < p_leaf
+        
+        if depth == 0 and root_must_be_operator:
+            make_leaf = False
+        else:
+            make_leaf = rng.random() < p_leaf
 
         if make_leaf:
             return Atom(atoms[rng.integers(len(atoms))])
@@ -286,7 +362,7 @@ def random_formula(p_leaf: float = 0.3,
                 return Not(child)
             if op == 'X':
                 return Next(child)
-            if op == 'E':
+            if op == 'F':
                 return Eventually(child)
             if op == 'G':
                 return Globally(child)
@@ -307,4 +383,25 @@ def random_formula(p_leaf: float = 0.3,
             if op == 'U':
                 return Until(left, right)
 
-    return gen(0)
+    ls = []
+    for _ in range(n_formula):
+        formula = gen(0, root_must_be_operator = force_tree)
+        ls.append(formula)
+    
+    return ls
+
+
+# ------------------------- random traces generator -------------------------
+def sample_traces(n_traces: int, n_ap:int, trace_length:int, seed: int | None = None) -> np.ndarray:
+    """
+    - n_traces: specifies the number of traces sampled uniformly at random (each trace is shape (n_ap, T), with values in {False,True}).
+    - n_ap: specifies the number of atomic propositions in each trace.
+    - trace_length: specifies the length of each of the sampled traces.
+    - seed: specifies the seed used for the random number generator, for reproducibility.
+    Returns:
+    - traces: ndarray of shape (n_traces, n_ap, trace_length).
+    """
+    rng = np.random.default_rng(seed)
+    traces = rng.integers(0, 2, size=(n_traces, n_ap, trace_length), dtype=np.uint8).astype(bool)
+
+    return traces
