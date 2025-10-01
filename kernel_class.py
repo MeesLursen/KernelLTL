@@ -19,6 +19,8 @@ class LTLKernel:
         self.formulas: list             = []            # list of parsed formula objects or strings
         self.F: np.ndarray | None       = None          # feature matrix (m, N), ±1
         self.K: np.ndarray | None       = None          # kernel matrix (m, m)
+        self.K0: np.ndarray | None       = None         # cosine kernel matrix (m, m)
+
 
 
 
@@ -81,7 +83,7 @@ class LTLKernel:
         Method for building the feature matrix F from the sampled formulae and traces.
         - formulas: list of formulae length m.
         - all_traces: ndarray shape (N, AP, T), dtype=bool.
-        Returns: 
+        Specifies self.F: 
         - F: ndarray of shape (m, N) with ±1 values, dtype=int8.
         """
         if self.traces is None and self.formulas is []:
@@ -115,7 +117,7 @@ class LTLKernel:
     def build_K(self):
         """
         Method for building the kernel matrix from feature matrix F. 
-        Returns: 
+        Specifies self.K: 
         - K: npdarray (m, m) with values in [-N, N].
         """
         if self.F is None:
@@ -123,3 +125,11 @@ class LTLKernel:
         
         F32 = self.F.astype(np.int32)
         self.K = F32 @ F32.T
+
+    def normalize_K(self):
+        """
+        Method for normalizing the kernel matrix through cosine similarity [K0_ij = K_ij / sqrt(K_ii*K_jj)].
+        Specifies self.K0: 
+        - K0: npdarray (m, m) with values in [-1, 1].
+        """
+        raise NotImplementedError
