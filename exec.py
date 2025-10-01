@@ -1,7 +1,7 @@
 import numpy as np
 import math
 #import tensorflow as tf
-from kernel_class import LTLKernel
+from kernel_class_np import LTLKernel
 
 import time
 

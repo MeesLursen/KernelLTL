@@ -1,9 +1,8 @@
 import numpy as np
-from formula_class import sample_traces, sample_formulas, eval_traces_batch
-import tensorflow as tf
+from formula_class_np import sample_traces_np, sample_formulas_np, eval_traces_batch_np
 
-class LTLKernel:
-    def __init__(self, T: int, AP: int, seed: int):
+class LTLKernel_np:
+    def __init__(self, T: int, AP: int, seed: int | None = None):
         """
         Kernel for LTL formulas based on sampled traces.
 
@@ -11,17 +10,20 @@ class LTLKernel:
         - AP: Number of atomic propositions.
         - seed: Specifies the seed used in each of the random number generators, for reproducability.
         """
-        self.T: int     = T
-        self.AP: int    = AP
-        self.seed: int  = seed
-
-        self.traces: np.ndarray | None  = None          # (N, AP, T), bool
-        self.formulas: list             = []            # list of parsed formula objects or strings
-        self.F: np.ndarray | None       = None          # feature matrix (m, N), ±1
-        self.K: np.ndarray | None       = None          # kernel matrix (m, m)
-        self.K_tf: tf.Tensor | None     = None          # kernel matrix (m, m).Tensor
-        self.K0: np.ndarray | None      = None          # cosine kernel matrix (m, m)
-
+        self.T: int                                 = T
+        self.AP: int                                = AP
+        self.seed: int | None                       = seed
+        
+        if self.seed is not None:
+            self.rng: np.random.Generator | None    = np.random.default_rng(self.seed)
+        else:
+            self.rng: np.random.Generator | None    = np.random.default_rng()
+        
+        self.formulas: list                         = []            # list of parsed formula objects or strings
+        self.traces: np.ndarray | None              = None          # (N, AP, T), bool, ndarray
+        self.F: np.ndarray | None                   = None          # feature matrix (m, N), ±1, ndarray
+        self.K: np.ndarray | None                   = None          # kernel matrix (m, m), ndarray
+        self.K0: np.ndarray | None                  = None          # cosine kernel matrix (m, m), ndarray
 
 
 
@@ -33,12 +35,12 @@ class LTLKernel:
         Implicit arguments are, AP, T, seed:
         - AP: specifies the number of atomic propositions in each trace.
         - T: specifies the length of each of the sampled traces.
-        - seed: specifies the seed used for the random number generator, for reproducibility.
+        - rng: specifies the random number generator used, for reproducibility.
         """
-        self.traces = sample_traces(N, 
-                                    n_ap=self.AP, 
-                                    trace_length=self.T, 
-                                    seed=self.seed)
+        self.traces = sample_traces_np(N,
+                                       n_ap=self.AP,
+                                       trace_length=self.T,
+                                       rng=self.rng)
 
 
 
@@ -65,14 +67,14 @@ class LTLKernel:
 
         Implicit arguments are: AP, T, seed.
         - AP: specifies the number of atomic propositions available to each formula.
-        - seed: specifies the seed used for the random number generator, for reproducibility.
+        - rng: specifies the random number generator used, for reproducibility.
         """
-        sample = sample_formulas(n_formula=m, 
-                                 p_leaf=p_leaf, 
-                                 max_depth=max_depth, 
-                                 n_ap=self.AP, 
-                                 force_tree=force_tree, 
-                                 seed=self.seed)
+        sample = sample_formulas_np(n_formula=m,
+                                    p_leaf=p_leaf,
+                                    max_depth=max_depth,
+                                    n_ap=self.AP,
+                                    force_tree=force_tree,
+                                    rng=self.rng)
 
         self.add_formulas(sample)
 
@@ -106,7 +108,7 @@ class LTLKernel:
             while j < N:
                 j1 = min(N, j + batch_size)
                 batch = self.traces[j:j1]  # (B, AP, T)
-                sats = eval_traces_batch(phi, batch)  # (B, T)
+                sats = eval_traces_batch_np(phi, batch)  # (B, T)
                 vals = np.where(sats[:, time_index], 1, -1).astype(np.int8)  # (B,)
                 F[i, j:j1] = vals
                 j = j1
@@ -117,7 +119,7 @@ class LTLKernel:
 
     def build_K(self):
         """
-        Method for building the kernel matrix from feature matrix F. 
+        Method for building the kernel matrix, K, from feature matrix F. 
         Specifies self.K: 
         - K: npdarray (m, m) with values in [-N, N].
         """
@@ -126,18 +128,8 @@ class LTLKernel:
         
         F32 = self.F.astype(np.int32)
         self.K = F32 @ F32.T
-
-    def build_K_tf(self):
-        """
-        Method for building the kernel matrix from feature matrix F. 
-        Specifies self.K: 
-        - K: npdarray (m, m) with values in [-N, N].
-        """
-        if self.F is None:
-            raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
         
-        F32 = tf.convert_to_tensor(self.F.astype(np.int32), tf.int32)
-        self.K_tf = tf.linalg.matmul(F32, F32, transpose_b=True)
+
 
     def normalize_K(self):
         """
