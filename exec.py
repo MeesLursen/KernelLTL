@@ -2,7 +2,6 @@ import numpy as np
 import math
 #import tensorflow as tf
 from kernel_class import LTLKernel
-from formula_class import eval_traces_batch
 
 import time
 
@@ -19,9 +18,6 @@ m       = 2000
 kernel = LTLKernel(T, AP, seed)
 kernel.sample_traces_kernel(N)
 kernel.sample_formulas_kernel(m)
-
-
-
 kernel.build_F()
 print(kernel.F.shape)
 print(np.unique(kernel.F))

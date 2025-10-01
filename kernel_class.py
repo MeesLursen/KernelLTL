@@ -1,6 +1,6 @@
 import numpy as np
 from formula_class import sample_traces, sample_formulas, eval_traces_batch
-#import tensorflow as tf
+import tensorflow as tf
 
 class LTLKernel:
     def __init__(self, T: int, AP: int, seed: int):
@@ -19,7 +19,8 @@ class LTLKernel:
         self.formulas: list             = []            # list of parsed formula objects or strings
         self.F: np.ndarray | None       = None          # feature matrix (m, N), ±1
         self.K: np.ndarray | None       = None          # kernel matrix (m, m)
-        self.K0: np.ndarray | None       = None         # cosine kernel matrix (m, m)
+        self.K_tf: tf.Tensor | None     = None          # kernel matrix (m, m).Tensor
+        self.K0: np.ndarray | None      = None          # cosine kernel matrix (m, m)
 
 
 
@@ -125,6 +126,18 @@ class LTLKernel:
         
         F32 = self.F.astype(np.int32)
         self.K = F32 @ F32.T
+
+    def build_K_tf(self):
+        """
+        Method for building the kernel matrix from feature matrix F. 
+        Specifies self.K: 
+        - K: npdarray (m, m) with values in [-N, N].
+        """
+        if self.F is None:
+            raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
+        
+        F32 = tf.convert_to_tensor(self.F.astype(np.int32), tf.int32)
+        self.K_tf = tf.linalg.matmul(F32, F32, transpose_b=True)
 
     def normalize_K(self):
         """
