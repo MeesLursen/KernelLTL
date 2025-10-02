@@ -116,6 +116,7 @@ class LTLKernel_torch:
             while j < N:
                 j1 = min(N, j + batch_size)
                 batch = self.traces[j:j1]  # (B, AP, T)
+                print(batch.type())
                 sats = eval_traces_batch_torch(phi, batch)  # (B, T)
                 print(sats.type())
                 vals = torch.where(sats[:, time_index], 1, -1).to(torch.int8)  # (B,)

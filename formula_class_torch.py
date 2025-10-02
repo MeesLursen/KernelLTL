@@ -285,14 +285,14 @@ def eval_traces_batch_torch(formula: Formula, traces_batch: torch.Tensor) -> tor
     if isinstance(formula, Eventually):
         child = eval_traces_batch_torch(formula.child, traces_batch)  # (B,T)
         rev = torch.flip(child, [1])  # (B,T)
-        cum = torch.cumprod(rev, dim=1)
+        cum = torch.cumprod(rev, dim=1, dtype=torch.uint8)
         out = torch.flip(cum, [1])
         return out
 
     if isinstance(formula, Globally):
         child = eval_traces_batch_torch(formula.child, traces_batch)  # (B,T)
         rev = torch.flip(child, [1])  # (B,T)
-        cum = torch.cummax(rev, dim=1).values
+        cum = torch.cummax(rev, dim=1, dtype=torch.uint8).values
         out = torch.flip(cum, [1])
         return out
 
