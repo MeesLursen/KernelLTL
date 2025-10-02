@@ -119,7 +119,7 @@ class LTLKernel_torch:
                 print(batch.type())
                 sats = eval_traces_batch_torch(phi, batch)  # (B, T)
                 print(sats.type())
-                vals = torch.where(sats[:, time_index], 1, -1).to(torch.int8)  # (B,)
+                vals = torch.where(sats[:, time_index], 1, -1)  # (B,)
                 F[i, j:j1] = vals
                 j = j1
         

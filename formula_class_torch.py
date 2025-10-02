@@ -241,9 +241,9 @@ def eval_traces_batch_torch(formula: Formula, traces_batch: torch.Tensor) -> tor
     Evaluate formula on a batch of traces.
 
     - formula: AST formula (Atom/Not/And/Or/Next/Eventually/Globally/Until)
-    - traces_batch: torch.Tensor, shape (batch_size=B, n_ap, T), dtype=torch.uint8,
+    - traces_batch: torch.Tensor, shape (batch_size=B, n_ap, T), dtype=torch.bool,
     Returns:
-    - out: torch.Tensor, shape (B, T), dtype=torch.uint8,
+    - out: torch.Tensor, shape (B, T), dtype=torch.bool,
             out[i, t] == True iff trace i suffix at time t satisfies formula.
     """
     T = traces_batch.shape[2]
@@ -284,16 +284,16 @@ def eval_traces_batch_torch(formula: Formula, traces_batch: torch.Tensor) -> tor
 
     if isinstance(formula, Eventually):
         child = eval_traces_batch_torch(formula.child, traces_batch)  # (B,T)
-        rev = torch.flip(child, [1])  # (B,T)
+        rev = torch.flip(child, [1]).to(torch.uint8)  # (B,T)
         cum = torch.cumprod(rev, dim=1, dtype=torch.uint8)
-        out = torch.flip(cum, [1])
+        out = torch.flip(cum, [1]).to(torch.bool)
         return out
 
     if isinstance(formula, Globally):
         child = eval_traces_batch_torch(formula.child, traces_batch)  # (B,T)
-        rev = torch.flip(child, [1])  # (B,T)
-        cum = torch.cummax(rev, dim=1, dtype=torch.uint8).values
-        out = torch.flip(cum, [1])
+        rev = torch.flip(child, [1]).to(torch.uint8)  # (B,T)
+        cum = torch.cummax(rev, dim=1).values
+        out = torch.flip(cum, [1]).to(torch.bool)
         return out
 
     # temporal-2ary
@@ -399,7 +399,7 @@ def sample_formulas_torch(n_formula: int,
 # ------------------------- random traces generator -------------------------
 def sample_traces_torch(n_traces: int, n_ap:int, trace_length:int, rng: torch.Generator, device: str) -> torch.Tensor:
     """
-    - n_traces: specifies the number of traces sampled uniformly at random (each trace is shape (n_ap, T), with values in {0,1}).
+    - n_traces: specifies the number of traces sampled uniformly at random (each trace is shape (n_ap, T), with values in {False,True}).
     - n_ap: specifies the number of atomic propositions in each trace.
     - trace_length: specifies the length of each of the sampled traces.
     - rng: specifies the random number generator used, for reproducibility.
@@ -407,6 +407,6 @@ def sample_traces_torch(n_traces: int, n_ap:int, trace_length:int, rng: torch.Ge
     - traces: Tensor of shape (n_traces, n_ap, trace_length).
     """
 
-    traces = torch.randint(0,2, size=(n_traces, n_ap, trace_length), generator=rng, dtype=torch.uint8, device = device)
+    traces = torch.randint(0,2, size=(n_traces, n_ap, trace_length), generator=rng, dtype=torch.bool, device = device)
 
     return traces
