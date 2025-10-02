@@ -399,12 +399,12 @@ def sample_formulas_torch(n_formula: int,
 # ------------------------- random traces generator -------------------------
 def sample_traces_torch(n_traces: int, n_ap:int, trace_length:int, rng: torch.Generator, device: str) -> torch.Tensor:
     """
-    - n_traces: specifies the number of traces sampled uniformly at random (each trace is shape (n_ap, T), with values in {False,True}).
+    - n_traces: specifies the number of traces sampled uniformly at random (each trace is shape (n_ap, T), with values in {0,1}).
     - n_ap: specifies the number of atomic propositions in each trace.
     - trace_length: specifies the length of each of the sampled traces.
     - rng: specifies the random number generator used, for reproducibility.
     Returns:
-    - traces: ndarray of shape (n_traces, n_ap, trace_length).
+    - traces: Tensor of shape (n_traces, n_ap, trace_length).
     """
 
     traces = torch.randint(0,2, size=(n_traces, n_ap, trace_length), generator=rng, dtype=torch.uint8, device = device)
