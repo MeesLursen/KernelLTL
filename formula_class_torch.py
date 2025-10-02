@@ -1,10 +1,8 @@
-from __future__ import annotations
 from dataclasses import dataclass
 import torch
 
 
 # ------------------------- formula classes -------------------------
-
 @dataclass(frozen=True)
 class Formula:
     def atoms(self) -> set[tuple]:
@@ -159,9 +157,9 @@ class Eventually(Formula):
         return isinstance(other, Eventually) and self.child == other.child
     
     def eval_trace(self, trace) -> torch.Tensor:
-        T = trace.size(dim=2)
+        T = trace.size(dim=1)
         sub = self.child.eval_trace(trace)
-        out = torch.zeros(T)
+        out = torch.empty_like(sub)
 
         out[-1] = sub[-1]
         for t in range(T-2, -1, -1):
@@ -185,9 +183,9 @@ class Globally(Formula):
         return isinstance(other, Globally) and self.child == other.child
     
     def eval_trace(self, trace) -> torch.Tensor:
-        T = trace.shape[1]
+        T = trace.size(dim=1)
         sub = self.child.eval_trace(trace)
-        out = torch.zeros(T)
+        out = torch.empty_like(sub)
 
         out[-1] = sub[-1]
         for t in range(T-2, -1, -1):
@@ -212,8 +210,8 @@ class Until(Formula):
     def __eq__(self, other) -> bool:
         return isinstance(other, Until) and self.left == other.left and self.right == other.right
     
-    def eval_trace(self, trace : torch.Tensor) -> torch.Tensor:
-        T = trace.shape[1]
+    def eval_trace(self, trace : torch.Tensor, device) -> torch.Tensor:
+        T = trace.size(dim=1)
         L = self.left.eval_trace(trace)
         R = self.right.eval_trace(trace)
         out = torch.zeros(T)
@@ -237,7 +235,7 @@ def eval_traces_batch_torch(formula: Formula, traces_batch: torch.Tensor) -> tor
     - out: torch.Tensor, shape (B, T), dtype=torch.bool,
             out[i, t] == True iff trace i suffix at time t satisfies formula.
     """
-    T = traces_batch.shape[2]
+    T = traces_batch.size(dim=2)
 
     # atoms
     if isinstance(formula, Atom):
@@ -313,8 +311,7 @@ def sample_formulas_torch(n_formula: int,
                     max_depth: int,
                     n_ap: int,
                     force_tree: bool,
-                    rng: torch.Generator,
-                    device: str) -> Formula:
+                    rng: torch.Generator) -> Formula:
     """Generate a random formula.
     - n_formula: Specifies the number of sampled formulae.
     - p_leaf: probability to create an atomic proposition at a *non-root* node.
@@ -332,18 +329,18 @@ def sample_formulas_torch(n_formula: int,
     def gen(depth: int, root_must_be_operator: bool = False) -> Formula:
         # If we're at max depth -> force leaf
         if depth >= max_depth:
-            return Atom(atoms[torch.randint(0, len(atoms), (), generator=rng, device=device).item()])
+            return Atom(atoms[torch.randint(0, len(atoms), (), generator=rng, device='cpu').item()])
         
         if depth == 0 and root_must_be_operator:
             make_leaf = False
         else:
-            make_leaf = torch.rand((),generator=rng, device=device).item() < p_leaf
+            make_leaf = torch.rand((),generator=rng, device='cpu ').item() < p_leaf
 
         if make_leaf:
-            return Atom(atoms[torch.randint(0, len(atoms), (), generator=rng, device=device).item()])
+            return Atom(atoms[torch.randint(0, len(atoms), (), generator=rng, device='cpu').item()])
 
         # Otherwise pick an operator uniformly
-        op = _ALL_OPS[torch.randint(0, len(atoms), (), generator=rng, device=device).item()]
+        op = _ALL_OPS[torch.randint(0, len(atoms), (), generator=rng, device='cpu').item()]
         if op in _UNARY_OPS:
             # unary
             child : Formula = gen(depth + 1)

@@ -1,5 +1,5 @@
 import numpy as np
-from formula_class_np import sample_traces_np, sample_formulas_np, eval_traces_batch_np
+from formula_class_np import sample_traces_np, sample_formulas_np, eval_traces_batch_np, Formula
 
 class LTLKernel_np:
     def __init__(self, T: int, AP: int, seed: int | None = None):
@@ -109,7 +109,7 @@ class LTLKernel_np:
                 j1 = min(N, j + batch_size)
                 batch = self.traces[j:j1]  # (B, AP, T)
                 sats = eval_traces_batch_np(phi, batch)  # (B, T)
-                vals = np.where(sats[:, time_index], 1, -1).astype(np.int8)  # (B,)
+                vals = np.where(sats[:, time_index], np.array([1], dtype = np.int8), np.array([-1], dtype = np.int8))  # (B,)
                 F[i, j:j1] = vals
                 j = j1
         
@@ -138,3 +138,34 @@ class LTLKernel_np:
         - K0: npdarray (m, m) with values in [-1, 1].
         """
         raise NotImplementedError
+    
+    def compute_embeddings_pool(self, input_formula_list: list[Formula], batch_size: int = 512, time_index: int = 0):
+        """
+        Method for computing the embeddings of K = len(input_formula_list) formulae, from feature matrix F. 
+        Returns:
+            - out: Tensor (K,m), slicing out[i-1] returns the embedding of \phi_i in input_formula_list.
+        """
+        if self.F is None:
+            raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
+
+        N = self.traces.size(dim=0)
+        m = len(self.formulas)
+        K = len(input_formula_list)
+
+        out = np.empty((K,m), dtype=np.int8)
+
+        for i, phi in enumerate(input_formula_list):
+            # fill column i across batches
+            phi_sats = np.empty(N, dtype=np.int8)
+            j = 0
+            while j < N:
+                j1 = min(N, j + batch_size)
+                batch = self.traces[j:j1]  # (B, AP, T)
+                batch_sats = eval_traces_batch_np(phi, batch)  # (B, T)
+                vals = np.where(batch_sats[:, time_index], np.array([1], dtype = np.int8), np.array([-1], dtype = np.int8))  # (B,)
+                phi_sats[j:j1] = vals
+                j = j1
+            
+            out[i,:] = self.F @ phi_sats
+        
+        return out

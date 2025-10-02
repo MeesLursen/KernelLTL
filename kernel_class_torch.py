@@ -1,5 +1,5 @@
 import torch
-from formula_class_torch import sample_traces_torch, sample_formulas_torch, eval_traces_batch_torch
+from formula_class_torch import sample_traces_torch, sample_formulas_torch, eval_traces_batch_torch, Formula
 
 class LTLKernel_torch:
     def __init__(self, T: int, AP: int, seed: int | None = None):
@@ -25,11 +25,11 @@ class LTLKernel_torch:
                                      else
                                      torch.Generator(device=self.device))
         
-        self.formulas: list                           = []            # list of parsed formula objects or strings
-        self.traces: torch.Tensor | None              = None          # (N, AP, T), bool, Tensor
-        self.F: torch.Tensor | None                   = None          # feature matrix (m, N), ±1, Tensor
-        self.K: torch.Tensor | None                   = None          # kernel matrix (m, m), Tensor
-        self.K0: torch.Tensor | None                  = None          # cosine kernel matrix (m, m), Tensor
+        self.formulas: list[Formula]                = []            # list of parsed formula objects or strings
+        self.traces: torch.Tensor | None            = None          # (N, AP, T), bool, Tensor
+        self.F: torch.Tensor | None                 = None          # feature matrix (m, N), ±1, Tensor
+        self.K: torch.Tensor | None                 = None          # kernel matrix (m, m), Tensor
+        self.K0: torch.Tensor | None                = None          # cosine kernel matrix (m, m), Tensor
 
 
 
@@ -59,12 +59,7 @@ class LTLKernel_torch:
 
 
 
-    def sample_formulas_kernel(self, 
-                               m: int,
-                               p_leaf: float    = 0.5,
-                               max_depth: int   = 6,
-                               force_tree: bool = True
-                               ):
+    def sample_anchor_formulas_kernel(self, m: int, p_leaf: float = 0.5, max_depth: int = 6, force_tree: bool = True):
         """
         Method for adding a random sample of formulae to the kernel.
         - m: specifies the number of sampled formulae.
@@ -81,8 +76,7 @@ class LTLKernel_torch:
                                        max_depth=max_depth,
                                        n_ap=self.AP,
                                        force_tree=force_tree,
-                                       rng=self.rng,
-                                       device=self.device)
+                                       rng=self.rng)
 
         self.add_formulas(sample)
 
@@ -107,9 +101,9 @@ class LTLKernel_torch:
             raise ValueError('You have not yet sampled traces. Please do so using the sample_traces() method.')
         
 
-        N = self.traces.shape[0]
+        N = self.traces.size(dim=0)
         m = len(self.formulas)
-        F = torch.empty((m, N), dtype=torch.int8)
+        F = torch.empty((m, N), dtype=torch.float32, device=self.device)
         for i, phi in enumerate(self.formulas):
             # fill column i across batches
             j = 0
@@ -117,7 +111,9 @@ class LTLKernel_torch:
                 j1 = min(N, j + batch_size)
                 batch = self.traces[j:j1]  # (B, AP, T)
                 sats = eval_traces_batch_torch(phi, batch)  # (B, T)
-                vals = torch.where(sats[:, time_index], 1, -1)  # (B,)
+                vals = torch.where(sats[:, time_index], 
+                                   torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                                   torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
                 F[i, j:j1] = vals
                 j = j1
         
@@ -134,15 +130,79 @@ class LTLKernel_torch:
         if self.F is None:
             raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
         
-        F32 = self.F.to(torch.int32)
-        self.K = F32 @ F32.T
+        self.K = self.F @ self.F.T
         
 
 
     def normalize_K(self):
         """
         Method for normalizing the kernel matrix through cosine similarity [K0_ij = K_ij / sqrt(K_ii*K_jj)].
+        Note that sqrt(K_ii*K_jj) = N, since K_ii = K_jj = N
         Specifies self.K0: 
         - K0: Tensor (m, m) with values in [-1, 1].
         """
-        raise NotImplementedError
+        self.K0 = self.K / self.K[0,0].item()
+
+
+    # ----------- Dataset Generation -----------
+    def sample_dataset_formulas_kernel(self, k: int, p_leaf: float, max_depth: int, force_tree: bool = True):
+        """
+        Method for adding a random sample of formulae to the kernel.
+        - m: specifies the number of sampled formulae.
+        - p_leaf: (Default = 0.5) specifies the odds of each node being a leaf. Higher probability reduces average (bounded) formula complexity.
+        - max_depth: (Default = 6) specifies the maximum formula complexity.
+        - force_tree: (Default = True) forces the root of the syntax tree to be an operator. Without this, p_leaf percent of the sample will be just an AP.
+
+        Implicit arguments are: AP, T, seed.
+        - AP: specifies the number of atomic propositions available to each formula.
+        - rng: specifies the random number generator used, for reproducibility.
+        """
+        sample = sample_formulas_torch(n_formula=m,
+                                       p_leaf=p_leaf,
+                                       max_depth=max_depth,
+                                       n_ap=self.AP,
+                                       force_tree=force_tree,
+                                       rng=self.rng)
+
+        return sample
+
+    def compute_dataset_embeddings_pool(self, input_formula_list: list[Formula], batch_size: int = 512, time_index: int = 0):
+        """
+        Method for computing the embeddings of k = len(input_formula_list) formulae, from feature matrix F. 
+        Returns:
+            - out: Tensor (K,m), slicing out[i-1] returns the embedding of \phi_i in input_formula_list.
+        """
+        if self.F is None:
+            raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
+
+        N = self.traces.size(dim=0)
+        m = len(self.formulas)
+        k = len(input_formula_list)
+
+        out = torch.empty((k,m), dtype=torch.float32, device=self.device)
+
+        for i, phi in enumerate(input_formula_list):
+            # fill column i across batches
+            phi_sats = torch.empty(N, dtype=torch.float32, device=self.device)
+            j = 0
+            while j < N:
+                j1 = min(N, j + batch_size)
+                batch = self.traces[j:j1]  # (B, AP, T)
+                batch_sats = eval_traces_batch_torch(phi, batch)  # (B, T)
+                vals = torch.where(batch_sats[:, time_index], 
+                                   torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                                   torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
+                phi_sats[j:j1] = vals
+                j = j1
+            
+            out[i,:] = self.F @ phi_sats
+        
+        return out
+    
+    def construct_dataset_kernel(self, input_formula_list):
+        """
+        TODO: describe the function, also rework the compute_dataset_embeddings_pool function, we just want to be able to compute for
+        one phi, and do the loop over the list of input formulas in this function.
+        """
+        
+    

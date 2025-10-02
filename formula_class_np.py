@@ -1,10 +1,8 @@
-from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
 
 
 # ------------------------- formula classes -------------------------
-
 @dataclass(frozen=True)
 class Formula:
     def atoms(self) -> set[tuple]:
