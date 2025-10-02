@@ -346,7 +346,7 @@ def sample_formulas_torch(n_formula: int,
         if depth == 0 and root_must_be_operator:
             make_leaf = False
         else:
-            make_leaf = torch.rand((),generator=rng, device=device) < p_leaf
+            make_leaf = torch.rand((),generator=rng, device=device).item() < p_leaf
 
         if make_leaf:
             return Atom(atoms[torch.randint(0, len(atoms), (), generator=rng, device=device).item()])
