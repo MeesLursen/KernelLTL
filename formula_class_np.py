@@ -47,7 +47,7 @@ class Not(Formula):
         return self.child.atoms()
 
     def __str__(self) -> str:
-        return f"(~{paren(self.child)})"
+        return f"(~ {self.child})"
     
     def __eq__(self, other) -> bool:
         return isinstance(other, Not) and self.child == other.child
@@ -221,15 +221,6 @@ class Until(Formula):
             out[t] = R[t] or (L[t] and out[t + 1])
         
         return out
-
-
-
-# helper
-def paren(f: Formula) -> str:
-    s = str(f)
-    if s.startswith('(') and s.endswith(')'):
-        return s
-    return f"({s})"
 
 
 

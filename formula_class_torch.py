@@ -47,7 +47,7 @@ class Not(Formula):
         return self.child.atoms()
 
     def __str__(self) -> str:
-        return f"(~{paren(self.child)})"
+        return f"(~ {self.child})"
     
     def __eq__(self, other) -> bool:
         return isinstance(other, Not) and self.child == other.child
@@ -226,15 +226,6 @@ class Until(Formula):
 
 
 
-# helper
-def paren(f: Formula) -> str:
-    s = str(f)
-    if s.startswith('(') and s.endswith(')'):
-        return s
-    return f"({s})"
-
-
-
 # ------------------------- vectorized batch evaluator -------------------------
 def eval_traces_batch_torch(formula: Formula, traces_batch: torch.Tensor) -> torch.Tensor:
     """
@@ -282,14 +273,14 @@ def eval_traces_batch_torch(formula: Formula, traces_batch: torch.Tensor) -> tor
             out[:, :-1] = child[:, 1:]
         return out
 
-    if isinstance(formula, Eventually):
+    if isinstance(formula, Globally):
         child = eval_traces_batch_torch(formula.child, traces_batch)  # (B,T)
         rev = torch.flip(child, [1]).to(torch.uint8)  # (B,T)
         cum = torch.cumprod(rev, dim=1, dtype=torch.uint8)
         out = torch.flip(cum, [1]).to(torch.bool)
         return out
 
-    if isinstance(formula, Globally):
+    if isinstance(formula, Eventually):
         child = eval_traces_batch_torch(formula.child, traces_batch)  # (B,T)
         rev = torch.flip(child, [1]).to(torch.uint8)  # (B,T)
         cum = torch.cummax(rev, dim=1).values
