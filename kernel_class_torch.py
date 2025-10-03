@@ -145,6 +145,7 @@ class LTLKernel_torch:
         self.K0 = self.K / self.K[0,0].item()
 
 
+
     # ----------- Dataset Generation -----------
     def sample_dataset_formulas_kernel(self, k: int, p_leaf: float, max_depth: int, force_tree: bool = True):
         """
@@ -167,6 +168,8 @@ class LTLKernel_torch:
                                        device=self.device)
 
         return sample
+
+
 
     def compute_formula_embedding(self, formula: Formula, batch_size: int = 512, time_index: int = 0):
         """
@@ -199,7 +202,9 @@ class LTLKernel_torch:
         
         return emb
     
-    def construct_dataset_kernel(self, input_formula_list, batch_size = 512):
+
+
+    def construct_dataset_kernel(self, input_formula_list: list[Formula], batch_size: int = 512) -> tuple[list[Formula], torch.Tensor]:
         """
         Method for constructing the input dataset.
         - input_formula_list: an **(ordered!)** list of formulae for which we wish to calculate the embedding (w.r.t. set of anchor formlae self.anchor_formlas).
@@ -210,10 +215,10 @@ class LTLKernel_torch:
         k = len(input_formula_list)
         m = len(self.anchor_formulas)
 
-        dataset = torch.empty((k,m), dtype=torch.float32, device=self.device) # (k,m)
+        embeddings = torch.empty((k,m), dtype=torch.float32, device=self.device) # (k,m)
 
         for i, phi in enumerate(input_formula_list):
             emb = self.compute_formula_embedding(phi, batch_size=batch_size) # (m,)
-            dataset[i,:] = emb
+            embeddings[i,:] = emb
         
-        return dataset
+        return (input_formula_list, embeddings)
