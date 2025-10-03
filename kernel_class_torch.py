@@ -163,7 +163,8 @@ class LTLKernel_torch:
                                        max_depth=max_depth,
                                        n_ap=self.AP,
                                        force_tree=force_tree,
-                                       rng=self.rng)
+                                       rng=self.rng,
+                                       device=self.device)
 
         return sample
 
@@ -198,10 +199,11 @@ class LTLKernel_torch:
         
         return emb
     
-    def construct_dataset_kernel(self, input_formula_list):
+    def construct_dataset_kernel(self, input_formula_list, batch_size = 512):
         """
         Method for constructing the input dataset.
         - input_formula_list: an **(ordered!)** list of formulae for which we wish to calculate the embedding (w.r.t. set of anchor formlae self.anchor_formlas).
+        - batch_size: (Default = 512) the size of the batches used during evaluation of the formula, adjustable for memory management.
         Returns:
             - dataset: a Tensor (k,m) where dataset[i,:] returns the embedding of formula \phi_i in input_formula_list.
         """
@@ -211,7 +213,7 @@ class LTLKernel_torch:
         dataset = torch.empty((k,m), dtype=torch.float32, device=self.device) # (k,m)
 
         for i, phi in enumerate(input_formula_list):
-            emb = self.compute_formula_embedding(phi) # (m,)
+            emb = self.compute_formula_embedding(phi, batch_size=batch_size) # (m,)
             dataset[i,:] = emb
         
         return dataset
