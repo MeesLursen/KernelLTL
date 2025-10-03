@@ -1,36 +1,30 @@
-# import torch
-import numpy as np
+import torch
 from formula_class_torch import sample_traces_torch, eval_traces_batch_torch, Globally, Not, Atom, Eventually, Next
+# from kernel_class_torch import LTLKernel_torch
 
-# device = 'cpu'
-# rng = torch.Generator(device = 'cpu').manual_seed(1)
+device = 'cpu'
+rng = torch.Generator(device = 'cpu').manual_seed(1)
 
-trace = np.zeros((5,20), dtype=np.bool)
+traces = sample_traces_torch(10,5,20,rng,device)
 
-trace[:3,0] = np.array([True])
-print(trace)
+formula = Not(Next(Atom(('p0',0))))
 
-#out = np.where(trace[:, 0], np.array([1], dtype = np.int8), np.array([-1], dtype = np.int8))
-out = np.where(trace[:, 0], 1, -1)
+sats_formula = eval_traces_batch_torch(formula,traces)
+vals = torch.where(sats_formula[:, 0], 
+                   torch.tensor(1.0, dtype=torch.float32, device=device),
+                   torch.tensor(-1.0, dtype=torch.float32, device=device)) 
+vals = vals.unsqueeze(dim=1)
+print(f'vals = {vals}')
+print(vals.shape)
 
-print(out.shape)
-# traces = sample_traces_torch(512,5,20,rng,device)
+F = torch.randint(0,2,(15,10), dtype=torch.bool, generator=rng, device=device)
+F = torch.where(F, 
+                torch.tensor(1.0, dtype=torch.float32, device=device),
+                torch.tensor(-1.0, dtype=torch.float32, device=device))
+print(f'F = {F}')
+print(F.shape)
 
+emb = F @ vals
 
-# Atom_0 = Atom(('p2',2))
-# Atom_2 = Atom(('p4',4))
-
-# formula_0 = Globally(Not(Atom(('p2',2))))
-# formula_2 = Eventually(Next(Not(Atom(('p4',4)))))
-
-
-# print(formula_0)
-# print(formula_2)
-
-# sats_0 = eval_traces_batch_torch(formula_0, traces)
-# sats_2 = eval_traces_batch_torch(formula_2, traces)
-
-# vals_0 = sats_0[:,0]
-# vals_2 = sats_2[:,0]
-# print(vals_0)
-# print(vals_2)
+print(f'embeddins = {emb}')
+print(emb.device)
