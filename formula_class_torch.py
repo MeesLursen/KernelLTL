@@ -311,7 +311,8 @@ def sample_formulas_torch(n_formula: int,
                     max_depth: int,
                     n_ap: int,
                     force_tree: bool,
-                    rng: torch.Generator) -> Formula:
+                    rng: torch.Generator,
+                    device: 'str') -> Formula:
     """Generate a random formula.
     - n_formula: Specifies the number of sampled formulae.
     - p_leaf: probability to create an atomic proposition at a *non-root* node.
@@ -329,18 +330,18 @@ def sample_formulas_torch(n_formula: int,
     def gen(depth: int, root_must_be_operator: bool = False) -> Formula:
         # If we're at max depth -> force leaf
         if depth >= max_depth:
-            return Atom(atoms[torch.randint(0, len(atoms), (), generator=rng, device='cpu').item()])
+            return Atom(atoms[torch.randint(0, len(atoms), (), generator=rng, device=device).item()])
         
         if depth == 0 and root_must_be_operator:
             make_leaf = False
         else:
-            make_leaf = torch.rand((),generator=rng, device='cpu ').item() < p_leaf
+            make_leaf = torch.rand((),generator=rng, device=device).item() < p_leaf
 
         if make_leaf:
-            return Atom(atoms[torch.randint(0, len(atoms), (), generator=rng, device='cpu').item()])
+            return Atom(atoms[torch.randint(0, len(atoms), (), generator=rng, device=device).item()])
 
         # Otherwise pick an operator uniformly
-        op = _ALL_OPS[torch.randint(0, len(atoms), (), generator=rng, device='cpu').item()]
+        op = _ALL_OPS[torch.randint(0, len(atoms), (), generator=rng, device=device).item()]
         if op in _UNARY_OPS:
             # unary
             child : Formula = gen(depth + 1)

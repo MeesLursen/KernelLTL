@@ -76,7 +76,8 @@ class LTLKernel_torch:
                                        max_depth=max_depth,
                                        n_ap=self.AP,
                                        force_tree=force_tree,
-                                       rng=self.rng)
+                                       rng=self.rng,
+                                       device=self.device)
 
         self.add_formulas(sample)
 
