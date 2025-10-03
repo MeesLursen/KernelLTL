@@ -14,12 +14,12 @@ class LTLKernel_np:
         self.AP: int                                = AP
         self.seed: int | None                       = seed
         
-        if self.seed is not None:
-            self.rng: np.random.Generator | None    = np.random.default_rng(self.seed)
-        else:
-            self.rng: np.random.Generator | None    = np.random.default_rng()
-        
-        self.formulas: list                         = []            # list of parsed formula objects or strings
+
+        self.rng: np.random.Generator               = (np.random.default_rng(self.seed)
+                                                       if self.seed is not None
+                                                       else np.random.default_rng())
+
+        self.anchor_formulas: list                  = []            # list of anchor formulae
         self.traces: np.ndarray | None              = None          # (N, AP, T), bool, ndarray
         self.F: np.ndarray | None                   = None          # feature matrix (m, N), ±1, ndarray
         self.K: np.ndarray | None                   = None          # kernel matrix (m, m), ndarray
@@ -48,7 +48,7 @@ class LTLKernel_np:
         """
         Method for manually adding (a list of) formulae.
         """
-        self.formulas.extend(formulas)
+        self.anchor_formulas.extend(formulas)
 
 
 
@@ -89,20 +89,20 @@ class LTLKernel_np:
         Specifies self.F: 
         - F: ndarray of shape (m, N) with ±1 values, dtype=int8.
         """
-        if self.traces is None and self.formulas is []:
+        if self.traces is None and self.anchor_formulas is []:
             raise ValueError('Please first sample traces and formulas, using the sample_traces(N) and sample_formulas() method respectively.')
 
-        if not(self.traces is None) and self.formulas is []:
+        if not(self.traces is None) and self.anchor_formulas is []:
             raise ValueError('You have not yet sampled formulas. Please do so using the sample_formulas() method.')
         
-        if self.traces is None and not(self.formulas is []):
+        if self.traces is None and not(self.anchor_formulas is []):
             raise ValueError('You have not yet sampled traces. Please do so using the sample_traces() method.')
         
 
         N = self.traces.shape[0]
-        m = len(self.formulas)
+        m = len(self.anchor_formulas)
         F = np.empty((m, N), dtype=np.int8)
-        for i, phi in enumerate(self.formulas):
+        for i, phi in enumerate(self.anchor_formulas):
             # fill column i across batches
             j = 0
             while j < N:
@@ -139,33 +139,75 @@ class LTLKernel_np:
         """
         raise NotImplementedError
     
-    def compute_embeddings_pool(self, input_formula_list: list[Formula], batch_size: int = 512, time_index: int = 0):
+
+
+    # ----------- Dataset Generation -----------
+    def sample_dataset_formulas_kernel(self, k: int, p_leaf: float, max_depth: int, force_tree: bool = True) -> list[Formula]:
+        """
+        Method for adding a random sample of formulae to the kernel.
+        - k: specifies the number of sampled formulae.
+        - p_leaf: (Default = 0.5) specifies the odds of each node being a leaf. Higher probability reduces average (bounded) formula complexity.
+        - max_depth: (Default = 6) specifies the maximum formula complexity.
+        - force_tree: (Default = True) forces the root of the syntax tree to be an operator. Without this, p_leaf percent of the sample will be just an AP.
+
+        Implicit arguments are: AP, T, seed.
+        - AP: specifies the number of atomic propositions available to each formula.
+        - rng: specifies the random number generator used, for reproducibility.
+        """
+        sample = sample_formulas_np(n_formula=k,
+                                    p_leaf=p_leaf,
+                                    max_depth=max_depth,
+                                    n_ap=self.AP,
+                                    force_tree=force_tree,
+                                    rng=self.rng)
+
+        return sample
+
+
+
+    def compute_formula_embedding(self, formula: Formula, batch_size: int = 512, time_index: int = 0) -> np.ndarray:
         """
         Method for computing the embeddings of K = len(input_formula_list) formulae, from feature matrix F. 
         Returns:
-            - out: Tensor (K,m), slicing out[i-1] returns the embedding of \phi_i in input_formula_list.
+            - out: ndarray (K,m), slicing out[i-1] returns the embedding of \phi_i in input_formula_list.
         """
         if self.F is None:
             raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
 
         N = self.traces.size(dim=0)
-        m = len(self.formulas)
-        K = len(input_formula_list)
 
-        out = np.empty((K,m), dtype=np.int8)
+        phi_sats = np.empty(N, dtype=np.int8)
+
+        j = 0
+        while j < N:
+            j1 = min(N, j + batch_size)
+            batch = self.traces[j:j1]  # (B, AP, T)
+            batch_sats = eval_traces_batch_np(formula, batch)  # (B, T)
+            vals = np.where(batch_sats[:, time_index], np.array([1], dtype = np.int8), np.array([-1], dtype = np.int8))  # (B,)
+            phi_sats[j:j1] = vals
+            j = j1
+        
+        emb = self.F @ phi_sats
+        
+        return emb
+
+
+
+    def construct_dataset_kernel(self, input_formula_list: list[Formula], batch_size: int = 512) -> tuple[list[Formula], np.ndarray]:
+        """
+        Method for constructing the input dataset.
+        - input_formula_list: an **(ordered!)** list of formulae for which we wish to calculate the embedding (w.r.t. set of anchor formlae self.anchor_formlas).
+        - batch_size: (Default = 512) the size of the batches used during evaluation of the formula, adjustable for memory management.
+        Returns:
+            - dataset: a Tensor (k,m) where dataset[i,:] returns the embedding of formula \phi_i in input_formula_list.
+        """
+        k = len(input_formula_list)
+        m = len(self.anchor_formulas)
+
+        embeddings = np.empty((k,m), dtype=np.int8) # (k,m)
 
         for i, phi in enumerate(input_formula_list):
-            # fill column i across batches
-            phi_sats = np.empty(N, dtype=np.int8)
-            j = 0
-            while j < N:
-                j1 = min(N, j + batch_size)
-                batch = self.traces[j:j1]  # (B, AP, T)
-                batch_sats = eval_traces_batch_np(phi, batch)  # (B, T)
-                vals = np.where(batch_sats[:, time_index], np.array([1], dtype = np.int8), np.array([-1], dtype = np.int8))  # (B,)
-                phi_sats[j:j1] = vals
-                j = j1
-            
-            out[i,:] = self.F @ phi_sats
+            emb = self.compute_formula_embedding(phi, batch_size=batch_size) # (m,)
+            embeddings[i,:] = emb
         
-        return out
+        return (input_formula_list, embeddings)

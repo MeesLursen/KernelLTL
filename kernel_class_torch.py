@@ -22,10 +22,9 @@ class LTLKernel_torch:
         
         self.rng: torch.Generator = (torch.Generator(device=self.device).manual_seed(self.seed)
                                      if self.seed is not None
-                                     else
-                                     torch.Generator(device=self.device))
+                                     else torch.Generator(device=self.device))
         
-        self.anchor_formulas: list[Formula]                = []            # list of anchor formulae
+        self.anchor_formulas: list[Formula]         = []            # list of anchor formulae
         self.traces: torch.Tensor | None            = None          # (N, AP, T), bool, Tensor
         self.F: torch.Tensor | None                 = None          # feature matrix (m, N), ±1, Tensor
         self.K: torch.Tensor | None                 = None          # kernel matrix (m, m), Tensor

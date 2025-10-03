@@ -1,30 +1,20 @@
 import torch
-from formula_class_torch import sample_traces_torch, eval_traces_batch_torch, Globally, Not, Atom, Eventually, Next
-# from kernel_class_torch import LTLKernel_torch
+from tokenizer_class_torch import LTLTokenizer
+from formula_class_torch import Formula, sample_formulas_torch
+
+AP = 5
 
 device = 'cpu'
-rng = torch.Generator(device = 'cpu').manual_seed(1)
+rng = torch.Generator(device=device).manual_seed(548)
+tokenizer = LTLTokenizer(AP)
 
-traces = sample_traces_torch(10,5,20,rng,device)
+formula = sample_formulas_torch(1,0.45,100000,AP,True,rng,device)[0]
+print(formula)
 
-formula = Not(Next(Atom(('p0',0))))
+encoded_formula = tokenizer.encode(formula.__str__(), 35)
+print(encoded_formula)
 
-sats_formula = eval_traces_batch_torch(formula,traces)
-vals = torch.where(sats_formula[:, 0], 
-                   torch.tensor(1.0, dtype=torch.float32, device=device),
-                   torch.tensor(-1.0, dtype=torch.float32, device=device)) 
-vals = vals.unsqueeze(dim=1)
-print(f'vals = {vals}')
-print(vals.shape)
+decoded_formula = tokenizer.decode(encoded_formula)
+print(decoded_formula)
 
-F = torch.randint(0,2,(15,10), dtype=torch.bool, generator=rng, device=device)
-F = torch.where(F, 
-                torch.tensor(1.0, dtype=torch.float32, device=device),
-                torch.tensor(-1.0, dtype=torch.float32, device=device))
-print(f'F = {F}')
-print(F.shape)
-
-emb = F @ vals
-
-print(f'embeddins = {emb}')
-print(emb.device)
+formula

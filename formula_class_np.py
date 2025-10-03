@@ -21,19 +21,19 @@ class Formula:
 
 @dataclass(frozen=True)
 class Atom(Formula):
-    name: tuple
+    name: int
 
-    def atoms(self) -> set[tuple]:
+    def atoms(self) -> set[int]:
         return {self.name}
 
     def __str__(self) -> str:
-        return self.name[0]
+        return f'p_{self.name}'
     
     def __eq__(self, other):
         return isinstance(other, Atom) and self.name == other.name
 
     def eval_trace(self, trace : np.ndarray) -> np.ndarray:
-        return trace[self.name[1], :]
+        return trace[self.name, :]
 
 
 
@@ -237,8 +237,7 @@ def eval_traces_batch_np(formula: Formula, traces_batch: np.ndarray) -> np.ndarr
 
     # atoms
     if isinstance(formula, Atom):
-        idx = formula.name[1]
-        return traces_batch[:, idx, :]
+        return traces_batch[:, formula.name, :]
 
     # boolean connectives
     if isinstance(formula, Not):
@@ -321,9 +320,7 @@ def sample_formulas_np(n_formula: int,
     - ls: a list of formulae
     """
 
-
-
-    atoms = [(f"p{i}",i) for i in range(n_ap)]
+    atoms = list(range(n_ap))
 
     def gen(depth: int, root_must_be_operator: bool = False) -> Formula:
         # If we're at max depth -> force leaf

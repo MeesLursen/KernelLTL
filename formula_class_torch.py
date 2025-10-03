@@ -14,26 +14,26 @@ class Formula:
     def __eq__(self,other) -> bool:
         raise NotImplementedError
     
-    def eval_trace(self, trace : torch.Tensor) -> bool:
+    def eval_trace(self, trace: torch.Tensor) -> bool:
         raise NotImplementedError
 
 
 
 @dataclass(frozen=True)
 class Atom(Formula):
-    name: tuple
+    name: int
 
-    def atoms(self) -> set[tuple]:
+    def atoms(self) -> set[int]:
         return {self.name}
 
     def __str__(self) -> str:
-        return self.name[0]
+        return f'p_{self.name}'
     
     def __eq__(self, other):
         return isinstance(other, Atom) and self.name == other.name
 
-    def eval_trace(self, trace : torch.Tensor) -> torch.Tensor:
-        return trace[self.name[1], :]
+    def eval_trace(self, trace: torch.Tensor) -> torch.Tensor:
+        return trace[self.name, :]
 
 
 
@@ -50,7 +50,7 @@ class Not(Formula):
     def __eq__(self, other) -> bool:
         return isinstance(other, Not) and self.child == other.child
     
-    def eval_trace(self, trace : torch.Tensor) -> torch.Tensor:
+    def eval_trace(self, trace: torch.Tensor) -> torch.Tensor:
         return torch.logical_not(self.child.eval_trace(trace))
 
 
@@ -69,7 +69,7 @@ class And(Formula):
     def __eq__(self, other) -> bool:
         return isinstance(other, And) and ((self.left == other.left and self.right == other.right) or (self.left == other.right and self.right == other.left))
     
-    def eval_trace(self, trace : torch.Tensor) -> torch.Tensor:
+    def eval_trace(self, trace: torch.Tensor) -> torch.Tensor:
         L = self.left.eval_trace(trace)
         R = self.right.eval_trace(trace)
         return torch.logical_and(L, R)
@@ -90,7 +90,7 @@ class Or(Formula):
     def __eq__(self, other) -> bool:
         return isinstance(other, Or) and ((self.left == other.left and self.right == other.right) or (self.left == other.right and self.right == other.left))
     
-    def eval_trace(self, trace : torch.Tensor) -> torch.Tensor:
+    def eval_trace(self, trace: torch.Tensor) -> torch.Tensor:
         L = self.left.eval_trace(trace)
         R = self.right.eval_trace(trace)
         return torch.logical_or(L, R)
@@ -111,7 +111,7 @@ class Implies(Formula):
     def __eq__(self, other) -> bool:
         return isinstance(other, Implies) and self.left == other.left and self.right == other.right
     
-    def eval_trace(self, trace : torch.Tensor) -> torch.Tensor:
+    def eval_trace(self, trace: torch.Tensor) -> torch.Tensor:
         L = self.left.eval_trace(trace)
         R = self.right.eval_trace(trace)
         return torch.logical_or(torch.logical_not(L), R)
@@ -135,7 +135,7 @@ class Next(Formula):
     def __eq__(self, other) -> bool:
         return isinstance(other, Next) and self.child == other.child
     
-    def eval_trace(self, trace : torch.Tensor) -> torch.Tensor:
+    def eval_trace(self, trace: torch.Tensor) -> torch.Tensor:
         sub = self.child.eval_trace(trace)
         out = torch.zeros_like(sub)
         out[:-1] = sub[1:]
@@ -156,7 +156,7 @@ class Eventually(Formula):
     def __eq__(self, other) -> bool:
         return isinstance(other, Eventually) and self.child == other.child
     
-    def eval_trace(self, trace) -> torch.Tensor:
+    def eval_trace(self, trace: torch.Tensor) -> torch.Tensor:
         T = trace.size(dim=1)
         sub = self.child.eval_trace(trace)
         out = torch.empty_like(sub)
@@ -182,7 +182,7 @@ class Globally(Formula):
     def __eq__(self, other) -> bool:
         return isinstance(other, Globally) and self.child == other.child
     
-    def eval_trace(self, trace) -> torch.Tensor:
+    def eval_trace(self, trace: torch.Tensor) -> torch.Tensor:
         T = trace.size(dim=1)
         sub = self.child.eval_trace(trace)
         out = torch.empty_like(sub)
@@ -210,7 +210,7 @@ class Until(Formula):
     def __eq__(self, other) -> bool:
         return isinstance(other, Until) and self.left == other.left and self.right == other.right
     
-    def eval_trace(self, trace : torch.Tensor, device) -> torch.Tensor:
+    def eval_trace(self, trace : torch.Tensor) -> torch.Tensor:
         T = trace.size(dim=1)
         L = self.left.eval_trace(trace)
         R = self.right.eval_trace(trace)
@@ -239,8 +239,7 @@ def eval_traces_batch_torch(formula: Formula, traces_batch: torch.Tensor) -> tor
 
     # atoms
     if isinstance(formula, Atom):
-        idx = formula.name[1]
-        return traces_batch[:, idx, :]
+        return traces_batch[:, formula.name, :]
 
     # boolean connectives
     if isinstance(formula, Not):
@@ -307,12 +306,12 @@ _ALL_OPS = _UNARY_OPS + _BINARY_OPS
 
 
 def sample_formulas_torch(n_formula: int,
-                    p_leaf: float,
-                    max_depth: int,
-                    n_ap: int,
-                    force_tree: bool,
-                    rng: torch.Generator,
-                    device: 'str') -> Formula:
+                          p_leaf: float,
+                          max_depth: int,
+                          n_ap: int,
+                          force_tree: bool,
+                          rng: torch.Generator,
+                          device: 'str') -> Formula:
     """Generate a random formula.
     - n_formula: Specifies the number of sampled formulae.
     - p_leaf: probability to create an atomic proposition at a *non-root* node.
@@ -324,8 +323,7 @@ def sample_formulas_torch(n_formula: int,
     - ls: a list of formulae
     """
 
-
-    atoms = [(f"p{i}",i) for i in range(n_ap)]
+    atoms = list(range(n_ap))
 
     def gen(depth: int, root_must_be_operator: bool = False) -> Formula:
         # If we're at max depth -> force leaf
