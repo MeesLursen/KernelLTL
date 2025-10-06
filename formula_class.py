@@ -225,7 +225,7 @@ class Until(Formula):
 
 
 # ------------------------- vectorized batch evaluator -------------------------
-def eval_traces_batch_torch(formula: Formula, traces_batch: torch.Tensor) -> torch.Tensor:
+def eval_traces_batch(formula: Formula, traces_batch: torch.Tensor) -> torch.Tensor:
     """
     Evaluate formula on a batch of traces.
 
@@ -243,42 +243,42 @@ def eval_traces_batch_torch(formula: Formula, traces_batch: torch.Tensor) -> tor
 
     # boolean connectives
     if isinstance(formula, Not):
-        child = eval_traces_batch_torch(formula.child, traces_batch)  # (B,T)
+        child = eval_traces_batch(formula.child, traces_batch)  # (B,T)
         return torch.logical_not(child)
 
     if isinstance(formula, And):
-        L = eval_traces_batch_torch(formula.left, traces_batch)  # (B,T)
-        R = eval_traces_batch_torch(formula.right, traces_batch)  # (B,T)
+        L = eval_traces_batch(formula.left, traces_batch)  # (B,T)
+        R = eval_traces_batch(formula.right, traces_batch)  # (B,T)
         return torch.logical_and(L, R)
 
     if isinstance(formula, Or):
-        L = eval_traces_batch_torch(formula.left, traces_batch)  # (B,T)
-        R = eval_traces_batch_torch(formula.right, traces_batch)  # (B,T)
+        L = eval_traces_batch(formula.left, traces_batch)  # (B,T)
+        R = eval_traces_batch(formula.right, traces_batch)  # (B,T)
         return torch.logical_or(L, R)
     
     if isinstance(formula, Implies):
-        L = eval_traces_batch_torch(formula.left, traces_batch)  # (B,T)
-        R = eval_traces_batch_torch(formula.right, traces_batch)  # (B,T)
+        L = eval_traces_batch(formula.left, traces_batch)  # (B,T)
+        R = eval_traces_batch(formula.right, traces_batch)  # (B,T)
         return torch.logical_or(torch.logical_not(L), R)
 
 
     # temporal-unary
     if isinstance(formula, Next):
-        child = eval_traces_batch_torch(formula.child, traces_batch)  # (B,T)
+        child = eval_traces_batch(formula.child, traces_batch)  # (B,T)
         out = torch.zeros_like(child)  # (B,T)
         if T >= 2:
             out[:, :-1] = child[:, 1:]
         return out
 
     if isinstance(formula, Globally):
-        child = eval_traces_batch_torch(formula.child, traces_batch)  # (B,T)
+        child = eval_traces_batch(formula.child, traces_batch)  # (B,T)
         rev = torch.flip(child, [1]).to(torch.uint8)  # (B,T)
         cum = torch.cumprod(rev, dim=1, dtype=torch.uint8)
         out = torch.flip(cum, [1]).to(torch.bool)
         return out
 
     if isinstance(formula, Eventually):
-        child = eval_traces_batch_torch(formula.child, traces_batch)  # (B,T)
+        child = eval_traces_batch(formula.child, traces_batch)  # (B,T)
         rev = torch.flip(child, [1]).to(torch.uint8)  # (B,T)
         cum = torch.cummax(rev, dim=1).values
         out = torch.flip(cum, [1]).to(torch.bool)
@@ -286,8 +286,8 @@ def eval_traces_batch_torch(formula: Formula, traces_batch: torch.Tensor) -> tor
 
     # temporal-2ary
     if isinstance(formula, Until):
-        L = eval_traces_batch_torch(formula.left, traces_batch)  # (B,T)
-        R = eval_traces_batch_torch(formula.right, traces_batch)  # (B,T)
+        L = eval_traces_batch(formula.left, traces_batch)  # (B,T)
+        R = eval_traces_batch(formula.right, traces_batch)  # (B,T)
         out = torch.empty_like(R)  # (B,T)
         out[:, -1] = R[:, -1]
         for t in range(T-2, -1, -1):
@@ -305,13 +305,13 @@ _BINARY_OPS = ['AND', 'OR', 'IMPLIES', 'U']
 _ALL_OPS = _UNARY_OPS + _BINARY_OPS
 
 
-def sample_formulas_torch(n_formula: int,
+def sample_formulas(n_formula: int,
                           p_leaf: float,
                           max_depth: int,
                           n_ap: int,
                           force_tree: bool,
                           rng: torch.Generator,
-                          device: 'str') -> Formula:
+                          device: str) -> Formula:
     """Generate a random formula.
     - n_formula: Specifies the number of sampled formulae.
     - p_leaf: probability to create an atomic proposition at a *non-root* node.
@@ -384,7 +384,7 @@ def sample_formulas_torch(n_formula: int,
 
 
 # ------------------------- random traces generator -------------------------
-def sample_traces_torch(n_traces: int, n_ap:int, trace_length:int, rng: torch.Generator, device: str) -> torch.Tensor:
+def sample_traces(n_traces: int, n_ap:int, trace_length:int, rng: torch.Generator, device: str) -> torch.Tensor:
     """
     - n_traces: specifies the number of traces sampled uniformly at random (each trace is shape (n_ap, T), with values in {False,True}).
     - n_ap: specifies the number of atomic propositions in each trace.

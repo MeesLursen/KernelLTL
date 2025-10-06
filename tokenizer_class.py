@@ -1,5 +1,6 @@
 import torch
 from torch.nn.utils.rnn import pad_sequence
+from formula_class import Formula
 
 class LTLTokenizer:
     def __init__(self,
@@ -110,39 +111,26 @@ class LTLTokenizer:
         return s
 
 
-""" 
-# Collate function for a batch (dataset yields: (list[Formula], embeddings_tensor))
-def collate_batch(batch: list[tuple[list[any], torch.Tensor]],
+def collate_batch(batch: list[tuple[Formula, torch.Tensor]],
                   tokenizer: LTLTokenizer,
                   max_len: int):
-    # Batch items: each item = (formulas_list, embeddings_tensor_of_shape (L, m))
-    # We assume you want to flatten formulas_list into target sequences (one formula per sample)
-    # or you might want to train per-formula; adjust as needed.
-    input_embeddings = []  # encoder-side: kernel embeddings per sample (we'll average or choose first)
+
+    input_embeddings = []
     labels = []
-    for formulas, emb in batch:
-        # choose a target formula to train on per item. If your dataset item contains multiple formulas,
-        # decide whether to train on each (flatten dataset) or one representative. Here we assume
-        # formulas is a list of length 1 or you want the first:
-        formula = formulas[0] if isinstance(formulas, list) else formulas
-        s = str(formula)  # canonical string from your Formula.__str__()
+
+    for formula, emb in batch:
+        s = str(formula)
         ids = torch.tensor(tokenizer.encode(s, max_length=max_len), dtype=torch.long)
         labels.append(ids)
-        # embeddings: you said it's shape (len(formulas), m), we'll take the corresponding row.
-        # If there is one formula per item, emb.shape = (1,m), take emb[0]
-        if emb.ndim == 2 and emb.shape[0] >= 1:
-            input_embeddings.append(emb[0])   # shape (m,)
-        else:
-            raise ValueError("Embedding tensor unexpected shape; expected (L, m)")
+        input_embeddings.append(emb)
 
     labels = pad_sequence(labels, batch_first=True, padding_value=tokenizer.pad_id)  # (B, L)
     attention_mask = (labels != tokenizer.pad_id).long()
-    # prepare loss labels: set pad positions to -100 (PyTorch CrossEntropy ignore)
+
     loss_labels = labels.clone()
     loss_labels[loss_labels == tokenizer.pad_id] = -100
 
-    # stack embeddings to (B, m)
-    encoder_embs = torch.stack(input_embeddings, dim=0)
+    encoder_embs = torch.stack(input_embeddings, dim=0) # (B, m)
 
     return {
         "labels": loss_labels,               # for HF models, pass this in
@@ -150,4 +138,3 @@ def collate_batch(batch: list[tuple[list[any], torch.Tensor]],
         "attention_mask": attention_mask,
         "encoder_embeddings": encoder_embs   # your model training loop should accept this
     } 
-"""

@@ -1,6 +1,6 @@
 import torch
-from tokenizer_class_torch import LTLTokenizer
-from formula_class_torch import Formula, sample_formulas_torch
+from tokenizer_class import LTLTokenizer
+from formula_class import Formula, sample_formulas
 
 AP = 5
 
@@ -8,7 +8,7 @@ device = 'cpu'
 rng = torch.Generator(device=device).manual_seed(548)
 tokenizer = LTLTokenizer(AP)
 
-formula = sample_formulas_torch(1,0.45,100000,AP,True,rng,device)[0]
+formula = sample_formulas(1,0.45,100000,AP,True,rng,device)[0]
 print(formula)
 
 encoded_formula = tokenizer.encode(formula.__str__(), 35)

@@ -1,7 +1,7 @@
-import numpy as np
-from formula_class_np import sample_traces_np, sample_formulas_np, eval_traces_batch_np, Formula
+import torch
+from formula_class import sample_traces, sample_formulas, eval_traces_batch, Formula
 
-class LTLKernel_np:
+class LTLKernel:
     def __init__(self, T: int, AP: int, seed: int | None = None):
         """
         Kernel for LTL formulas based on sampled traces.
@@ -13,22 +13,27 @@ class LTLKernel_np:
         self.T: int                                 = T
         self.AP: int                                = AP
         self.seed: int | None                       = seed
+
+        self.device: str = ('cuda'
+                            if torch.cuda.is_available()
+                            else 'mps'
+                            if torch.backends.mps.is_available()
+                            else 'cpu')
         
-
-        self.rng: np.random.Generator               = (np.random.default_rng(self.seed)
-                                                       if self.seed is not None
-                                                       else np.random.default_rng())
-
-        self.anchor_formulas: list                  = []            # list of anchor formulae
-        self.traces: np.ndarray | None              = None          # (N, AP, T), bool, ndarray
-        self.F: np.ndarray | None                   = None          # feature matrix (m, N), ±1, ndarray
-        self.K: np.ndarray | None                   = None          # kernel matrix (m, m), ndarray
-        self.K0: np.ndarray | None                  = None          # cosine kernel matrix (m, m), ndarray
+        self.rng: torch.Generator = (torch.Generator(device=self.device).manual_seed(self.seed)
+                                     if self.seed is not None
+                                     else torch.Generator(device=self.device))
+        
+        self.anchor_formulas: list[Formula]         = []            # list of anchor formulae
+        self.traces: torch.Tensor | None            = None          # (N, AP, T), bool, Tensor
+        self.F: torch.Tensor | None                 = None          # feature matrix (m, N), ±1, Tensor
+        self.K: torch.Tensor | None                 = None          # kernel matrix (m, m), Tensor
+        self.K0: torch.Tensor | None                = None          # cosine kernel matrix (m, m), Tensor
 
 
 
     # ----------- Sampling -----------
-    def sample_traces_kernel(self, N: int) -> np.ndarray:
+    def sample_traces_kernel(self, N: int) -> torch.Tensor:
         """
         Method for adding a random sample of traces to the kernel.
         - N: specifies the number of sampled traces.
@@ -37,10 +42,11 @@ class LTLKernel_np:
         - T: specifies the length of each of the sampled traces.
         - rng: specifies the random number generator used, for reproducibility.
         """
-        self.traces = sample_traces_np(N,
-                                       n_ap=self.AP,
-                                       trace_length=self.T,
-                                       rng=self.rng)
+        self.traces = sample_traces(N,
+                                          n_ap=self.AP,
+                                          trace_length=self.T,
+                                          rng=self.rng,
+                                          device=self.device)
 
 
 
@@ -52,12 +58,7 @@ class LTLKernel_np:
 
 
 
-    def sample_formulas_kernel(self, 
-                               m: int,
-                               p_leaf: float    = 0.5,
-                               max_depth: int   = 6,
-                               force_tree: bool = True
-                               ):
+    def sample_anchor_formulas_kernel(self, m: int, p_leaf: float = 0.5, max_depth: int = 6, force_tree: bool = True):
         """
         Method for adding a random sample of formulae to the kernel.
         - m: specifies the number of sampled formulae.
@@ -69,25 +70,26 @@ class LTLKernel_np:
         - AP: specifies the number of atomic propositions available to each formula.
         - rng: specifies the random number generator used, for reproducibility.
         """
-        sample = sample_formulas_np(n_formula=m,
-                                    p_leaf=p_leaf,
-                                    max_depth=max_depth,
-                                    n_ap=self.AP,
-                                    force_tree=force_tree,
-                                    rng=self.rng)
+        sample = sample_formulas(n_formula=m,
+                                       p_leaf=p_leaf,
+                                       max_depth=max_depth,
+                                       n_ap=self.AP,
+                                       force_tree=force_tree,
+                                       rng=self.rng,
+                                       device=self.device)
 
         self.add_formulas(sample)
 
 
 
     # ----------- Evaluation -----------
-    def build_F(self, batch_size: int = 512, time_index: int = 0) -> np.ndarray:
+    def build_F(self, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
         """
         Method for building the feature matrix F from the sampled formulae and traces.
         - formulas: list of formulae length m.
-        - all_traces: ndarray shape (N, AP, T), dtype=bool.
+        - all_traces: Tensor shape (N, AP, T), dtype=bool.
         Specifies self.F: 
-        - F: ndarray of shape (m, N) with ±1 values, dtype=int8.
+        - F: Tensor of shape (m, N) with ±1 values, dtype=int8.
         """
         if self.traces is None and self.anchor_formulas is []:
             raise ValueError('Please first sample traces and formulas, using the sample_traces(N) and sample_formulas() method respectively.')
@@ -99,17 +101,19 @@ class LTLKernel_np:
             raise ValueError('You have not yet sampled traces. Please do so using the sample_traces() method.')
         
 
-        N = self.traces.shape[0]
+        N = self.traces.size(dim=0)
         m = len(self.anchor_formulas)
-        F = np.empty((m, N), dtype=np.int8)
+        F = torch.empty((m, N), dtype=torch.float32, device=self.device)
         for i, phi in enumerate(self.anchor_formulas):
             # fill column i across batches
             j = 0
             while j < N:
                 j1 = min(N, j + batch_size)
                 batch = self.traces[j:j1]  # (B, AP, T)
-                sats = eval_traces_batch_np(phi, batch)  # (B, T)
-                vals = np.where(sats[:, time_index], np.array([1], dtype = np.int8), np.array([-1], dtype = np.int8))  # (B,)
+                sats = eval_traces_batch(phi, batch)  # (B, T)
+                vals = torch.where(sats[:, time_index], 
+                                   torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                                   torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
                 F[i, j:j1] = vals
                 j = j1
         
@@ -121,28 +125,28 @@ class LTLKernel_np:
         """
         Method for building the kernel matrix, K, from feature matrix F. 
         Specifies self.K: 
-        - K: npdarray (m, m) with values in [-N, N].
+        - K: Tensor (m, m) with values in [-N, N].
         """
         if self.F is None:
             raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
         
-        F32 = self.F.astype(np.int32)
-        self.K = F32 @ F32.T
+        self.K = self.F @ self.F.T
         
 
 
     def normalize_K(self):
         """
         Method for normalizing the kernel matrix through cosine similarity [K0_ij = K_ij / sqrt(K_ii*K_jj)].
+        Note that sqrt(K_ii*K_jj) = N, since K_ii = K_jj = N
         Specifies self.K0: 
-        - K0: npdarray (m, m) with values in [-1, 1].
+        - K0: Tensor (m, m) with values in [-1, 1].
         """
-        raise NotImplementedError
-    
+        self.K0 = self.K / self.K[0,0].item()
+
 
 
     # ----------- Dataset Generation -----------
-    def sample_dataset_formulas_kernel(self, k: int, p_leaf: float, max_depth: int, force_tree: bool = True) -> list[Formula]:
+    def sample_dataset_formulas_kernel(self, k: int, p_leaf: float, max_depth: int, force_tree: bool = True):
         """
         Method for adding a random sample of formulae to the kernel.
         - k: specifies the number of sampled formulae.
@@ -154,60 +158,64 @@ class LTLKernel_np:
         - AP: specifies the number of atomic propositions available to each formula.
         - rng: specifies the random number generator used, for reproducibility.
         """
-        sample = sample_formulas_np(n_formula=k,
-                                    p_leaf=p_leaf,
-                                    max_depth=max_depth,
-                                    n_ap=self.AP,
-                                    force_tree=force_tree,
-                                    rng=self.rng)
+        sample = sample_formulas(n_formula=k,
+                                       p_leaf=p_leaf,
+                                       max_depth=max_depth,
+                                       n_ap=self.AP,
+                                       force_tree=force_tree,
+                                       rng=self.rng,
+                                       device=self.device)
 
         return sample
 
 
 
-    def compute_formula_embedding(self, formula: Formula, batch_size: int = 512, time_index: int = 0) -> np.ndarray:
+    def compute_formula_embedding(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0):
         """
-        Method for computing the embeddings of K = len(input_formula_list) formulae, from feature matrix F. 
+        Method for computing the embedding of formula, from feature matrix F.
+        - formula: the formula for which the embedding is to be calcualted.
+        - batch size: (Default = 512) the size of the batches used during evaluation of the formula, adjustable for memory management.
+        - time index: (Default = 0) the timepoint of the trace at which the formula is evaluated.
         Returns:
-            - out: ndarray (K,m), slicing out[i-1] returns the embedding of \phi_i in input_formula_list.
-        """
+            - emb: Tensor (m), the embedding of formula, where m = len(self.anchor_formulas) the number of anchor formulae.
+        """ 
         if self.F is None:
             raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
 
         N = self.traces.size(dim=0)
-
-        phi_sats = np.empty(N, dtype=np.int8)
+        
+        phi_sats = torch.empty(N, dtype=torch.float32, device=device) # TODO: check whether this works with compute_formula_embedding in dataset_class.py!!!
 
         j = 0
         while j < N:
             j1 = min(N, j + batch_size)
             batch = self.traces[j:j1]  # (B, AP, T)
-            batch_sats = eval_traces_batch_np(formula, batch)  # (B, T)
-            vals = np.where(batch_sats[:, time_index], np.array([1], dtype = np.int8), np.array([-1], dtype = np.int8))  # (B,)
+            batch_sats = eval_traces_batch(formula, batch)  # (B, T)
+            vals = torch.where(batch_sats[:, time_index], 
+                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                                torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
             phi_sats[j:j1] = vals
             j = j1
-        
-        emb = self.F @ phi_sats
+            
+        emb = self.F @ phi_sats # (m,)
         
         return emb
+    
 
 
-
-    def construct_dataset_kernel(self, input_formula_list: list[Formula], batch_size: int = 512) -> tuple[list[Formula], np.ndarray]:
+    def construct_dataset_kernel(self, input_formula_list: list[Formula], batch_size: int = 512) -> list[tuple[Formula, torch.Tensor]]:
         """
         Method for constructing the input dataset.
-        - input_formula_list: an **(ordered!)** list of formulae for which we wish to calculate the embedding (w.r.t. set of anchor formlae self.anchor_formlas).
+        - input_formula_list: an list of formulae for which we wish to calculate the embedding (w.r.t. set of anchor formlae self.anchor_formlas).
         - batch_size: (Default = 512) the size of the batches used during evaluation of the formula, adjustable for memory management.
         Returns:
-            - dataset: a Tensor (k,m) where dataset[i,:] returns the embedding of formula \phi_i in input_formula_list.
+            - dataset: a list of tuple (formula, embedding)
         """
-        k = len(input_formula_list)
-        m = len(self.anchor_formulas)
-
-        embeddings = np.empty((k,m), dtype=np.int8) # (k,m)
-
-        for i, phi in enumerate(input_formula_list):
-            emb = self.compute_formula_embedding(phi, batch_size=batch_size) # (m,)
-            embeddings[i,:] = emb
         
-        return (input_formula_list, embeddings)
+        ls = []
+
+        for phi in input_formula_list:
+            emb = self.compute_formula_embedding(phi, batch_size=batch_size) # (m,)
+            ls.append((phi, emb))
+        
+        return ls
