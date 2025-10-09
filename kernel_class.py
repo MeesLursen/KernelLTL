@@ -58,7 +58,7 @@ class LTLKernel:
 
 
 
-    def sample_anchor_formulas_kernel(self, m: int, p_leaf: float = 0.5, max_depth: int = 6, force_tree: bool = True):
+    def sample_anchor_formulas_kernel(self, m: int = 1024, p_leaf: float = 0.5, max_depth: int = 6, force_tree: bool = True):
         """
         Method for adding a random sample of formulae to the kernel.
         - m: specifies the number of sampled formulae.
@@ -159,18 +159,18 @@ class LTLKernel:
         - rng: specifies the random number generator used, for reproducibility.
         """
         sample = sample_formulas(n_formula=k,
-                                       p_leaf=p_leaf,
-                                       max_depth=max_depth,
-                                       n_ap=self.AP,
-                                       force_tree=force_tree,
-                                       rng=self.rng,
-                                       device=self.device)
+                                 p_leaf=p_leaf,
+                                 max_depth=max_depth,
+                                 n_ap=self.AP,
+                                 force_tree=force_tree,
+                                 rng=self.rng,
+                                 device=self.device)
 
         return sample
 
 
 
-    def compute_formula_embedding(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0):
+    def compute_formula_embedding(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
         """
         Method for computing the embedding of formula, from feature matrix F.
         - formula: the formula for which the embedding is to be calcualted.
@@ -184,7 +184,7 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=device) # TODO: check whether this works with compute_formula_embedding in dataset_class.py!!!
+        phi_sats = torch.empty(N, dtype=torch.float32, device=device)
 
         j = 0
         while j < N:
@@ -198,24 +198,52 @@ class LTLKernel:
             j = j1
             
         emb = self.F @ phi_sats # (m,)
+
+        if self.device == 'cuda':
+            emb = emb.cpu()
+            torch.cuda.empty_cache()
+        elif self.device == 'mps':
+            emb = emb.cpu() 
+            torch.mps.empty_cache()
         
         return emb
     
 
 
-    def construct_dataset_kernel(self, input_formula_list: list[Formula], batch_size: int = 512) -> list[tuple[Formula, torch.Tensor]]:
+    def compute_formula_embedding_normalized(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
         """
-        Method for constructing the input dataset.
-        - input_formula_list: an list of formulae for which we wish to calculate the embedding (w.r.t. set of anchor formlae self.anchor_formlas).
-        - batch_size: (Default = 512) the size of the batches used during evaluation of the formula, adjustable for memory management.
+        Method for computing the embedding of formula, from feature matrix F.
+        - formula: the formula for which the embedding is to be calcualted.
+        - batch size: (Default = 512) the size of the batches used during evaluation of the formula, adjustable for memory management.
+        - time index: (Default = 0) the timepoint of the trace at which the formula is evaluated.
         Returns:
-            - dataset: a list of tuple (formula, embedding)
-        """
-        
-        ls = []
+            - emb: Tensor (m), the embedding of formula, where m = len(self.anchor_formulas) the number of anchor formulae.
+        """ 
+        if self.F is None:
+            raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
 
-        for phi in input_formula_list:
-            emb = self.compute_formula_embedding(phi, batch_size=batch_size) # (m,)
-            ls.append((phi, emb))
+        N = self.traces.size(dim=0)
         
-        return ls
+        phi_sats = torch.empty(N, dtype=torch.float32, device=device)
+
+        j = 0
+        while j < N:
+            j1 = min(N, j + batch_size)
+            batch = self.traces[j:j1]  # (B, AP, T)
+            batch_sats = eval_traces_batch(formula, batch)  # (B, T)
+            vals = torch.where(batch_sats[:, time_index], 
+                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                                torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
+            phi_sats[j:j1] = vals
+            j = j1
+            
+        emb = (self.F @ phi_sats) / N # (m,)
+
+        if self.device == 'cuda':
+            emb = emb.cpu()
+            torch.cuda.empty_cache()
+        elif self.device == 'mps':
+            emb = emb.cpu() 
+            torch.mps.empty_cache()
+        
+        return emb

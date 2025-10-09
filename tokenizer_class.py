@@ -15,6 +15,7 @@ class LTLTokenizer:
         self.base_tokens: list[str]     = base_tokens
         self.ops_and_props: list[str]   = op_tokens + prop_tokens
         self.all_tokens: list[str]      = all_tokens
+        self.vocab_size: int            = len(self.all_tokens)
         self.token_to_id: dict[str,int] = {t:i for i,t in enumerate(all_tokens)}
         self.id_to_token: dict[str,int] = {i:t for t,i in self.token_to_id.items()}
 
@@ -34,6 +35,7 @@ class LTLTokenizer:
 
 
 
+    # TODO: fix this to be more flexible, don't store vocab.json as just a list of tokens. Might want to add aditional tokens during tokenizer init.
     @classmethod
     def load_vocab(cls, path: str):
         import json
@@ -43,7 +45,7 @@ class LTLTokenizer:
         prop_tokens = [t for t in tokens if t.startswith('p_')]
         num_props = len(prop_tokens)
         obj = cls(num_props)
-        obj.tokens = tokens
+        obj.all_tokens = tokens
         obj.ops_and_props = tokens[4:]
         obj.token_to_id = {t:i for i,t in enumerate(tokens)}
         obj.id_to_token = {i:t for t,i in obj.token_to_id.items()}
