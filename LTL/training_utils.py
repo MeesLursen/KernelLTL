@@ -1,4 +1,5 @@
 import torch
+from torch.utils.data import DataLoader
 from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 from formula_class import Formula
 from formula_utils import str_to_formula
@@ -14,17 +15,14 @@ class SemanticEvaluationCallback(TrainerCallback):
     """
     def __init__(self, 
                  kernel: LTLKernel,
-                 tokenizer: LTLTokenizer,
-                 num_samples: int = 16):
+                 tokenizer: LTLTokenizer):
         """
         Args:
             kernel: LTLKernel instance for computing semantic embeddings
             tokenizer: LTLTokenizer for decoding generated sequences
-            num_samples: Number of validation samples to evaluate
         """
         self.kernel = kernel
         self.tokenizer = tokenizer
-        self.num_samples = num_samples
         
         # metrics history
         self.epochs: list[int] = []
@@ -32,81 +30,82 @@ class SemanticEvaluationCallback(TrainerCallback):
         self.exact_matches: list[float] = []
 
     def on_epoch_end(self,
-                    args: TrainingArguments,
-                    state: TrainerState,
-                    control: TrainerControl,
-                    model: LTLModel | None = None,
-                    **kwargs):
-        """Run semantic evaluation at the end of each epoch."""
-        if not model or not hasattr(state, "eval_dataloader"):
+                     args: TrainingArguments,
+                     state: TrainerState,
+                     control: TrainerControl,
+                     model: LTLModel,
+                     **kwargs):
+        
+        trainer = kwargs.get('trainer')
+        if trainer is None or not hasattr(trainer, 'eval_dataset'):
             return
-            
+
+        # Only execute on global rank 0 to avoid duplicate expensive evaluation under DDP.
+        if hasattr(trainer, "is_world_process_zero") and not trainer.is_world_process_zero():
+            return
+        
+        eval_dataset = trainer.eval_dataset
+        eval_dataloader = DataLoader(
+            eval_dataset,
+            batch_size=args.per_device_eval_batch_size,
+            num_workers=args.dataloader_num_workers,
+            pin_memory=args.dataloader_pin_memory,
+            shuffle=False
+        )
+
+        total_distance = 0.0
+        exact_matches = 0
+        total_samples = 0
+
         model.eval()
         with torch.no_grad():
-            for batch in state.eval_dataloader:
-                batch_size = len(batch["encoder_embeddings"])
+            for batch in eval_dataloader:
+                target_formulas, target_embeddings = batch
+                target_embeddings = target_embeddings.to(model.device, non_blocking=True)
                 
-                # extract inputs 
-                encoder_embeddings = batch["encoder_embeddings"][:batch_size].to(model.device)
-                input_ids = batch["input_ids"][:batch_size].to(model.device)
-                attention_mask = batch["attention_mask"][:batch_size].to(model.device)
-                
-                # generate formula sequences
+                batch_size = target_embeddings.size(0)
+                total_samples += batch_size
+
                 generated_ids = model.generate(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    semantic_embeddings=encoder_embeddings,
-                    max_length = model.config.n_positions,
+                    semantic_embeddings=target_embeddings,
+                    max_length=model.config.n_positions,
+                    num_beams=1,
                     early_stopping=True,
                     pad_token_id=self.tokenizer.pad_id,
-                    eos_token_id=self.tokenizer.eos_id,
+                    eos_token_id=self.tokenizer.eos_id
                 )
                 
-                # decode generated sequences
-                generated_formulas = []
-                for ids in generated_ids:
-                    formula_str = self.tokenizer.decode(ids, skip_special_tokens=True)
+                generated_strs = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+
+                for i in range(batch_size):
+                    generated_str = generated_strs[i]
+                    target_formula = target_formulas[i]
+                    target_embedding = target_embeddings[i]
+
                     try:
-                        # you need to implement parse_formula to convert string to Formula object
-                        formula = str_to_formula(formula_str)
-                        generated_formulas.append(formula)
-                    except:
-                        # if parsing fails, skip this sample in evaluation
-                        continue
-                
-                if not generated_formulas:
-                    return
-                    
-                # compute embeddings for generated formulas
-                generated_embeddings = []
-                for formula in generated_formulas:
-                    emb = self.kernel.compute_formula_embedding_normalized(
-                        formula, 
-                        device=model.device
-                    )
-                    generated_embeddings.append(emb)
-                
-                generated_embeddings = torch.stack(generated_embeddings)
-                target_embeddings = encoder_embeddings[:len(generated_embeddings)]
-                
-                # compute cosine similarity between embeddings
-                similarities = torch.nn.functional.cosine_similarity(
-                    generated_embeddings,
-                    target_embeddings,
-                    dim=1
-                )
-                semantic_distance = 1 - similarities.mean().item()
-                
-                # compute exact matches
-                exact_match = (similarities > 0.999).float().mean().item()
-                
-                # log metrics
-                self.epochs.append(state.epoch)
-                self.semantic_distances.append(semantic_distance) 
-                self.exact_matches.append(exact_match)
-                
-                print(f"\nEpoch {state.epoch}:")
-                print(f"Average semantic distance: {semantic_distance:.4f}")
-                print(f"Exact match ratio: {exact_match:.4f}")
+                        generated_formula = str_to_formula(generated_str)
+                        generated_embedding = self.kernel.compute_formula_embedding(formula = generated_formula, device = model.device)
+                        
+                        # Cosine similarity as distance
+                        distance = 1 - torch.nn.functional.cosine_similarity(target_embedding, generated_embedding, dim=0)
+                        total_distance += distance.item()
+                        
+                        if str(generated_formula) == str(target_formula):
+                            exact_matches += 1
+
+                    except Exception:
+                        # Penalize for invalid formula by adding max distance
+                        total_distance += 1.0
+
+        avg_distance = total_distance / total_samples if total_samples > 0 else 0
+        exact_match_rate = exact_matches / total_samples if total_samples > 0 else 0
         
-        model.train()
+        self.epochs.append(state.epoch)
+        self.semantic_distances.append(avg_distance)
+        self.exact_matches.append(exact_match_rate)
+        
+        print(f"\nEpoch {state.epoch}:")
+        print(f"  Semantic Distance: {avg_distance:.4f}")
+        print(f"  Exact Match Rate: {exact_match_rate:.4f}")
+
+

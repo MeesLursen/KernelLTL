@@ -20,23 +20,23 @@ class LTLModel(nn.Module):
         super().__init__()
 
         self.config = config
-        self.device: str = ('cuda'
-                            if torch.cuda.is_available()
-                            else 'mps'
-                            if torch.backends.mps.is_available()
-                            else 'cpu')
 
         # instantiate HF causal LM (random init)
         self.base: GPT2LMHeadModel = GPT2LMHeadModel(config)
-        self.base.to(self.device)
 
         # projection from semantic embedding to model hidden size (if needed)
         self.semantic_emb_dim = semantic_emb_dim
         if semantic_emb_dim is not None and semantic_emb_dim != self.config.n_embd:
             self.encoder_proj = nn.Linear(semantic_emb_dim, self.config.n_embd)
-            self.encoder_proj.to(self.device)
         else:
             self.encoder_proj = None
+
+
+
+    @property
+    def device(self) -> torch.device:
+        """Current device of the underlying language model."""
+        return next(self.base.parameters()).device
 
 
 
@@ -48,7 +48,8 @@ class LTLModel(nn.Module):
         if semantic_embeddings is None:
             return None
 
-        x = semantic_embeddings.to(self.device).float()  # (B, E_sem)
+        device = self.device
+        x = semantic_embeddings.to(device, non_blocking=True).float()  # (B, E_sem)
         if self.encoder_proj is not None:
             x = self.encoder_proj(x)  # (B, n_embd)
         if x.ndim == 2:  # (B, n_embd)
@@ -76,17 +77,22 @@ class LTLModel(nn.Module):
         if semantic_embeddings is not None:
             enc_states = self.build_encoder_states(semantic_embeddings)
             if encoder_attention_mask is None:
-                encoder_attention_mask = torch.ones(enc_states.size(0), enc_states.size(1), dtype=torch.long, device=self.device)
+                encoder_attention_mask = torch.ones(
+                    enc_states.size(0),
+                    enc_states.size(1),
+                    dtype=torch.long,
+                    device=self.device
+                )
 
         # move inputs to device
         if input_ids is not None:
-            input_ids = input_ids.to(self.device)
+            input_ids = input_ids.to(self.device, non_blocking=True)
         if attention_mask is not None:
-            attention_mask = attention_mask.to(self.device)
+            attention_mask = attention_mask.to(self.device, non_blocking=True)
         if labels is not None:
-            labels = labels.to(self.device)
+            labels = labels.to(self.device, non_blocking=True)
         if encoder_attention_mask is not None:
-            encoder_attention_mask = encoder_attention_mask.to(self.device)
+            encoder_attention_mask = encoder_attention_mask.to(self.device, non_blocking=True)
 
         outputs = self.base(
             input_ids=input_ids,
@@ -109,7 +115,12 @@ class LTLModel(nn.Module):
         if semantic_embeddings is not None:
             enc_states = self.build_encoder_states(semantic_embeddings)
             if encoder_attention_mask is None:
-                encoder_attention_mask = torch.ones(enc_states.size(0), enc_states.size(1), dtype=torch.long, device=self.device)
+                encoder_attention_mask = torch.ones(
+                    enc_states.size(0),
+                    enc_states.size(1),
+                    dtype=torch.long,
+                    device=self.device
+                )
 
         # pass through to HF generate, include encoder_hidden_states kwargs
         return self.base.generate(*args, encoder_hidden_states=enc_states, encoder_attention_mask=encoder_attention_mask, **kwargs)
@@ -138,12 +149,12 @@ class LTLModel(nn.Module):
         else:
             semantic_emb_dim = torch.load(proj_path, map_location='cpu')['weight'].size(dim=1)
             
-        inst = cls(cfg, semantic_emb_dim=semantic_emb_dim, device=device)
+        inst = cls(cfg, semantic_emb_dim=semantic_emb_dim)
         # load HF weights
         inst.base = AutoModelForCausalLM.from_pretrained(load_directory)
-        inst.base.to(inst.device)
+        if device is not None:
+            inst.to(device)
         # load projector if present
-        if inst.semantic_emb_dim is not None:
+        if inst.encoder_proj is not None:
             inst.encoder_proj.load_state_dict(torch.load(proj_path, map_location=inst.device))
-            inst.encoder_proj.to(inst.device)
         return inst

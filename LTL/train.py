@@ -1,5 +1,6 @@
-import torch
 import math
+import os
+import torch
 from transformers import TrainingArguments, Trainer
 from tokenizer_class import LTLTokenizer
 from model_class import LTLModel
@@ -7,9 +8,12 @@ from kernel_class import LTLKernel
 from dataset_class import LTLDataset
 from config_class import LTLConfig
 from training_utils import SemanticEvaluationCallback
-import os
 
 def main():
+    local_rank = int(os.environ.get("LOCAL_RANK", -1))
+    if local_rank != -1 and torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+
     # Hyperparameters
     num_epochs = 10
 
@@ -67,7 +71,23 @@ def main():
     
     # Training arguments
     training_args = TrainingArguments(
-        # implement
+        output_dir=output_dir,
+        num_train_epochs=num_epochs,
+        learning_rate=learning_rate,
+        per_device_train_batch_size=32,
+        per_device_eval_batch_size=32,
+        warmup_steps=500,
+        weight_decay=0.01,
+        logging_dir=f"{output_dir}/logs",
+        logging_steps=100,
+        evaluation_strategy="epoch",
+        save_strategy="epoch",
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
+        dataloader_num_workers=4,
+        dataloader_pin_memory=True,
+        ddp_find_unused_parameters=False
     )
     
     # Initialize callback
@@ -80,10 +100,10 @@ def main():
     trainer = Trainer(
         model=model,
         args=training_args,
+        data_collator=lambda batch : tokenizer.collate_batch(batch, model.config.n_positions),
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        tokenizer=tokenizer,
-        collate_fn = lambda batch : tokenizer.collate_batch(batch, model.config.n_positions),
+        processing_class=tokenizer,
         callbacks=[semantic_callback]
     )
     

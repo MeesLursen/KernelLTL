@@ -145,11 +145,13 @@ class LTLTokenizer:
         loss_labels = labels.clone()
         loss_labels[loss_labels == self.pad_id] = -100
 
-        encoder_embs = torch.stack(input_embeddings, dim=0) # (B, m)
+        encoder_embs = torch.stack(input_embeddings, dim=0).to(dtype=torch.float32)  # (B, m)
+        if encoder_embs.device.type == "cpu" and torch.cuda.is_available():
+            encoder_embs = encoder_embs.pin_memory()
 
         return {
             "labels": loss_labels,
             "input_ids": labels,
             "attention_mask": attention_mask,
-            "encoder_embeddings": encoder_embs
+            "semantic_embeddings": encoder_embs
         } 
