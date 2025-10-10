@@ -27,7 +27,7 @@ class LTLModel(nn.Module):
                             else 'cpu')
 
         # instantiate HF causal LM (random init)
-        self.base: GPT2LMHeadModel = AutoModelForCausalLM.from_config(self.config) # GPT2 model
+        self.base: GPT2LMHeadModel = GPT2LMHeadModel(config)
         self.base.to(self.device)
 
         # projection from semantic embedding to model hidden size (if needed)
@@ -123,6 +123,8 @@ class LTLModel(nn.Module):
         self.config.save_pretrained(save_directory)
         if self.encoder_proj is not None:
             torch.save(self.encoder_proj.state_dict(), os.path.join(save_directory, "encoder_proj.pt"))
+
+
 
     @classmethod
     def from_pretrained(cls, load_directory: str, device: torch.device = None):

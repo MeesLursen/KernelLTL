@@ -86,19 +86,21 @@ class LTLTokenizer:
         ids = [self.token_to_id.get(t, self.unk_id) for t in tokens]
         if len(ids) >= max_length:
             return ids[:max_length]
-        ids = ids + [self.pad_id] * (max_length - len(ids))
+
         return ids
 
 
 
-    def decode(self, token_ids: list[int]) -> str:
+    def decode(self, token_ids: list[int], skip_special_tokens = True) -> str:
         tokens = [self.id_to_token[i] for i in token_ids]
 
         s = ""
         for t in tokens:
-            if t == "<bos>" or t == "<eos>" or t == "<pad>":
-                continue  # skip special tokens
-
+            if (t == "<bos>" or t == "<eos>" or t == "<pad>"):
+                if not skip_special_tokens:
+                    s += t
+                else:
+                    continue  # skip special tokens
             if t == ")":
                 # remove trailing space before )
                 s = s.rstrip() + ")"
@@ -111,32 +113,43 @@ class LTLTokenizer:
                     s += " "
                 s += f"{t} "
         return s
+    
+    def batch_decode(self, sequences: torch.Tensor | list[list[int]], skip_special_tokens=True):
+        """
+        sequences: List[List[int]] or torch.Tensor of shape (B, L)
+        Returns List[str] of decoded strings
+        """
+        # if it's a tensor, convert to list
+        if isinstance(sequences, torch.Tensor):
+            sequences = sequences.tolist()
+        
+        return [self.decode(seq, skip_special_tokens=skip_special_tokens) for seq in sequences]
 
 
-def collate_batch(batch: list[tuple[Formula, torch.Tensor]],
-                  tokenizer: LTLTokenizer,
-                  max_len: int):
+    def collate_batch(self, 
+                      batch: list[tuple[Formula, torch.Tensor]],
+                      max_len: int):
 
-    input_embeddings = []
-    labels = []
+        input_embeddings = []
+        labels = []
 
-    for formula, emb in batch:
-        s = str(formula)
-        ids = torch.tensor(tokenizer.encode(s, max_length=max_len), dtype=torch.long)
-        labels.append(ids)
-        input_embeddings.append(emb)
+        for formula, emb in batch:
+            s = str(formula)
+            ids = torch.tensor(self.encode(s, max_length=max_len), dtype=torch.long)
+            labels.append(ids)
+            input_embeddings.append(emb)
 
-    labels = pad_sequence(labels, batch_first=True, padding_value=tokenizer.pad_id)  # (B, L)
-    attention_mask = (labels != tokenizer.pad_id).long()
+        labels = pad_sequence(labels, batch_first=True, padding_value=self.pad_id)  # (B, L)
+        attention_mask = (labels != self.pad_id).long()
 
-    loss_labels = labels.clone()
-    loss_labels[loss_labels == tokenizer.pad_id] = -100
+        loss_labels = labels.clone()
+        loss_labels[loss_labels == self.pad_id] = -100
 
-    encoder_embs = torch.stack(input_embeddings, dim=0) # (B, m)
+        encoder_embs = torch.stack(input_embeddings, dim=0) # (B, m)
 
-    return {
-        "labels": loss_labels,               # for HF models, pass this in
-        "input_ids": labels,                 # if doing decoder-only; for T5 Trainer, just pass labels
-        "attention_mask": attention_mask,
-        "encoder_embeddings": encoder_embs   # your model training loop should accept this
-    } 
+        return {
+            "labels": loss_labels,
+            "input_ids": labels,
+            "attention_mask": attention_mask,
+            "encoder_embeddings": encoder_embs
+        } 

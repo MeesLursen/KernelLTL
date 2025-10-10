@@ -17,10 +17,9 @@ class LTLConfig(GPT2Config):
         n_layer: int = 12,
         n_head: int = 16,
         add_cross_attention: bool = True,
-                # pass-through kwargs to GPT2Config
+        # pass-through kwargs to GPT2Config
         **kwargs
     ):
-        # ensure cross-attention enabled by default for conditioning on embeddings
         kwargs.setdefault("add_cross_attention", add_cross_attention)
 
         super().__init__(
