@@ -11,7 +11,7 @@ class LTLConfig(GPT2Config):
 
     def __init__(
         self,
-        tokenizer: LTLTokenizer,
+        tokenizer: LTLTokenizer | None = None,
         n_positions: int = 512,
         n_embd: int = 1024, # must equal the size of the anchor set
         n_layer: int = 12,
@@ -24,7 +24,6 @@ class LTLConfig(GPT2Config):
 
         super().__init__(
             vocab_size=tokenizer.vocab_size,
-            tokenizer = tokenizer,
             n_positions=n_positions,
             n_embd=n_embd,
             n_layer=n_layer,
