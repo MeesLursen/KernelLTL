@@ -11,39 +11,38 @@ class LTLConfig(GPT2Config):
 
     def __init__(
         self,
-        tokenizer: LTLTokenizer | None = None,
+        vocab_size: int = 19,
         n_positions: int = 512,
         n_embd: int = 1024, # must equal the size of the anchor set
         n_layer: int = 12,
         n_head: int = 16,
         add_cross_attention: bool = True,
+        bos_token_id: int = 1,
+        eos_token_id: int = 2,
+        pad_token_id: int = 0,
         # pass-through kwargs to GPT2Config
         **kwargs
     ):
         kwargs.setdefault("add_cross_attention", add_cross_attention)
 
-        if tokenizer is not None:
-            kwargs.setdefault("vocab_size", tokenizer.vocab_size)
-            kwargs.setdefault("bos_token_id", tokenizer.bos_id)
-            kwargs.setdefault("eos_token_id", tokenizer.eos_id)
-            kwargs.setdefault("pad_token_id", tokenizer.pad_id)
-
-        required_keys = ("vocab_size", "bos_token_id", "eos_token_id", "pad_token_id")
-        missing = [key for key in required_keys if key not in kwargs]
-        if missing:
-            raise ValueError(
-                "LTLConfig requires either a tokenizer or explicit values for: "
-                + ", ".join(missing)
-            )
+        self.vocab_size=vocab_size
+        self.n_positions=n_positions
+        self.n_embd=n_embd
+        self.n_layer=n_layer
+        self.n_head=n_head
+        self.add_cross_attention=add_cross_attention
+        self.bos_token_id=bos_token_id
+        self.eos_token_id=eos_token_id
+        self.pad_token_id=pad_token_id
 
         super().__init__(
-            vocab_size=kwargs.pop("vocab_size"),
+            vocab_size=vocab_size,
             n_positions=n_positions,
             n_embd=n_embd,
             n_layer=n_layer,
             n_head=n_head,
-            bos_token_id=kwargs.pop("bos_token_id"),
-            eos_token_id=kwargs.pop("eos_token_id"),
-            pad_token_id=kwargs.pop("pad_token_id"),
+            bos_token_id=bos_token_id,
+            eos_token_id=eos_token_id,
+            pad_token_id=pad_token_id,
             **kwargs,
         )
