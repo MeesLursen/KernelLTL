@@ -1,7 +1,6 @@
 from typing import List
 import torch
 from formula_class import Atom, Not, And, Or, Implies, Next, Eventually, Globally, Until, Formula
-from kernel_class import LTLKernel
 
 # ------------------------- random formula generator -------------------------
 # Operator classes and arities. We'll sample uniformly among these names.
