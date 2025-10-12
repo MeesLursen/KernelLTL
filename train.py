@@ -1,11 +1,12 @@
 import math
 import os
 import torch
+
 from transformers import TrainingArguments, Trainer
 from tokenizer_class import LTLTokenizer
-from model_class import LTLModel
 from kernel_class import LTLKernel
 from dataset_class import LTLDataset
+from model_class import LTLModel
 from config_class import LTLConfig
 from training_utils import SemanticEvaluationCallback
 
