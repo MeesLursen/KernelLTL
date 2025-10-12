@@ -68,6 +68,7 @@ class LTLTokenizer:
                 continue
 
             # rest_of_tokens
+            matched = False
             for tok in self.ops_and_props:
                 if s.startswith(tok, i):
                     tokens.append(tok)
@@ -76,6 +77,8 @@ class LTLTokenizer:
                     break
             if matched:
                 continue
+
+            raise ValueError(f"Unrecognized token sequence starting at position {i}: '{s[i:]}'")
 
         return tokens
 
