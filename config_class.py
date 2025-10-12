@@ -22,14 +22,28 @@ class LTLConfig(GPT2Config):
     ):
         kwargs.setdefault("add_cross_attention", add_cross_attention)
 
+        if tokenizer is not None:
+            kwargs.setdefault("vocab_size", tokenizer.vocab_size)
+            kwargs.setdefault("bos_token_id", tokenizer.bos_id)
+            kwargs.setdefault("eos_token_id", tokenizer.eos_id)
+            kwargs.setdefault("pad_token_id", tokenizer.pad_id)
+
+        required_keys = ("vocab_size", "bos_token_id", "eos_token_id", "pad_token_id")
+        missing = [key for key in required_keys if key not in kwargs]
+        if missing:
+            raise ValueError(
+                "LTLConfig requires either a tokenizer or explicit values for: "
+                + ", ".join(missing)
+            )
+
         super().__init__(
-            vocab_size=tokenizer.vocab_size,
+            vocab_size=kwargs.pop("vocab_size"),
             n_positions=n_positions,
             n_embd=n_embd,
             n_layer=n_layer,
             n_head=n_head,
-            bos_token_id=tokenizer.bos_id,
-            eos_token_id=tokenizer.eos_id,
-            pad_token_id=tokenizer.pad_id,
+            bos_token_id=kwargs.pop("bos_token_id"),
+            eos_token_id=kwargs.pop("eos_token_id"),
+            pad_token_id=kwargs.pop("pad_token_id"),
             **kwargs,
         )

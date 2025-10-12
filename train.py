@@ -80,7 +80,7 @@ def main():
         weight_decay=0.01,
         logging_dir=f"{output_dir}/logs",
         logging_steps=100,
-        evaluation_strategy="epoch",
+        eval_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
