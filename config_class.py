@@ -24,6 +24,7 @@ class LTLConfig(GPT2Config):
 
         super().__init__(
             vocab_size=tokenizer.vocab_size,
+            tokenizer = tokenizer,
             n_positions=n_positions,
             n_embd=n_embd,
             n_layer=n_layer,
