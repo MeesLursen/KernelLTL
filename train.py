@@ -89,7 +89,7 @@ def main():
         greater_is_better=False,
         dataloader_num_workers=4,
         dataloader_pin_memory=True,
-        report_to="none"
+        report_to="none",
         ddp_find_unused_parameters=False
     )
     
