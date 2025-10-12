@@ -1,5 +1,7 @@
 import json
 import os
+import torch
+from formula_class import Formula
 
 from transformers import PreTrainedTokenizer
 
@@ -127,7 +129,7 @@ class LTLTokenizer(PreTrainedTokenizer):
 
     def batch_decode(
         self,
-        sequences: "torch.Tensor" | list[list[int]],
+        sequences: torch.Tensor | list[list[int]],
         skip_special_tokens: bool = True,
         clean_up_tokenization_spaces: bool | None = None,
         **kwargs,
@@ -202,7 +204,7 @@ class LTLTokenizer(PreTrainedTokenizer):
     # ---------------------------------------------------------------------
     # Collation helpers (delegated to the existing implementation)
     # ---------------------------------------------------------------------
-    def collate_batch(self, batch: list[tuple["Formula", "torch.Tensor"]], max_len: int):
+    def collate_batch(self, batch: list[tuple[Formula, torch.Tensor]], max_len: int):
         return self._legacy.collate_batch(batch, max_len=max_len)
 
     # ---------------------------------------------------------------------
