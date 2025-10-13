@@ -43,6 +43,8 @@ def main():
     kernel.sample_anchor_formulas_kernel(m)  # m should match model's n_embd
     kernel.build_F()
     
+    print("Finished building Kernel.")
+
     # Create datasets
     train_dataset = LTLDataset()
     train_dataset.construct_dataset_from_kernel(
@@ -62,6 +64,8 @@ def main():
         batch_size=10240
     )
     
+    print("Finished train and eval dataset construction.")
+
     # Create model configuration and model
     config = LTLConfig(
         tokenizer=tokenizer,
@@ -114,6 +118,9 @@ def main():
         callbacks=[semantic_callback]
     )
     
+
+    print("Started training.")
+
     # Train
     trainer.train()
     
