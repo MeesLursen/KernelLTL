@@ -4,7 +4,7 @@ from transformers import TrainerCallback, TrainerControl, TrainerState, Training
 from formula_class import Formula
 from formula_utils import str_to_formula
 from kernel_class import LTLKernel
-from tokenizer_class import LTLTokenizer
+from tokenizer_pretrained_class import LTLTokenizer
 from model_class import LTLModel
 
 
