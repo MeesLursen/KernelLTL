@@ -51,6 +51,7 @@ class SemanticEvaluationCallback(TrainerCallback):
             eval_dataset,
             batch_size=args.per_device_eval_batch_size,
             num_workers=args.dataloader_num_workers,
+            collate_fn=lambda batch : self.tokenizer.collate_batch(batch, model.config.n_positions),
             pin_memory=args.dataloader_pin_memory,
             shuffle=False
         )
