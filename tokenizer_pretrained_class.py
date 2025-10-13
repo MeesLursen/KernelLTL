@@ -2,9 +2,7 @@ import json
 import os
 import torch
 from formula_class import Formula
-
 from transformers import PreTrainedTokenizer
-
 from tokenizer_class import LTLTokenizer as _LegacyLTLTokenizer
 
 
@@ -23,7 +21,7 @@ class LTLTokenizer(PreTrainedTokenizer):
     def __init__(
         self,
         vocab_file: str | None = None,
-        n_ap: str | None = None,
+        n_ap: int | None = None,
         pad_token: str = "<pad>",
         bos_token: str = "<bos>",
         eos_token: str = "<eos>",
@@ -32,14 +30,6 @@ class LTLTokenizer(PreTrainedTokenizer):
     ) -> None:
         if vocab_file is None and n_ap is None:
             raise ValueError("Provide either `vocab_file` or `n_ap` when initialising LTLTokenizer.")
-
-        super().__init__(
-            pad_token=pad_token,
-            bos_token=bos_token,
-            eos_token=eos_token,
-            unk_token=unk_token,
-            **kwargs,
-        )
 
         if vocab_file is not None:
             if not os.path.isfile(vocab_file):
@@ -60,15 +50,14 @@ class LTLTokenizer(PreTrainedTokenizer):
         self._id_to_token: dict[int, str] = dict(legacy_tokenizer.id_to_token)
         self.vocab_file = vocab_file
 
-        # Ensure the base class knows about our special tokens and their ids
-        self.add_special_tokens(
-            {
-                "pad_token": pad_token,
-                "bos_token": bos_token,
-                "eos_token": eos_token,
-                "unk_token": unk_token,
-            }
+        super().__init__(
+            pad_token=pad_token,
+            bos_token=bos_token,
+            eos_token=eos_token,
+            unk_token=unk_token,
+            **kwargs,
         )
+
         self._sync_special_token_ids()
 
     def _sync_special_token_ids(self) -> None:
@@ -107,7 +96,10 @@ class LTLTokenizer(PreTrainedTokenizer):
         return self._legacy.tokenize(text)
 
     def _convert_token_to_id(self, token: str) -> int:  # type: ignore[override]
-        return self._token_to_id.get(token, self.unk_token_id)
+        if token in self._token_to_id:
+            return self._token_to_id[token]
+        unk_token = self.unk_token if self.unk_token is not None else "<unk>"
+        return self._token_to_id.get(unk_token, 0)
 
     def _convert_id_to_token(self, index: int) -> str:  # type: ignore[override]
         return self._id_to_token.get(index, self.unk_token)

@@ -65,7 +65,10 @@ def main():
     # Create model configuration and model
     config = LTLConfig(
         tokenizer=tokenizer,
-        n_embd=m  # must match kernel's anchor set size (m)
+        n_embd=m,  # must match kernel's anchor set size (m)
+        bos_token_id=tokenizer.bos_token_id,
+        eos_token_id=tokenizer.eos_token_id,
+        pad_token_id=tokenizer.pad_token_id
     )
     
     model = LTLModel(config, semantic_emb_dim=m)  # semantic_emb_dim must match kernel's anchor set size
@@ -116,6 +119,6 @@ def main():
     # Save final model
     trainer.save_model(os.path.join(output_dir, "final_model"))
     tokenizer.save_pretrained(os.path.join(output_dir, "tokenizer"))
-    
+
 if __name__ == "__main__":
     main()

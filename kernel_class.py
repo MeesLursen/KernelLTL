@@ -44,10 +44,10 @@ class LTLKernel:
         - rng: specifies the random number generator used, for reproducibility.
         """
         self.traces = sample_traces(N,
-                                          n_ap=self.AP,
-                                          trace_length=self.T,
-                                          rng=self.rng,
-                                          device=self.device)
+                                    n_ap=self.AP,
+                                    trace_length=self.T,
+                                    rng=self.rng,
+                                    device=self.device)
 
 
 
@@ -73,12 +73,12 @@ class LTLKernel:
         """
         # TODO: Make sure that sampled formulae are not to similar to each other on the sampled traces.
         sample = sample_formulas(n_formula=m,
-                                       p_leaf=p_leaf,
-                                       max_depth=max_depth,
-                                       n_ap=self.AP,
-                                       force_tree=force_tree,
-                                       rng=self.rng,
-                                       device=self.device)
+                                 p_leaf=p_leaf,
+                                 max_depth=max_depth,
+                                 n_ap=self.AP,
+                                 force_tree=force_tree,
+                                 rng=self.rng,
+                                 device=self.device)
 
         self.add_formulas(sample)
 
