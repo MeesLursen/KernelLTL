@@ -80,8 +80,8 @@ class SemanticEvaluationCallback(TrainerCallback):
                     max_length=model.config.n_positions,
                     num_beams=1,
                     early_stopping=True,
-                    pad_token_id=self.tokenizer.pad_id,
-                    eos_token_id=self.tokenizer.eos_id
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id
                 )
                 
                 generated_strs = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)

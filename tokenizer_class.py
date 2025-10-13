@@ -21,10 +21,10 @@ class LTLTokenizer:
 
         self.pad_token, self.bos_token, self.eos_token, self.unk_token = pad_token, bos_token, eos_token, unk_token
 
-        self.pad_id: int                = self.token_to_id[self.pad_token]
-        self.bos_id: int                = self.token_to_id[self.bos_token]
-        self.eos_id: int                = self.token_to_id[self.eos_token]
-        self.unk_id: int                = self.token_to_id[self.unk_token]
+        self.pad_token_id: int                = self.token_to_id[self.pad_token]
+        self.bos_token_id: int                = self.token_to_id[self.bos_token]
+        self.eos_token_id: int                = self.token_to_id[self.eos_token]
+        self.unk_token_id: int                = self.token_to_id[self.unk_token]
 
 
 
@@ -49,10 +49,10 @@ class LTLTokenizer:
         obj.ops_and_props = tokens[4:]
         obj.token_to_id = {t:i for i,t in enumerate(tokens)}
         obj.id_to_token = {i:t for t,i in obj.token_to_id.items()}
-        obj.pad_id = obj.token_to_id['<pad>']
-        obj.bos_id = obj.token_to_id['<bos>']
-        obj.eos_id = obj.token_to_id['<eos>']
-        obj.unk_id = obj.token_to_id['<unk>']
+        obj.pad_token_id = obj.token_to_id['<pad>']
+        obj.bos_token_id = obj.token_to_id['<bos>']
+        obj.eos_token_id = obj.token_to_id['<eos>']
+        obj.unk_token_id = obj.token_to_id['<unk>']
         return obj
 
 
@@ -86,7 +86,7 @@ class LTLTokenizer:
 
     def encode(self, canonical_formula_str: str, max_length: int) -> list[int]:
         tokens = [self.bos_token] + self.tokenize(canonical_formula_str) + [self.eos_token]
-        ids = [self.token_to_id.get(t, self.unk_id) for t in tokens]
+        ids = [self.token_to_id.get(t, self.unk_token_id) for t in tokens]
         if len(ids) >= max_length:
             return ids[:max_length]
 
@@ -142,11 +142,11 @@ class LTLTokenizer:
             labels.append(ids)
             input_embeddings.append(emb)
 
-        labels = pad_sequence(labels, batch_first=True, padding_value=self.pad_id)  # (B, L)
-        attention_mask = (labels != self.pad_id).long()
+        labels = pad_sequence(labels, batch_first=True, padding_value=self.pad_token_id)  # (B, L)
+        attention_mask = (labels != self.pad_token_id).long()
 
         loss_labels = labels.clone()
-        loss_labels[loss_labels == self.pad_id] = -100
+        loss_labels[loss_labels == self.pad_token_id] = -100
 
         encoder_embs = torch.stack(input_embeddings, dim=0).to(dtype=torch.float32)  # (B, m)
 
