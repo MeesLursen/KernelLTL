@@ -63,9 +63,15 @@ class SemanticEvaluationCallback(TrainerCallback):
         model.eval()
         with torch.no_grad():
             for batch in eval_dataloader:
-                target_formulas, target_embeddings = batch
-                target_embeddings = target_embeddings.to(model.device, non_blocking=True)
+                input_ids = batch['input_ids'] 
+                target_embeddings = batch['semantic_embeddings'].to(model.device, non_blocking=True)
+                attention_mask = batch['attention_mask']
                 
+                target_strs = []
+                for ids, mask in zip(input_ids, attention_mask):
+                    valid_ids = ids[mask.bool()].tolist()
+                    target_strs.append(self.tokenizer.decode(valid_ids, skip_special_tokens=True))
+
                 batch_size = target_embeddings.size(0)
                 total_samples += batch_size
 
@@ -82,7 +88,8 @@ class SemanticEvaluationCallback(TrainerCallback):
 
                 for i in range(batch_size):
                     generated_str = generated_strs[i]
-                    target_formula = target_formulas[i]
+                    target_str = target_strs[i]
+                    target_formula = str_to_formula(target_str)
                     target_embedding = target_embeddings[i]
 
                     try:
