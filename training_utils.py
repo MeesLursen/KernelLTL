@@ -15,7 +15,8 @@ class SemanticEvaluationCallback(TrainerCallback):
     """
     def __init__(self, 
                  kernel: LTLKernel,
-                 tokenizer: LTLTokenizer):
+                 tokenizer: LTLTokenizer,
+                 eval_dataset):
         """
         Args:
             kernel: LTLKernel instance for computing semantic embeddings
@@ -23,6 +24,7 @@ class SemanticEvaluationCallback(TrainerCallback):
         """
         self.kernel = kernel
         self.tokenizer = tokenizer
+        self.eval_dataset = eval_dataset
         
         # metrics history
         self.epochs: list[int] = []
@@ -36,15 +38,15 @@ class SemanticEvaluationCallback(TrainerCallback):
                      model: LTLModel,
                      **kwargs):
         
-        trainer = kwargs.get('trainer')
-        if trainer is None or not hasattr(trainer, 'eval_dataset'):
-            return
-
         # Only execute on global rank 0 to avoid duplicate expensive evaluation under DDP.
-        if hasattr(trainer, "is_world_process_zero") and not trainer.is_world_process_zero():
+        local_rank = getattr(args, "local_rank", -1)
+        if local_rank not in (-1, 0):
             return
         
-        eval_dataset = trainer.eval_dataset
+        eval_dataset = self.eval_dataset
+        if eval_dataset is None:
+            return
+
         eval_dataloader = DataLoader(
             eval_dataset,
             batch_size=args.per_device_eval_batch_size,

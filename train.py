@@ -99,7 +99,8 @@ def main():
     # Initialize callback
     semantic_callback = SemanticEvaluationCallback(
         kernel=kernel,
-        tokenizer=tokenizer
+        tokenizer=tokenizer,
+        eval_dataset=eval_dataset
     )
     
     # Create trainer
