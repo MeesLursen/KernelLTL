@@ -62,10 +62,10 @@ class LTLTokenizer(PreTrainedTokenizer):
 
     def _sync_special_token_ids(self) -> None:
         """Keep legacy and HF views aligned for special token ids."""
-        self._legacy.pad_id = self.pad_token_id
-        self._legacy.bos_id = self.bos_token_id
-        self._legacy.eos_id = self.eos_token_id
-        self._legacy.unk_id = self.unk_token_id
+        self._legacy.pad_token_id = self.pad_token_id
+        self._legacy.bos_token_id = self.bos_token_id
+        self._legacy.eos_token_id = self.eos_token_id
+        self._legacy.unk_token_id = self.unk_token_id
 
     # ---------------------------------------------------------------------
     # Vocabulary helpers
