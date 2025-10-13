@@ -3,7 +3,7 @@ import os
 import torch
 
 from transformers import TrainingArguments, Trainer
-from tokenizer_class import LTLTokenizer
+from tokenizer_pretrained_class import LTLTokenizer
 from kernel_class import LTLKernel
 from dataset_class import LTLDataset
 from model_class import LTLModel
@@ -115,7 +115,7 @@ def main():
     
     # Save final model
     trainer.save_model(os.path.join(output_dir, "final_model"))
-    tokenizer.save_vocab(os.path.join(output_dir, "vocab.json"))
-
+    tokenizer.save_pretrained(os.path.join(output_dir, "tokenizer"))
+    
 if __name__ == "__main__":
     main()
