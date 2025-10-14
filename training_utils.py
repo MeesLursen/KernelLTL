@@ -59,6 +59,8 @@ class SemanticEvaluationCallback(TrainerCallback):
         total_distance = 0.0
         exact_matches = 0
         total_samples = 0
+        exact_matches_strs = []
+        invalid_syntax_strs = []
 
         model.eval()
         with torch.no_grad():
@@ -102,10 +104,12 @@ class SemanticEvaluationCallback(TrainerCallback):
                         
                         if str(generated_formula) == str(target_formula):
                             exact_matches += 1
+                            exact_matches_strs.append(generated_str)
 
                     except Exception:
                         # Penalize for invalid formula by adding max distance
                         total_distance += 1.0
+                        invalid_syntax_strs.append(generated_str)
 
         avg_distance = total_distance / total_samples if total_samples > 0 else 0
         exact_match_rate = exact_matches / total_samples if total_samples > 0 else 0
@@ -114,8 +118,10 @@ class SemanticEvaluationCallback(TrainerCallback):
         self.semantic_distances.append(avg_distance)
         self.exact_matches.append(exact_match_rate)
         
-        print(f"\nEpoch {state.epoch}:")
+        print(f"\n  Epoch {state.epoch}:")
         print(f"  Semantic Distance: {avg_distance:.4f}")
         print(f"  Exact Match Rate: {exact_match_rate:.4f}")
+        print(f"  Exact Match Strings: {exact_matches_strs:.4f}")
+        print(f"  Invalid Syntax Strs: {invalid_syntax_strs:.4f}")
 
 

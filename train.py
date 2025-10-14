@@ -89,7 +89,7 @@ def main():
         logging_dir=f"{output_dir}/logs",
         logging_steps=100,
         eval_strategy="epoch",
-        save_strategy="epoch",
+        save_strategy="no",
         save_safetensors=False,
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
