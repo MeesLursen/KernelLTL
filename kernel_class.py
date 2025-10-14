@@ -1,6 +1,6 @@
 import torch
 from formula_class import eval_traces_batch, Formula
-from formula_utils import sample_traces, sample_formulas
+from formula_utils import sample_traces, sample_formulas, sample_formulas_discard_similar
 
 class LTLKernel:
     def __init__(self, T: int, AP: int, seed: int | None = None):
@@ -79,7 +79,7 @@ class LTLKernel:
                                  force_tree=force_tree,
                                  rng=self.rng,
                                  device=self.device)
-
+        
         self.add_formulas(sample)
 
 
@@ -208,6 +208,39 @@ class LTLKernel:
             emb = emb.cpu() 
             torch.mps.empty_cache()
         
+        return emb
+    
+
+
+    def compute_formula_embedding_no_move(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+        """
+        Method for computing the embedding of formula, from feature matrix F.
+        - formula: the formula for which the embedding is to be calcualted.
+        - batch size: (Default = 512) the size of the batches used during evaluation of the formula, adjustable for memory management.
+        - time index: (Default = 0) the timepoint of the trace at which the formula is evaluated.
+        Returns:
+            - emb: Tensor (m), the embedding of formula, where m = len(self.anchor_formulas) the number of anchor formulae.
+        """ 
+        if self.F is None:
+            raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
+
+        N = self.traces.size(dim=0)
+        
+        phi_sats = torch.empty(N, dtype=torch.float32, device=device)
+
+        j = 0
+        while j < N:
+            j1 = min(N, j + batch_size)
+            batch = self.traces[j:j1]  # (B, AP, T)
+            batch_sats = eval_traces_batch(formula, batch)  # (B, T)
+            vals = torch.where(batch_sats[:, time_index], 
+                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                                torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
+            phi_sats[j:j1] = vals
+            j = j1
+            
+        emb = self.F @ phi_sats # (m,)
+
         return emb
     
 
