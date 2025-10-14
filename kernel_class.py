@@ -1,6 +1,6 @@
 import torch
 from formula_class import eval_traces_batch, Formula
-from formula_utils import sample_traces, sample_formulas, sample_formulas_discard_similar
+from formula_utils import sample_traces, sample_formulas
 
 class LTLKernel:
     def __init__(self, T: int, AP: int, seed: int | None = None):
