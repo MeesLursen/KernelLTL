@@ -23,12 +23,12 @@ def main():
     T       = 20
     AP      = 5
     seed    = 1
+    m       = 1024
 
     eps     = 0.01
     delta   = 1 - 0.99
-    N       = math.ceil((2 / eps**2) * math.log(2 / delta))
+    N       = math.ceil((2 / eps**2) * math.log(2 / m * delta))
 
-    m       = 1024
         
     # Create output directory
     output_dir = "ltl_model_outputs"
@@ -40,9 +40,10 @@ def main():
     # Initialize kernel for semantic embeddings
     kernel = LTLKernel(T, AP, seed)  # adjust T and AP as needed
     kernel.sample_traces_kernel(N)  # adjust N based on your needs
-    kernel.sample_anchor_formulas_kernel(m)  # m should match model's n_embd
+    kernel.construct_anchor_formulas_kernel(m)  # m should match model's n_embd
     kernel.build_F()
     
+    print(kernel.F)
     print("Finished building Kernel.")
 
     # Create datasets
@@ -51,7 +52,7 @@ def main():
         kernel=kernel,
         k=78000,  # adjust dataset size as needed
         p_leaf=0.45,
-        max_depth=1000,
+        max_depth=4,
         batch_size=10240
     )
     
@@ -60,7 +61,7 @@ def main():
         kernel=kernel,
         k=1000,  # smaller validation set
         p_leaf=0.45,
-        max_depth=1000,
+        max_depth=4,
         batch_size=10240
     )
     

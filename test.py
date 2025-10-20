@@ -1,4 +1,4 @@
-from kernel_class_copy import LTLKernel
+from kernel_class import LTLKernel
 
 T = 20 
 AP = 5
