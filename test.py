@@ -1,16 +1,12 @@
-from formula_utils import str_to_formula
+from kernel_class_copy import LTLKernel
 
-generated_str = '(X p_4)'
-target_str = '(X p_3)'
-target_formula = str_to_formula(target_str)
+T = 20 
+AP = 5
+seed = 1
 
 
-try:
-    generated_formula = str_to_formula(generated_str)
-      
-    if str(generated_formula) == str(target_formula):
-        print(str(generated_formula) == str(target_formula))
+kernel = LTLKernel(T, AP, seed)
 
-except Exception:
-    # Penalize for invalid formula by adding max distance
-    print(False)
+kernel.construct_anchor_formulas_kernel(1024)
+print(kernel.anchor_formulas)
+print(len(kernel.anchor_formulas))

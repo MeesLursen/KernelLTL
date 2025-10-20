@@ -1,5 +1,7 @@
+import itertools
+import math
 import torch
-from formula_class import eval_traces_batch, Formula
+from formula_class import eval_traces_batch, Formula, Atom, And, Next, Not
 from formula_utils import sample_traces, sample_formulas
 
 class LTLKernel:
@@ -59,28 +61,62 @@ class LTLKernel:
 
 
 
-    def sample_anchor_formulas_kernel(self, m: int = 1024, p_leaf: float = 0.5, max_depth: int = 6, force_tree: bool = True):
+    def construct_anchor_formulas_kernel(self, m: int = 1024):
         """
-        Method for adding a random sample of formulae to the kernel.
-        - m: specifies the number of sampled formulae.
-        - p_leaf: (Default = 0.5) specifies the odds of each node being a leaf. Higher probability reduces average (bounded) formula complexity.
-        - max_depth: (Default = 6) specifies the maximum formula complexity.
-        - force_tree: (Default = True) forces the root of the syntax tree to be an operator. Without this, p_leaf percent of the sample will be just an AP.
+        Method for constructing the set anchor formulae.
+        - m: specifies the number of anchor formulae.
+        """
+        if self.T <= 0:
+            raise ValueError("Trace length T must be positive to construct anchor formulas.")
 
-        Implicit arguments are: AP, T, seed.
-        - AP: specifies the number of atomic propositions available to each formula.
-        - rng: specifies the random number generator used, for reproducibility.
-        """
-        # TODO: Make sure that sampled formulae are not to similar to each other on the sampled traces.
-        sample = sample_formulas(n_formula=m,
-                                 p_leaf=p_leaf,
-                                 max_depth=max_depth,
-                                 n_ap=self.AP,
-                                 force_tree=force_tree,
-                                 rng=self.rng,
-                                 device=self.device)
-        
-        self.add_formulas(sample)
+        if self.AP <= 0:
+            raise ValueError("Number of atomic propositions AP must be positive to construct anchor formulas.")
+
+        if m < 2:
+            raise ValueError("Parameter m must be at least 2 to determine a valid anchor set size.")
+
+        log2_m = math.log2(m)
+        if log2_m <= 0:
+            raise ValueError("Parameter m must be greater than 1 to determine a valid anchor set size.")
+
+        k = max(1, math.ceil((self.T * self.AP) / log2_m))
+
+        anchor_times = list(range(0, self.T, k))
+        num_anchor_times = len(anchor_times)
+
+        # Each anchor time contributes 2^AP combinations, leading to |Chi| = 2^{AP * num_anchor_times}
+        literal_cache = {
+            (atom_idx, True): Atom(atom_idx)
+            for atom_idx in range(self.AP)
+        }
+        literal_cache.update({
+            (atom_idx, False): Not(literal_cache[(atom_idx, True)])
+            for atom_idx in range(self.AP)
+        })
+
+        per_time_assignments = list(itertools.product((False, True), repeat=self.AP))
+
+        Chi: list[Formula] = []
+        for assignment in itertools.product(per_time_assignments, repeat=num_anchor_times):
+            anchor_formula: Formula | None = None
+
+            for time_idx, time_assignment in zip(anchor_times, assignment):
+                conjunct: Formula | None = None
+                for atom_idx, truth_value in enumerate(time_assignment):
+                    literal = literal_cache[(atom_idx, truth_value)]
+                    conjunct = literal if conjunct is None else And(conjunct, literal)
+
+                assert conjunct is not None, "Conjunction over literals should never be empty."
+                time_formula: Formula = conjunct
+                for _ in range(time_idx):
+                    time_formula = Next(time_formula)
+
+                anchor_formula = time_formula if anchor_formula is None else And(anchor_formula, time_formula)
+
+            assert anchor_formula is not None
+            Chi.append(anchor_formula)
+
+        self.add_formulas(Chi)
 
 
 
