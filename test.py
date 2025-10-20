@@ -1,12 +1,10 @@
 from kernel_class import LTLKernel
+import math
 
-T = 20 
-AP = 5
-seed = 1
+m       = 1024
 
+eps     = 0.01
+delta   = 1 - 0.99
+N       = math.ceil((2 / eps**2) * math.log(2 * m/  delta))
 
-kernel = LTLKernel(T, AP, seed)
-
-kernel.construct_anchor_formulas_kernel(1024)
-print(kernel.anchor_formulas)
-print(len(kernel.anchor_formulas))
+print(N)
