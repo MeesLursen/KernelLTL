@@ -9,13 +9,14 @@ _BINARY_OPS = ['AND', 'OR', 'IMPLIES', 'U']
 _ALL_OPS = _UNARY_OPS + _BINARY_OPS
 
 
+
 def sample_formulas(n_formula: int,
                     p_leaf: float,
                     max_depth: int,
                     n_ap: int,
                     force_tree: bool,
                     rng: torch.Generator,
-                    device: str) -> Formula:
+                    device: str) -> list[Formula]:
     """Generate a random formula.
     - n_formula: Specifies the number of sampled formulae.
     - p_leaf: probability to create an atomic proposition at a *non-root* node.

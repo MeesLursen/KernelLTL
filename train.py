@@ -16,7 +16,7 @@ def main():
         torch.cuda.set_device(local_rank)
 
     # Hyperparameters
-    num_epochs = 10
+    num_epochs = 30
 
     learning_rate = 5e-5
 
@@ -48,7 +48,7 @@ def main():
 
     # Create datasets
     train_dataset = LTLDataset()
-    train_dataset.construct_dataset_from_kernel(
+    train_dataset.construct_dataset_from_kernel_2(
         kernel=kernel,
         k=78000,  # adjust dataset size as needed
         p_leaf=0.45,
@@ -57,7 +57,7 @@ def main():
     )
     
     eval_dataset = LTLDataset()
-    eval_dataset.construct_dataset_from_kernel(
+    eval_dataset.construct_dataset_from_kernel_2(
         kernel=kernel,
         k=1000,  # smaller validation set
         p_leaf=0.45,
