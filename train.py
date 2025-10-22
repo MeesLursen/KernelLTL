@@ -52,7 +52,7 @@ def main():
         kernel=kernel,
         k=78000,  # adjust dataset size as needed
         p_leaf=0.45,
-        max_depth=4,
+        max_depth=2,
         batch_size=10240
     )
     
@@ -61,7 +61,7 @@ def main():
         kernel=kernel,
         k=1000,  # smaller validation set
         p_leaf=0.45,
-        max_depth=4,
+        max_depth=2,
         batch_size=10240
     )
     
@@ -69,7 +69,7 @@ def main():
 
     # Create model configuration and model
     config = LTLConfig(
-        tokenizer=tokenizer,
+        tokenizer=tokenizer.vocab_size,
         n_embd=m,  # must match kernel's anchor set size (m)
         bos_token_id=tokenizer.bos_token_id,
         eos_token_id=tokenizer.eos_token_id,
