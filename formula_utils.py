@@ -44,7 +44,7 @@ def sample_formulas(n_formula: int,
             return Atom(atoms[torch.randint(0, len(atoms), (), generator=rng, device=device).item()])
 
         # Otherwise pick an operator uniformly
-        op = _ALL_OPS[torch.randint(0, len(atoms), (), generator=rng, device=device).item()]
+        op = _ALL_OPS[torch.randint(0, len(_ALL_OPS), (), generator=rng, device=device).item()]
         if op in _UNARY_OPS:
             # unary
             child : Formula = gen(depth + 1)
