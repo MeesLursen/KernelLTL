@@ -60,6 +60,7 @@ class SemanticEvaluationCallback(TrainerCallback):
         exact_matches = 0
         total_samples = 0
         exact_matches_strs = []
+        mismatch_strs = []
         invalid_syntax_strs = []
 
         model.eval()
@@ -105,6 +106,8 @@ class SemanticEvaluationCallback(TrainerCallback):
                         if str(generated_formula) == str(target_formula):
                             exact_matches += 1
                             exact_matches_strs.append(generated_str)
+                        else:
+                            mismatch_strs.append((target_str,generated_str))
 
                     except Exception:
                         # Penalize for invalid formula by adding max distance
