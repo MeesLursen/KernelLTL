@@ -76,6 +76,11 @@ class LTLTokenizer(PreTrainedTokenizer):
 
     def get_vocab(self) -> dict[str, int]:  # type: ignore[override]
         return dict(self._token_to_id)
+    
+    @property
+    def vocab(self) -> dict[str, int]:
+        # compatibility shim for code that expects `tokenizer.vocab`
+        return self.get_vocab()
 
     def save_vocabulary(
         self, save_directory: str, filename_prefix: str | None = None

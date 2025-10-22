@@ -125,6 +125,7 @@ class SemanticEvaluationCallback(TrainerCallback):
         print(f"  Semantic Distance: {avg_distance:.4f}")
         print(f"  Exact Match Rate: {exact_match_rate:.4f}")
         print(f"  Exact Match Strings: {exact_matches_strs}")
+        print(f"  Mismatch Strings: {mismatch_strs}")
         print(f"  Invalid Syntax Strs: {invalid_syntax_strs}")
 
 

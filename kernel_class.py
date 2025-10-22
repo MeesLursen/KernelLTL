@@ -222,7 +222,7 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=device)
+        phi_sats = torch.empty(N, dtype=torch.float32, device=device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
 
         j = 0
         while j < N:
@@ -262,7 +262,7 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=device)
+        phi_sats = torch.empty(N, dtype=torch.float32, device=device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
 
         j = 0
         while j < N:
