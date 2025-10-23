@@ -1,9 +1,22 @@
-from formula_utils import sample_formulas
-from kernel_class import LTLKernel
+from formula_class import Atom, Next, Formula
 
-kernel = LTLKernel(20,5,1)
-ls = kernel.sample_dataset_formulas_kernel(50, 0.45,2,True)
+AP = 3
+T = 10
 
-for phi in ls:
-    print(phi)
-    
+literal_cache = {
+    atom_idx: Atom(atom_idx)
+    for atom_idx in range(AP)
+}
+
+Chi: list[Formula] = []
+
+for t in range(T):
+    for i in range (AP):
+        formula = literal_cache[i]
+        for _ in range(t): 
+            formula = Next(formula)
+        Chi.append(formula)
+
+
+for phi in Chi:
+    print(phi)   

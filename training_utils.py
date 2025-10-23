@@ -97,7 +97,7 @@ class SemanticEvaluationCallback(TrainerCallback):
 
                     try:
                         generated_formula = str_to_formula(generated_str)
-                        generated_embedding = self.kernel.compute_formula_embedding_no_move(formula = generated_formula, device = model.device)
+                        generated_embedding = self.kernel.compute_formula_embedding_no_move(formula = generated_formula)
                         
                         # Cosine similarity as distance
                         distance = 1 - torch.nn.functional.cosine_similarity(target_embedding, generated_embedding, dim=0)

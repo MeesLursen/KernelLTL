@@ -63,7 +63,66 @@ class LTLKernel:
 
 
 
-    def construct_anchor_formulas_kernel(self):
+    def construct_anchor_formulas_kernel(self, m: int = 1024):
+        """
+        Method for constructing the set anchor formulae.
+        - m: specifies the number of anchor formulae.
+        """
+        if self.T <= 0:
+            raise ValueError("Trace length T must be positive to construct anchor formulas.")
+
+        if self.AP <= 0:
+            raise ValueError("Number of atomic propositions AP must be positive to construct anchor formulas.")
+
+        if m < 2:
+            raise ValueError("Parameter m must be at least 2 to determine a valid anchor set size.")
+
+        log2_m = math.log2(m)
+        if log2_m <= 0:
+            raise ValueError("Parameter m must be greater than 1 to determine a valid anchor set size.")
+
+        k = max(1, math.ceil((self.T * self.AP) / log2_m))
+
+        anchor_times = list(range(0, self.T, k))
+        num_anchor_times = len(anchor_times)
+
+        # Each anchor time contributes 2^AP combinations, leading to |Chi| = 2^{AP * num_anchor_times}
+        literal_cache = {
+            (atom_idx, True): Atom(atom_idx)
+            for atom_idx in range(self.AP)
+        }
+        literal_cache.update({
+            (atom_idx, False): Not(literal_cache[(atom_idx, True)])
+            for atom_idx in range(self.AP)
+        })
+
+        per_time_assignments = list(itertools.product((False, True), repeat=self.AP))
+
+        Chi: list[Formula] = []
+        for assignment in itertools.product(per_time_assignments, repeat=num_anchor_times):
+            anchor_formula: Formula | None = None
+
+            for time_idx, time_assignment in zip(anchor_times, assignment):
+                conjunct: Formula | None = None
+                for atom_idx, truth_value in enumerate(time_assignment):
+                    literal = literal_cache[(atom_idx, truth_value)]
+                    conjunct = literal if conjunct is None else And(conjunct, literal)
+
+                assert conjunct is not None, "Conjunction over literals should never be empty."
+                time_formula: Formula = conjunct
+                for _ in range(time_idx):
+                    time_formula = Next(time_formula)
+
+                anchor_formula = time_formula if anchor_formula is None else And(anchor_formula, time_formula)
+
+            assert anchor_formula is not None
+            Chi.append(anchor_formula)
+
+        self.add_anchor_formulas(Chi)
+
+
+
+    def construct_anchor_formulas_kernel2(self):
         """
         Method for constructing the set anchor formulae.
 
@@ -176,7 +235,7 @@ class LTLKernel:
 
 
 
-    def compute_formula_embedding(self, formula: Formula, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+    def compute_formula_embedding(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
         """
         Method for computing the embedding of formula, from feature matrix F.
         - formula: the formula for which the embedding is to be calcualted.
@@ -190,7 +249,7 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
+        phi_sats = torch.empty(N, dtype=torch.float32, device=device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
 
         j = 0
         while j < N:
@@ -203,10 +262,7 @@ class LTLKernel:
             phi_sats[j:j1] = vals
             j = j1
             
-        phi_centered = phi_sats - phi_sats.mean()
-        F_centered = self.F - self.F.mean(dim=1, keepdim=True)
-
-        emb = (F_centered @ phi_centered) / float(N)
+        emb = self.F @ phi_sats # (m,)
 
         if self.device == 'cuda':
             emb = emb.cpu()
@@ -219,7 +275,7 @@ class LTLKernel:
     
 
 
-    def compute_formula_embedding_no_move(self, formula: Formula, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+    def compute_formula_embedding_no_move(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
         """
         Method for computing the embedding of formula, from feature matrix F.
         - formula: the formula for which the embedding is to be calcualted.
@@ -233,7 +289,7 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
+        phi_sats = torch.empty(N, dtype=torch.float32, device=device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
 
         j = 0
         while j < N:
@@ -245,10 +301,47 @@ class LTLKernel:
                                 torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
             phi_sats[j:j1] = vals
             j = j1
+            
+        emb = self.F @ phi_sats # (m,)
 
-        phi_centered = phi_sats - phi_sats.mean()
-        F_centered = self.F - self.F.mean(dim=1, keepdim=True)
+        return emb
+    
 
-        emb = (F_centered @ phi_centered) / float(N)
 
+    def compute_formula_embedding_normalized(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+        """
+        Method for computing the embedding of formula, from feature matrix F.
+        - formula: the formula for which the embedding is to be calcualted.
+        - batch size: (Default = 512) the size of the batches used during evaluation of the formula, adjustable for memory management.
+        - time index: (Default = 0) the timepoint of the trace at which the formula is evaluated.
+        Returns:
+            - emb: Tensor (m), the embedding of formula, where m = len(self.anchor_formulas) the number of anchor formulae.
+        """ 
+        if self.F is None:
+            raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
+
+        N = self.traces.size(dim=0)
+        
+        phi_sats = torch.empty(N, dtype=torch.float32, device=device)
+
+        j = 0
+        while j < N:
+            j1 = min(N, j + batch_size)
+            batch = self.traces[j:j1]  # (B, AP, T)
+            batch_sats = eval_traces_batch(formula, batch)  # (B, T)
+            vals = torch.where(batch_sats[:, time_index], 
+                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                                torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
+            phi_sats[j:j1] = vals
+            j = j1
+            
+        emb = (self.F @ phi_sats) / N # (m,)
+
+        if self.device == 'cuda':
+            emb = emb.cpu()
+            torch.cuda.empty_cache()
+        elif self.device == 'mps':
+            emb = emb.cpu() 
+            torch.mps.empty_cache()
+        
         return emb

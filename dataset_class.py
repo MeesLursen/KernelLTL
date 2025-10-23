@@ -25,7 +25,7 @@ class LTLDataset(Dataset):
         self.formulas = dataset_formulas
         
         for phi in dataset_formulas:
-            emb = kernel.compute_formula_embedding(phi, batch_size=batch_size, device=kernel.device)
+            emb = kernel.compute_formula_embedding(phi, batch_size=batch_size)
             self.embeddings.append(emb)
     
 
@@ -47,7 +47,7 @@ class LTLDataset(Dataset):
         print(f'The deduplicated dataset contains {len(self.formulas)} many formulae.')
         
         for phi in dataset_formulas:
-            emb = kernel.compute_formula_embedding(phi, batch_size=batch_size, device=kernel.device)
+            emb = kernel.compute_formula_embedding(phi, batch_size=batch_size)
             self.embeddings.append(emb)
     
 
@@ -61,7 +61,7 @@ class LTLDataset(Dataset):
         self.formulas = input_formula_list
 
         for phi in input_formula_list:
-            emb = kernel.compute_formula_embedding(phi, batch_size=batch_size, device=kernel.device)
+            emb = kernel.compute_formula_embedding(phi, batch_size=batch_size)
             self.embeddings.append(emb)
 
 

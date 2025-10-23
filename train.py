@@ -23,11 +23,9 @@ def main():
     T       = 20
     AP      = 5
     seed    = 1
-    m       = 1024
 
     eps     = 0.01
     delta   = 1 - 0.99
-    N       = math.ceil((2 / eps**2) * math.log(2 * m / delta))
 
         
     # Create output directory
@@ -39,8 +37,9 @@ def main():
     
     # Initialize kernel for semantic embeddings
     kernel = LTLKernel(T, AP, seed)  # adjust T and AP as needed
+    kernel.construct_anchor_formulas_kernel()  # m should match model's n_embd
+    N       = math.ceil((2 / eps**2) * math.log(2 * kernel.m / delta))
     kernel.sample_traces_kernel(N)  # adjust N based on your needs
-    kernel.construct_anchor_formulas_kernel(m)  # m should match model's n_embd
     kernel.build_F()
     
     print(kernel.F)
@@ -70,13 +69,13 @@ def main():
     # Create model configuration and model
     config = LTLConfig(
         tokenizer=tokenizer.vocab_size,
-        n_embd=m,  # must match kernel's anchor set size (m)
+        n_embd=kernel.m,  # must match kernel's anchor set size (m)
         bos_token_id=tokenizer.bos_token_id,
         eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.pad_token_id
     )
     
-    model = LTLModel(config, semantic_emb_dim=m)  # semantic_emb_dim must match kernel's anchor set size
+    model = LTLModel(config, semantic_emb_dim=kernel.m)  # semantic_emb_dim must match kernel's anchor set size
     
     # Training arguments
     training_args = TrainingArguments(
