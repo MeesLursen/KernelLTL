@@ -70,7 +70,7 @@ def main():
     config = LTLConfig(
         tokenizer=tokenizer.vocab_size,
         n_embd=kernel.m,  # must match kernel's anchor set size (m)
-        n_head=kernel.m/10
+        n_head=kernel.m/10,
         bos_token_id=tokenizer.bos_token_id,
         eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.pad_token_id
