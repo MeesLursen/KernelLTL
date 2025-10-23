@@ -127,30 +127,6 @@ class LTLKernel:
 
 
 
-    def build_K(self):
-        """
-        Method for building the kernel matrix, K, from feature matrix F. 
-        Specifies self.K: 
-        - K: Tensor (m, m) with values in [-N, N].
-        """
-        if self.F is None:
-            raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
-        
-        self.K = self.F @ self.F.T
-        
-
-
-    def normalize_K(self):
-        """
-        Method for normalizing the kernel matrix through cosine similarity [K0_ij = K_ij / sqrt(K_ii*K_jj)].
-        Note that sqrt(K_ii*K_jj) = N, since K_ii = K_jj = N
-        Specifies self.K0: 
-        - K0: Tensor (m, m) with values in [-1, 1].
-        """
-        self.K0 = self.K / self.K[0,0].item()
-
-
-
     # ----------- Dataset Generation -----------
     def sample_dataset_formulas_kernel(self, k: int, p_leaf: float, max_depth: int, force_tree: bool = True):
         """
