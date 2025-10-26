@@ -145,6 +145,31 @@ class LTLKernel:
 
         self.add_anchor_formulas(Chi)
 
+    
+    
+    def sample_anchor_formulas_kernel(self, m: int = 1024, p_leaf: float = 0.5, max_depth: int = 6, force_tree: bool = True):
+        """
+        Method for adding a random sample of formulae to the kernel.
+        - m: specifies the number of sampled formulae.
+        - p_leaf: (Default = 0.5) specifies the odds of each node being a leaf. Higher probability reduces average (bounded) formula complexity.
+        - max_depth: (Default = 6) specifies the maximum formula complexity.
+        - force_tree: (Default = True) forces the root of the syntax tree to be an operator. Without this, p_leaf percent of the sample will be just an AP.
+
+        Implicit arguments are: AP, T, seed.
+        - AP: specifies the number of atomic propositions available to each formula.
+        - rng: specifies the random number generator used, for reproducibility.
+        """
+        # TODO: Make sure that sampled formulae are not to similar to each other on the sampled traces.
+        sample = sample_formulas(n_formula=m,
+                                 p_leaf=p_leaf,
+                                 max_depth=max_depth,
+                                 n_ap=self.AP,
+                                 force_tree=force_tree,
+                                 rng=self.rng,
+                                 device=self.device)
+
+        self.add_anchor_formulas(sample)
+
 
 
     # ----------- Evaluation -----------

@@ -37,7 +37,7 @@ def main():
     
     # Initialize kernel for semantic embeddings
     kernel = LTLKernel(T, AP, seed)  # adjust T and AP as needed
-    kernel.construct_anchor_formulas_kernel()  # m should match model's n_embd
+    kernel.sample_anchor_formulas_kernel(m=1024)  # m should match model's n_embd
     N       = math.ceil((2 / eps**2) * math.log(2 * kernel.m / delta))
     kernel.sample_traces_kernel(N)  # adjust N based on your needs
     kernel.build_F()
@@ -70,7 +70,7 @@ def main():
     config = LTLConfig(
         tokenizer=tokenizer.vocab_size,
         n_embd=kernel.m,  # must match kernel's anchor set size (m)
-        n_head=10,        # must divide kernel.m (!!!)
+        n_head=16,        # must divide kernel.m (!!!)
         bos_token_id=tokenizer.bos_token_id,
         eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.pad_token_id
