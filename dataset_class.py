@@ -30,7 +30,7 @@ class LTLDataset(Dataset):
     
 
 
-    def construct_dataset_from_kernel_2(self, kernel: LTLKernel, k: int, p_leaf: float, max_depth: int, batch_size: int = 512):
+    def construct_dataset_from_kernel_dedupe(self, kernel: LTLKernel, k: int, p_leaf: float, max_depth: int, batch_size: int = 512):
         """
         Method for constructing the dataset through the kernel, specifies self.formulas and self.embeddings.
         - kernel: the kernel we want to use for sampling formulae and computing their embeddings.

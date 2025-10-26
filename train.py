@@ -37,7 +37,7 @@ def main():
     
     # Initialize kernel for semantic embeddings
     kernel = LTLKernel(T, AP, seed)  # adjust T and AP as needed
-    kernel.sample_anchor_formulas_kernel(m=1024)  # m should match model's n_embd
+    kernel.sample_anchor_formulas_kernel2(m=1024, batch_size=10240)  # m should match model's n_embd
     N       = math.ceil((2 / eps**2) * math.log(2 * kernel.m / delta))
     kernel.sample_traces_kernel(N)  # adjust N based on your needs
     kernel.build_F()
@@ -47,16 +47,16 @@ def main():
 
     # Create datasets
     train_dataset = LTLDataset()
-    train_dataset.construct_dataset_from_kernel_2(
+    train_dataset.construct_dataset_from_kernel_dedupe(
         kernel=kernel,
-        k=78000,  # adjust dataset size as needed
+        k=150000,  # adjust dataset size as needed
         p_leaf=0.45,
         max_depth=2,
         batch_size=10240
     )
     
     eval_dataset = LTLDataset()
-    eval_dataset.construct_dataset_from_kernel_2(
+    eval_dataset.construct_dataset_from_kernel_dedupe(
         kernel=kernel,
         k=1000,  # smaller validation set
         p_leaf=0.45,
