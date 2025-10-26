@@ -37,9 +37,9 @@ def main():
     
     # Initialize kernel for semantic embeddings
     kernel = LTLKernel(T, AP, seed)  # adjust T and AP as needed
-    kernel.sample_anchor_formulas_kernel2(m=1024, batch_size=10240)  # m should match model's n_embd
-    N       = math.ceil((2 / eps**2) * math.log(2 * kernel.m / delta))
+    N       = math.ceil((2 / eps**2) * math.log(2 * 1024 / delta))
     kernel.sample_traces_kernel(N)  # adjust N based on your needs
+    kernel.sample_anchor_formulas_kernel2(m=1024, batch_size=10240)  # m should match model's n_embd
     kernel.build_F()
     
     print(kernel.F)
