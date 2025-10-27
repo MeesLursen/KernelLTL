@@ -47,16 +47,16 @@ def main():
 
     # Create datasets
     train_dataset = LTLDataset()
-    train_dataset.construct_dataset_from_kernel_dedupe(
+    train_dataset.construct_dataset_from_kernel(
         kernel=kernel,
-        k=150000,  # adjust dataset size as needed
+        k=78000,  # adjust dataset size as needed
         p_leaf=0.45,
         max_depth=2,
         batch_size=10240
     )
     
     eval_dataset = LTLDataset()
-    eval_dataset.construct_dataset_from_kernel_dedupe(
+    eval_dataset.construct_dataset_from_kernel(
         kernel=kernel,
         k=1000,  # smaller validation set
         p_leaf=0.45,
