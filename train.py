@@ -16,7 +16,7 @@ def main():
         torch.cuda.set_device(local_rank)
 
     # Hyperparameters
-    num_epochs = 10
+    num_epochs = 30
 
     learning_rate = 5e-5
 
@@ -47,19 +47,19 @@ def main():
 
     # Create datasets
     train_dataset = LTLDataset()
-    train_dataset.construct_dataset_from_kernel(
+    train_dataset.construct_dataset_from_kernel_dedupe(
         kernel=kernel,
-        k=78000,  # adjust dataset size as needed
-        p_leaf=0.45,
+        k=300000,  # adjust dataset size as needed
+        p_leaf=0.5,
         max_depth=2,
         batch_size=10240
     )
     
     eval_dataset = LTLDataset()
-    eval_dataset.construct_dataset_from_kernel(
+    eval_dataset.construct_dataset_from_kernel_dedupe(
         kernel=kernel,
         k=1000,  # smaller validation set
-        p_leaf=0.45,
+        p_leaf=0.5,
         max_depth=2,
         batch_size=10240
     )
@@ -70,7 +70,7 @@ def main():
     config = LTLConfig(
         tokenizer=tokenizer.vocab_size,
         n_embd=kernel.m,  # must match kernel's anchor set size (m)
-        n_head=16,        # must divide kernel.m (!!!)
+        n_head=20,        # must divide kernel.m (!!!)
         bos_token_id=tokenizer.bos_token_id,
         eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.pad_token_id
@@ -129,7 +129,6 @@ def main():
     
     # Save final model
     trainer.save_model(os.path.join(output_dir, "final_model"))
-    tokenizer.save_pretrained(os.path.join(output_dir, "tokenizer"))
 
 if __name__ == "__main__":
     main()

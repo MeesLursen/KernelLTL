@@ -146,6 +146,36 @@ class LTLKernel:
         self.add_anchor_formulas(Chi)
 
     
+
+    def construct_anchor_formulas_kernel3(self):
+        """
+        Method for constructing the set anchor formulae.
+
+        """
+
+        literal_cache = {
+            (atom_idx, True): Atom(atom_idx)
+            for atom_idx in range(self.AP)
+        }
+        literal_cache.update({
+            (atom_idx, False): Not(literal_cache[(atom_idx, True)])
+            for atom_idx in range(self.AP)
+        })
+
+        Chi: list[Formula] = []
+
+        for t in range(self.T):
+            for tv in [True,False]:
+                for idx in range (self.AP):
+                    formula = literal_cache[(idx,tv)]
+                    for _ in range(t): 
+                        formula = Next(formula)
+                    Chi.append(formula)
+
+
+        self.add_anchor_formulas(Chi)
+
+    
     
     def sample_anchor_formulas_kernel(self, m: int = 1024, p_leaf: float = 0.5, max_depth: int = 6, force_tree: bool = True):
         """
@@ -169,6 +199,87 @@ class LTLKernel:
                                  device=self.device)
 
         self.add_anchor_formulas(sample)
+
+
+
+    def sample_anchor_formulas_kernel2(self, m: int = 1024, p_leaf: float = 0.5, max_depth: int = 6, force_tree: bool = True, batch_size = 512, max_attempts_per_formula = 100):
+        """
+        Method for adding a random sample of formulae to the kernel.
+        - m: specifies the number of sampled formulae.
+        - p_leaf: (Default = 0.5) specifies the odds of each node being a leaf. Higher probability reduces average (bounded) formula complexity.
+        - max_depth: (Default = 6) specifies the maximum formula complexity.
+        - force_tree: (Default = True) forces the root of the syntax tree to be an operator. Without this, p_leaf percent of the sample will be just an AP.
+
+        Implicit arguments are: AP, T, seed.
+        - AP: specifies the number of atomic propositions available to each formula.
+        - rng: specifies the random number generator used, for reproducibility.
+        """
+    
+        if self.traces is None:
+            raise ValueError('Please sample traces before calling sample_anchor_formulas_kernel2 so cosine similarity can be computed.')
+
+        similarity_threshold = 0.6
+        time_index = 0
+
+        if time_index < 0 or time_index >= self.T:
+            raise ValueError(f'time_index must be between 0 and {self.T - 1}, but received {time_index}.')
+
+        N = self.traces.size(dim=0)
+        if N == 0:
+            raise ValueError('Traces tensor is empty, cannot evaluate cosine similarity.')
+
+        one = torch.tensor(1.0, dtype=torch.float32, device=self.device)
+        zero = torch.tensor(0.0, dtype=torch.float32, device=self.device)
+
+        def _formula_trace_vector(phi: Formula) -> torch.Tensor:
+            vals = torch.empty(N, dtype=torch.float32, device=self.device)
+            j = 0
+            while j < N:
+                j1 = min(N, j + batch_size)
+                batch = self.traces[j:j1]
+                sats = eval_traces_batch(phi, batch)
+                vals[j:j1] = torch.where(sats[:, time_index], one, zero)
+                j = j1
+            return vals
+
+        selected_formulas: list[Formula]       = []
+        normalized_vectors: list[torch.Tensor] = []
+
+        for idx in range(m):
+            attempts = 0
+            while attempts < max_attempts_per_formula:
+                attempts += 1
+                candidate = sample_formulas(n_formula=1,
+                                            p_leaf=p_leaf,
+                                            max_depth=max_depth,
+                                            n_ap=self.AP,
+                                            force_tree=force_tree,
+                                            rng=self.rng,
+                                            device=self.device)[0]
+
+                candidate_vec = _formula_trace_vector(candidate)
+                denom = torch.linalg.norm(candidate_vec)
+                if denom > 1e-8:
+                    candidate_norm = candidate_vec / denom
+                else:
+                    candidate_norm = torch.zeros_like(candidate_vec)
+
+                too_similar = False
+                for prev_vec in normalized_vectors:
+                    if torch.dot(candidate_norm, prev_vec).item() > similarity_threshold:
+                        too_similar = True
+                        break
+
+                if too_similar:
+                    continue
+
+                selected_formulas.append(candidate)
+                normalized_vectors.append(candidate_norm)
+                break
+            else:
+                raise RuntimeError(f'Unable to sample a sufficiently distinct formula after {max_attempts_per_formula} attempts for index {idx}.')
+
+        self.add_anchor_formulas(selected_formulas)
 
 
 

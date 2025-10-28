@@ -70,18 +70,23 @@ class LTLKernel:
         """
 
         literal_cache = {
-            atom_idx: Atom(atom_idx)
+            (atom_idx, True): Atom(atom_idx)
             for atom_idx in range(self.AP)
         }
+        literal_cache.update({
+            (atom_idx, False): Not(literal_cache[(atom_idx, True)])
+            for atom_idx in range(self.AP)
+        })
 
         Chi: list[Formula] = []
 
         for t in range(self.T):
-            for i in range (self.AP):
-                formula = literal_cache[i]
-                for _ in range(t): 
-                    formula = Next(formula)
-                Chi.append(formula)
+            for tv in [True,False]:
+                for idx in range (self.AP):
+                    formula = literal_cache[(idx,tv)]
+                    for _ in range(t): 
+                        formula = Next(formula)
+                    Chi.append(formula)
                 
 
         self.add_anchor_formulas(Chi)
@@ -111,7 +116,7 @@ class LTLKernel:
 
         self.add_anchor_formulas(sample)
 
-    
+
 
     def sample_anchor_formulas_kernel2(self, m: int = 1024, p_leaf: float = 0.5, max_depth: int = 6, force_tree: bool = True, batch_size = 512, max_attempts_per_formula = 100):
         """
@@ -125,6 +130,7 @@ class LTLKernel:
         - AP: specifies the number of atomic propositions available to each formula.
         - rng: specifies the random number generator used, for reproducibility.
         """
+    
         if self.traces is None:
             raise ValueError('Please sample traces before calling sample_anchor_formulas_kernel2 so cosine similarity can be computed.')
 
@@ -152,7 +158,7 @@ class LTLKernel:
                 j = j1
             return vals
 
-        selected_formulas: list[Formula] = []
+        selected_formulas: list[Formula]       = []
         normalized_vectors: list[torch.Tensor] = []
 
         for idx in range(m):
