@@ -39,7 +39,7 @@ def main():
     kernel = LTLKernel(T, AP, seed)  # adjust T and AP as needed
     N       = math.ceil((2 / eps**2) * math.log(2 * 1024 / delta))
     kernel.sample_traces_kernel(N)  # adjust N based on your needs
-    kernel.sample_anchor_formulas_kernel2(m=1024, batch_size=10240)  # m should match model's n_embd
+    kernel.construct_anchor_formulas_kernel()  # m should match model's n_embd
     kernel.build_F()
     
     print(kernel.F)
