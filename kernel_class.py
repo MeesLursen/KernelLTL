@@ -145,7 +145,7 @@ class LTLKernel:
             raise ValueError('Traces tensor is empty, cannot evaluate cosine similarity.')
 
         one = torch.tensor(1.0, dtype=torch.float32, device=self.device)
-        zero = torch.tensor(0.0, dtype=torch.float32, device=self.device)
+        zero = torch.tensor(-1.0, dtype=torch.float32, device=self.device)
 
         def _formula_trace_vector(phi: Formula) -> torch.Tensor:
             vals = torch.empty(N, dtype=torch.float32, device=self.device)
@@ -230,7 +230,7 @@ class LTLKernel:
                 sats = eval_traces_batch(phi, batch)  # (B, T)
                 vals = torch.where(sats[:, time_index], 
                                    torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                                   torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
+                                   torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
                 F[i, j:j1] = vals
                 j = j1
         
@@ -286,7 +286,7 @@ class LTLKernel:
             batch_sats = eval_traces_batch(formula, batch)  # (B, T)
             vals = torch.where(batch_sats[:, time_index], 
                                 torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                                torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
+                                torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
             phi_sats[j:j1] = vals
             j = j1
             
@@ -329,7 +329,7 @@ class LTLKernel:
             batch_sats = eval_traces_batch(formula, batch)  # (B, T)
             vals = torch.where(batch_sats[:, time_index], 
                                 torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                                torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
+                                torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
             phi_sats[j:j1] = vals
             j = j1
 
