@@ -40,7 +40,7 @@ class Atom(Formula):
 class Not(Formula):
     child: Formula
 
-    def atoms(self) -> set[tuple]:
+    def atoms(self) -> set[int]:
         return self.child.atoms()
 
     def __str__(self) -> str:
@@ -59,7 +59,7 @@ class And(Formula):
     left: Formula
     right: Formula
 
-    def atoms(self) -> set[tuple]:
+    def atoms(self) -> set[int]:
         return self.left.atoms() | self.right.atoms()
 
     def __str__(self) -> str:
@@ -80,7 +80,7 @@ class Or(Formula):
     left: Formula
     right: Formula
 
-    def atoms(self) -> set[tuple]:
+    def atoms(self) -> set[int]:
         return self.left.atoms() | self.right.atoms()
 
     def __str__(self) -> str:
@@ -101,7 +101,7 @@ class Implies(Formula):
     left: Formula
     right: Formula
 
-    def atoms(self) -> set[tuple]:
+    def atoms(self) -> set[int]:
         return self.left.atoms() | self.right.atoms()
 
     def __str__(self) -> str:
@@ -125,7 +125,7 @@ class Next(Formula):
     """
     child: Formula
 
-    def atoms(self) -> set[tuple]:
+    def atoms(self) -> set[int]:
         return self.child.atoms()
 
     def __str__(self) -> str:
@@ -146,7 +146,7 @@ class Next(Formula):
 class Eventually(Formula):
     child: Formula
 
-    def atoms(self) -> set[tuple]:
+    def atoms(self) -> set[int]:
         return self.child.atoms()
 
     def __str__(self) -> str:
@@ -172,7 +172,7 @@ class Eventually(Formula):
 class Globally(Formula):
     child: Formula
 
-    def atoms(self) -> set[tuple]:
+    def atoms(self) -> set[int]:
         return self.child.atoms()
 
     def __str__(self) -> str:
@@ -200,7 +200,7 @@ class Until(Formula):
     left: Formula
     right: Formula
 
-    def atoms(self) -> set[tuple]:
+    def atoms(self) -> set[int]:
         return self.left.atoms() | self.right.atoms()
 
     def __str__(self) -> str:

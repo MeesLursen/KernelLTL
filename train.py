@@ -16,7 +16,7 @@ def main():
         torch.cuda.set_device(local_rank)
 
     # Hyperparameters
-    num_epochs = 15
+    num_epochs = 10
 
     learning_rate = 5e-5
 
@@ -37,7 +37,7 @@ def main():
     
     # Initialize kernel for semantic embeddings
     kernel = LTLKernel(T, AP, seed)  # adjust T and AP as needed
-    N       = math.ceil((2 / eps**2) * math.log(2 * 1024 / delta))
+    N       = math.ceil((2 / eps**2) * math.log(2 * 100 / delta))
     kernel.sample_traces_kernel(N)  # adjust N based on your needs
     kernel.construct_anchor_formulas_kernel()  # m should match model's n_embd
     kernel.build_F()
@@ -49,16 +49,16 @@ def main():
     train_dataset = LTLDataset()
     train_dataset.construct_dataset_from_kernel(
         kernel=kernel,
-        k=100000,  # adjust dataset size as needed
+        k=78000,  # adjust dataset size as needed
         p_leaf=0.5,
         max_depth=2,
         batch_size=10240
     )
     
     eval_dataset = LTLDataset()
-    eval_dataset.construct_dataset_from_kernel_dedupe(
+    eval_dataset.construct_dataset_from_kernel(
         kernel=kernel,
-        k=5000,  # smaller validation set
+        k=1000,  # smaller validation set
         p_leaf=0.5,
         max_depth=2,
         batch_size=10240
@@ -68,7 +68,7 @@ def main():
 
     # Create model configuration and model
     config = LTLConfig(
-        tokenizer=tokenizer.vocab_size,
+        vocab_size=tokenizer.vocab_size,
         n_embd=kernel.m,  # must match kernel's anchor set size (m)
         n_head=20,        # must divide kernel.m (!!!)
         bos_token_id=tokenizer.bos_token_id,

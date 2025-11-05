@@ -19,7 +19,7 @@ def sample_formulas(n_formula: int,
                     device: str) -> list[Formula]:
     """Generate a random formula.
     - n_formula: Specifies the number of sampled formulae.
-    - p_leaf: probability to create an atomic proposition at a *non-root* node.
+    - p_leaf: probability to create an atomic proposition at a node.
     - max_depth: maximum recursion depth (root at depth 0). When depth >= max_depth, we force a leaf.
     - n_ap: maximum number of distinct atomic proposition names (p0..p{n_ap-1}).
     - force_tree: specifies whether the root is forced to be an operator.
@@ -51,6 +51,7 @@ def sample_formulas(n_formula: int,
 
             # Avoid redundant unary nesting (e.g., G(G φ))
             while (op == 'G' and isinstance(child, Globally)) or \
+                  (op == 'F' and isinstance(child, Eventually)) or \
                   (op == 'NOT' and isinstance(child, Not)):
                 child = gen(depth + 1)
 

@@ -1,5 +1,3 @@
-import itertools
-import math
 import torch
 from formula_class import eval_traces_batch, Formula, Atom, And, Next, Not
 from formula_utils import sample_traces, sample_formulas
@@ -70,23 +68,18 @@ class LTLKernel:
         """
 
         literal_cache = {
-            (atom_idx, True): Atom(atom_idx)
+            atom_idx: Atom(atom_idx)
             for atom_idx in range(self.AP)
         }
-        literal_cache.update({
-            (atom_idx, False): Not(literal_cache[(atom_idx, True)])
-            for atom_idx in range(self.AP)
-        })
 
         Chi: list[Formula] = []
 
         for t in range(self.T):
-            for tv in [True,False]:
-                for idx in range (self.AP):
-                    formula = literal_cache[(idx,tv)]
-                    for _ in range(t): 
-                        formula = Next(formula)
-                    Chi.append(formula)
+            for i in range (self.AP):
+                formula = literal_cache[i]
+                for _ in range(t): 
+                    formula = Next(formula)
+                Chi.append(formula)
                 
 
         self.add_anchor_formulas(Chi)
@@ -105,7 +98,6 @@ class LTLKernel:
         - AP: specifies the number of atomic propositions available to each formula.
         - rng: specifies the random number generator used, for reproducibility.
         """
-        # TODO: Make sure that sampled formulae are not to similar to each other on the sampled traces.
         sample = sample_formulas(n_formula=m,
                                  p_leaf=p_leaf,
                                  max_depth=max_depth,
@@ -118,7 +110,7 @@ class LTLKernel:
 
 
 
-    def sample_anchor_formulas_kernel2(self, m: int = 1024, p_leaf: float = 0.5, max_depth: int = 6, force_tree: bool = True, batch_size = 512, max_attempts_per_formula = 100):
+    def sample_anchor_formulas_kernel_cosine_controlled(self, m: int = 1024, p_leaf: float = 0.5, max_depth: int = 6, force_tree: bool = True, batch_size = 512, max_attempts_per_formula = 100):
         """
         Method for adding a random sample of formulae to the kernel.
         - m: specifies the number of sampled formulae.
@@ -263,7 +255,8 @@ class LTLKernel:
 
 
 
-    def compute_formula_embedding(self, formula: Formula, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+    # ----------- Embedding Computation -----------
+    def compute_formula_embedding(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
         """
         Method for computing the embedding of formula, from feature matrix F.
         - formula: the formula for which the embedding is to be calcualted.
@@ -277,7 +270,7 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
+        phi_sats = torch.empty(N, dtype=torch.float32, device=device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
 
         j = 0
         while j < N:
@@ -290,10 +283,7 @@ class LTLKernel:
             phi_sats[j:j1] = vals
             j = j1
             
-        phi_centered = phi_sats - phi_sats.mean()
-        F_centered = self.F - self.F.mean(dim=1, keepdim=True)
-
-        emb = (F_centered @ phi_centered) / float(N)
+        emb = self.F @ phi_sats # (m,)
 
         if self.device == 'cuda':
             emb = emb.cpu()
@@ -306,7 +296,7 @@ class LTLKernel:
     
 
 
-    def compute_formula_embedding_no_move(self, formula: Formula, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+    def compute_formula_embedding_no_move(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
         """
         Method for computing the embedding of formula, from feature matrix F.
         - formula: the formula for which the embedding is to be calcualted.
@@ -320,7 +310,7 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
+        phi_sats = torch.empty(N, dtype=torch.float32, device=device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
 
         j = 0
         while j < N:
@@ -332,10 +322,7 @@ class LTLKernel:
                                 torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
             phi_sats[j:j1] = vals
             j = j1
-
-        phi_centered = phi_sats - phi_sats.mean()
-        F_centered = self.F - self.F.mean(dim=1, keepdim=True)
-
-        emb = (F_centered @ phi_centered) / float(N)
+            
+        emb = self.F @ phi_sats # (m,)
 
         return emb

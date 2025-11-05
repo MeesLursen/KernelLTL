@@ -322,6 +322,44 @@ class LTLKernel:
 
 
 
+    def build_F_signed(self, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+        """
+        Method for building the feature matrix F from the sampled formulae and traces.
+        - formulas: list of formulae length m.
+        - all_traces: Tensor shape (N, AP, T), dtype=bool.
+        Specifies self.F: 
+        - F: Tensor of shape (m, N) with ±1 values, dtype=int8.
+        """
+        if self.traces is None and self.anchor_formulas is []:
+            raise ValueError('Please first sample traces and formulas, using the sample_traces(N) and sample_formulas() method respectively.')
+
+        if not(self.traces is None) and self.anchor_formulas is []:
+            raise ValueError('You have not yet sampled formulas. Please do so using the sample_formulas() method.')
+        
+        if self.traces is None and not(self.anchor_formulas is []):
+            raise ValueError('You have not yet sampled traces. Please do so using the sample_traces() method.')
+        
+
+        N = self.traces.size(dim=0)
+        m = len(self.anchor_formulas)
+        F = torch.empty((m, N), dtype=torch.float32, device=self.device)
+        for i, phi in enumerate(self.anchor_formulas):
+            # fill column i across batches
+            j = 0
+            while j < N:
+                j1 = min(N, j + batch_size)
+                batch = self.traces[j:j1]  # (B, AP, T)
+                sats = eval_traces_batch(phi, batch)  # (B, T)
+                vals = torch.where(sats[:, time_index], 
+                                   torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                                   torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
+                F[i, j:j1] = vals
+                j = j1
+        
+        self.F = F
+
+
+
     def build_K(self):
         """
         Method for building the kernel matrix, K, from feature matrix F. 
@@ -346,7 +384,7 @@ class LTLKernel:
 
 
 
-    # ----------- Dataset Generation -----------
+    # ----------- Dataset Sampling -----------
     def sample_dataset_formulas_kernel(self, k: int, p_leaf: float, max_depth: int, force_tree: bool = True):
         """
         Method for adding a random sample of formulae to the kernel.
@@ -370,8 +408,8 @@ class LTLKernel:
         return sample
 
 
-
-    def compute_formula_embedding(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+    # ----------- Embedding Computation -----------
+    def compute_formula_sat_embedding(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
         """
         Method for computing the embedding of formula, from feature matrix F.
         - formula: the formula for which the embedding is to be calcualted.
@@ -411,7 +449,7 @@ class LTLKernel:
     
 
 
-    def compute_formula_embedding_no_move(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+    def compute_formula_embedding_sat_no_move(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
         """
         Method for computing the embedding of formula, from feature matrix F.
         - formula: the formula for which the embedding is to be calcualted.
@@ -439,6 +477,158 @@ class LTLKernel:
             j = j1
             
         emb = self.F @ phi_sats # (m,)
+
+        return emb
+    
+
+
+    def compute_formula_signed_sat_embedding(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+        """
+        Method for computing the embedding of formula, from feature matrix F.
+        - formula: the formula for which the embedding is to be calcualted.
+        - batch size: (Default = 512) the size of the batches used during evaluation of the formula, adjustable for memory management.
+        - time index: (Default = 0) the timepoint of the trace at which the formula is evaluated.
+        Returns:
+            - emb: Tensor (m), the embedding of formula, where m = len(self.anchor_formulas) the number of anchor formulae.
+        """ 
+        if self.F is None:
+            raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
+
+        N = self.traces.size(dim=0)
+        
+        phi_sats = torch.empty(N, dtype=torch.float32, device=device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
+
+        j = 0
+        while j < N:
+            j1 = min(N, j + batch_size)
+            batch = self.traces[j:j1]  # (B, AP, T)
+            batch_sats = eval_traces_batch(formula, batch)  # (B, T)
+            vals = torch.where(batch_sats[:, time_index], 
+                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                                torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
+            phi_sats[j:j1] = vals
+            j = j1
+            
+        emb = self.F @ phi_sats # (m,)
+
+        if self.device == 'cuda':
+            emb = emb.cpu()
+            torch.cuda.empty_cache()
+        elif self.device == 'mps':
+            emb = emb.cpu() 
+            torch.mps.empty_cache()
+        
+        return emb
+    
+
+
+    def compute_formula_embedding_signed_sat_no_move(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+        """
+        Method for computing the embedding of formula, from feature matrix F.
+        - formula: the formula for which the embedding is to be calcualted.
+        - batch size: (Default = 512) the size of the batches used during evaluation of the formula, adjustable for memory management.
+        - time index: (Default = 0) the timepoint of the trace at which the formula is evaluated.
+        Returns:
+            - emb: Tensor (m), the embedding of formula, where m = len(self.anchor_formulas) the number of anchor formulae.
+        """ 
+        if self.F is None:
+            raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
+
+        N = self.traces.size(dim=0)
+        
+        phi_sats = torch.empty(N, dtype=torch.float32, device=device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
+
+        j = 0
+        while j < N:
+            j1 = min(N, j + batch_size)
+            batch = self.traces[j:j1]  # (B, AP, T)
+            batch_sats = eval_traces_batch(formula, batch)  # (B, T)
+            vals = torch.where(batch_sats[:, time_index], 
+                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                                torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
+            phi_sats[j:j1] = vals
+            j = j1
+            
+        emb = self.F @ phi_sats # (m,)
+
+        return emb
+
+
+
+    def compute_formula_embedding_cov(self, formula: Formula, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+        """
+        Method for computing the embedding of formula, from feature matrix F.
+        - formula: the formula for which the embedding is to be calcualted.
+        - batch size: (Default = 512) the size of the batches used during evaluation of the formula, adjustable for memory management.
+        - time index: (Default = 0) the timepoint of the trace at which the formula is evaluated.
+        Returns:
+            - emb: Tensor (m), the embedding of formula, where m = len(self.anchor_formulas) the number of anchor formulae.
+        """ 
+        if self.F is None:
+            raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
+
+        N = self.traces.size(dim=0)
+        
+        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
+
+        j = 0
+        while j < N:
+            j1 = min(N, j + batch_size)
+            batch = self.traces[j:j1]  # (B, AP, T)
+            batch_sats = eval_traces_batch(formula, batch)  # (B, T)
+            vals = torch.where(batch_sats[:, time_index], 
+                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                                torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
+            phi_sats[j:j1] = vals
+            j = j1
+            
+        phi_centered = phi_sats - phi_sats.mean()
+        F_centered = self.F - self.F.mean(dim=1, keepdim=True)
+
+        emb = (F_centered @ phi_centered) / float(N)
+
+        if self.device == 'cuda':
+            emb = emb.cpu()
+            torch.cuda.empty_cache()
+        elif self.device == 'mps':
+            emb = emb.cpu() 
+            torch.mps.empty_cache()
+        
+        return emb
+    
+
+
+    def compute_formula_embedding_cov_no_move(self, formula: Formula, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+        """
+        Method for computing the embedding of formula, from feature matrix F.
+        - formula: the formula for which the embedding is to be calcualted.
+        - batch size: (Default = 512) the size of the batches used during evaluation of the formula, adjustable for memory management.
+        - time index: (Default = 0) the timepoint of the trace at which the formula is evaluated.
+        Returns:
+            - emb: Tensor (m), the embedding of formula, where m = len(self.anchor_formulas) the number of anchor formulae.
+        """ 
+        if self.F is None:
+            raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
+
+        N = self.traces.size(dim=0)
+        
+        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
+
+        j = 0
+        while j < N:
+            j1 = min(N, j + batch_size)
+            batch = self.traces[j:j1]  # (B, AP, T)
+            batch_sats = eval_traces_batch(formula, batch)  # (B, T)
+            vals = torch.where(batch_sats[:, time_index], 
+                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                                torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
+            phi_sats[j:j1] = vals
+            j = j1
+
+        phi_centered = phi_sats - phi_sats.mean()
+        F_centered = self.F - self.F.mean(dim=1, keepdim=True)
+
+        emb = (F_centered @ phi_centered) / float(N)
 
         return emb
     
