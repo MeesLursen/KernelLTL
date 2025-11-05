@@ -256,7 +256,7 @@ class LTLKernel:
 
 
     # ----------- Embedding Computation -----------
-    def compute_formula_embedding(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+    def compute_formula_embedding(self, formula: Formula, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
         """
         Method for computing the embedding of formula, from feature matrix F.
         - formula: the formula for which the embedding is to be calcualted.
@@ -270,7 +270,7 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
+        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device)
 
         j = 0
         while j < N:
@@ -296,7 +296,7 @@ class LTLKernel:
     
 
 
-    def compute_formula_embedding_no_move(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+    def compute_formula_embedding_no_move(self, formula: Formula, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
         """
         Method for computing the embedding of formula, from feature matrix F.
         - formula: the formula for which the embedding is to be calcualted.
@@ -310,7 +310,7 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
+        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device)
 
         j = 0
         while j < N:
