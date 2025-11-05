@@ -283,7 +283,10 @@ class LTLKernel:
             phi_sats[j:j1] = vals
             j = j1
             
-        emb = self.F @ phi_sats # (m,)
+        phi_centered = phi_sats - phi_sats.mean()
+        F_centered = self.F - self.F.mean(dim=1, keepdim=True)
+
+        emb = (F_centered @ phi_centered) / float(N)
 
         if self.device == 'cuda':
             emb = emb.cpu()
@@ -322,7 +325,10 @@ class LTLKernel:
                                 torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
             phi_sats[j:j1] = vals
             j = j1
-            
-        emb = self.F @ phi_sats # (m,)
+
+        phi_centered = phi_sats - phi_sats.mean()
+        F_centered = self.F - self.F.mean(dim=1, keepdim=True)
+
+        emb = (F_centered @ phi_centered) / float(N)
 
         return emb

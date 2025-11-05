@@ -423,7 +423,7 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
+        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device)
 
         j = 0
         while j < N:
@@ -463,7 +463,7 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
+        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device)
 
         j = 0
         while j < N:
@@ -496,7 +496,7 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
+        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device)
 
         j = 0
         while j < N:
@@ -536,7 +536,7 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
+        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device)
 
         j = 0
         while j < N:
@@ -569,7 +569,7 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
+        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device)
 
         j = 0
         while j < N:
@@ -612,7 +612,7 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device) # device argument is redundant, should always be self.device, and then move to the cpu conditionally
+        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device)
 
         j = 0
         while j < N:
@@ -630,44 +630,4 @@ class LTLKernel:
 
         emb = (F_centered @ phi_centered) / float(N)
 
-        return emb
-    
-
-
-    def compute_formula_embedding_normalized(self, formula: Formula, device: str, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
-        """
-        Method for computing the embedding of formula, from feature matrix F.
-        - formula: the formula for which the embedding is to be calcualted.
-        - batch size: (Default = 512) the size of the batches used during evaluation of the formula, adjustable for memory management.
-        - time index: (Default = 0) the timepoint of the trace at which the formula is evaluated.
-        Returns:
-            - emb: Tensor (m), the embedding of formula, where m = len(self.anchor_formulas) the number of anchor formulae.
-        """ 
-        if self.F is None:
-            raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
-
-        N = self.traces.size(dim=0)
-        
-        phi_sats = torch.empty(N, dtype=torch.float32, device=device)
-
-        j = 0
-        while j < N:
-            j1 = min(N, j + batch_size)
-            batch = self.traces[j:j1]  # (B, AP, T)
-            batch_sats = eval_traces_batch(formula, batch)  # (B, T)
-            vals = torch.where(batch_sats[:, time_index], 
-                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                                torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
-            phi_sats[j:j1] = vals
-            j = j1
-            
-        emb = (self.F @ phi_sats) / N # (m,)
-
-        if self.device == 'cuda':
-            emb = emb.cpu()
-            torch.cuda.empty_cache()
-        elif self.device == 'mps':
-            emb = emb.cpu() 
-            torch.mps.empty_cache()
-        
         return emb

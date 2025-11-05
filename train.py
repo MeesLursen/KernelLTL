@@ -26,7 +26,7 @@ def main():
 
     eps     = 0.01
     delta   = 1 - 0.99
-    m = 1024
+    m = 100
         
     # Create output directory
     output_dir = "ltl_model_outputs"
@@ -39,8 +39,8 @@ def main():
     kernel = LTLKernel(T, AP, seed)  # adjust T and AP as needed
     N       = math.ceil((2 / eps**2) * math.log(2 * m / delta))
     kernel.sample_traces_kernel(N)  # adjust N based on your needs
-    # kernel.construct_anchor_formulas_kernel()  # m should match model's n_embd
-    kernel.sample_anchor_formulas_kernel_cosine_controlled(m=m, batch_size=10240, max_attempts_per_formula=500)
+    kernel.construct_anchor_formulas_kernel()  # m should match model's n_embd
+    # kernel.sample_anchor_formulas_kernel_cosine_controlled(m=m, batch_size=10240, max_attempts_per_formula=500)
     kernel.build_F(batch_size=10240)
     
     print(kernel.F)
@@ -71,7 +71,7 @@ def main():
     config = LTLConfig(
         vocab_size=tokenizer.vocab_size,
         n_embd=kernel.m,  # must match kernel's anchor set size (m)
-        n_head=16,        # must divide kernel.m (!!!)
+        n_head=20,        # must divide kernel.m (!!!)
         bos_token_id=tokenizer.bos_token_id,
         eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.pad_token_id
