@@ -16,7 +16,7 @@ def main():
         torch.cuda.set_device(local_rank)
 
     # Hyperparameters
-    num_epochs = 10
+    num_epochs = 40
 
     learning_rate = 5e-5
 
@@ -26,7 +26,7 @@ def main():
 
     eps     = 0.01
     delta   = 1 - 0.99
-    m = 100
+    m = 1024
         
     # Create output directory
     output_dir = "ltl_model_outputs"
@@ -39,8 +39,8 @@ def main():
     kernel = LTLKernel(T, AP, seed)  # adjust T and AP as needed
     N       = math.ceil((2 / eps**2) * math.log(2 * m / delta))
     kernel.sample_traces_kernel(N)  # adjust N based on your needs
-    kernel.construct_anchor_formulas_kernel()  # m should match model's n_embd
-    # kernel.sample_anchor_formulas_kernel_cosine_controlled(m=m, batch_size=10240, max_attempts_per_formula=500)
+    #kernel.construct_anchor_formulas_kernel()  # m should match model's n_embd
+    kernel.sample_anchor_formulas_kernel_cosine_controlled(m=m, batch_size=10240, max_attempts_per_formula=500)
     kernel.build_F(batch_size=10240)
     
     print(kernel.F)
@@ -48,18 +48,18 @@ def main():
 
     # Create datasets
     train_dataset = LTLDataset()
-    train_dataset.construct_dataset_from_kernel(
+    train_dataset.construct_dataset_from_kernel_dedupe(
         kernel=kernel,
-        k=78000,  # adjust dataset size as needed
+        k=500000,  # adjust dataset size as needed
         p_leaf=0.45,
         max_depth=2,
         batch_size=10240
     )
     
     eval_dataset = LTLDataset()
-    eval_dataset.construct_dataset_from_kernel(
+    eval_dataset.construct_dataset_from_kernel_dedupe(
         kernel=kernel,
-        k=1000,  # smaller validation set
+        k=5000,  # smaller validation set
         p_leaf=0.45,
         max_depth=2,
         batch_size=10240
@@ -71,7 +71,7 @@ def main():
     config = LTLConfig(
         vocab_size=tokenizer.vocab_size,
         n_embd=kernel.m,  # must match kernel's anchor set size (m)
-        n_head=20,        # must divide kernel.m (!!!)
+        n_head=16,        # must divide kernel.m (!!!)
         bos_token_id=tokenizer.bos_token_id,
         eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.pad_token_id
