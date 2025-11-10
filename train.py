@@ -16,7 +16,7 @@ def main():
         torch.cuda.set_device(local_rank)
 
     # Hyperparameters
-    num_epochs = 40
+    num_epochs = 20
 
     learning_rate = 5e-5
 
@@ -26,7 +26,7 @@ def main():
 
     eps     = 0.01
     delta   = 1 - 0.99
-    m = 1024
+    m       = 1024
         
     # Create output directory
     output_dir = "ltl_model_outputs"
@@ -48,7 +48,7 @@ def main():
 
     # Create datasets
     train_dataset = LTLDataset()
-    train_dataset.construct_dataset_from_kernel_dedupe(
+    train_dataset.construct_dataset_from_kernel(
         kernel=kernel,
         k=500000,  # adjust dataset size as needed
         p_leaf=0.45,
