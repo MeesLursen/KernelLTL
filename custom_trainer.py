@@ -43,7 +43,13 @@ class HybridTrainer(Trainer):
         self.inspect = inspect
         self.inspect_sample_count = max(1, inspect_sample_count)
 
-    def compute_loss(self, model, inputs, return_outputs: bool = False):
+    def compute_loss(
+        self,
+        model,
+        inputs,
+        num_items_in_batch: int | None = None,
+        return_outputs: bool = False,
+    ):
         outputs = model(**inputs)
 
         # ----------- CE loss -----------
