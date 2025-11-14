@@ -132,7 +132,7 @@ def main():
         reinforce_weight=reinforce_weight,
         baseline_momentum=reinforce_baseline_momentum,
         reward_clip=reinforce_reward_clip,
-        generator=kernel.rng,
+        rng=kernel.rng,
         inspect=True
     )
     
