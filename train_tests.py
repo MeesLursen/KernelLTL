@@ -17,7 +17,7 @@ def main():
         torch.cuda.set_device(local_rank)
 
     # Hyperparameters
-    num_epochs = 1
+    num_epochs = 10
 
     learning_rate = 5e-5
 
@@ -27,11 +27,11 @@ def main():
 
     eps     = 0.01
     delta   = 1 - 0.99
-    m       = 512
+    m       = 1024
 
-    train_batch_size = 8
+    train_batch_size = 32
 
-    reinforce_weight = 0.2
+    reinforce_weight = 0.3
     reinforce_baseline_momentum = 0.9
     reinforce_reward_clip = 1.0
         
@@ -57,7 +57,7 @@ def main():
     train_dataset = LTLDataset()
     train_dataset.construct_dataset_from_kernel(
         kernel=kernel,
-        k=2000,  # adjust dataset size as needed
+        k=150000,  # adjust dataset size as needed
         p_leaf=0.45,
         max_depth=2,
         batch_size=10240
@@ -66,7 +66,7 @@ def main():
     eval_dataset = LTLDataset()
     eval_dataset.construct_dataset_from_kernel(
         kernel=kernel,
-        k=200,  # smaller validation set
+        k=2000,  # smaller validation set
         p_leaf=0.45,
         max_depth=2,
         batch_size=10240
@@ -93,10 +93,10 @@ def main():
         learning_rate=learning_rate,
         per_device_train_batch_size=train_batch_size,
         per_device_eval_batch_size=train_batch_size,
-        warmup_steps=math.ceil((len(train_dataset) / train_batch_size) * 0.1),
+        warmup_steps=math.ceil((len(train_dataset) / train_batch_size) * 0.2),
         weight_decay=0.01,
         logging_dir=f"{output_dir}/logs",
-        logging_steps=10,
+        logging_steps=500,
         eval_strategy="steps",
         save_strategy="steps",
         save_steps=0.2,
