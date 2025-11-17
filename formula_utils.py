@@ -100,8 +100,10 @@ def sample_traces(n_traces: int, n_ap:int, trace_length:int, rng: torch.Generato
     - traces: Tensor of shape (n_traces, n_ap, trace_length).
     """
 
-    traces = torch.randint(0,2, size=(n_traces, n_ap, trace_length), generator=rng, dtype=torch.bool, device = device)
-
+    baseline_zeros  = torch.zeros(size=(1, n_ap, trace_length), dtype=torch.bool,device=device)
+    baseline_ones   = torch.ones(size=(1, n_ap, trace_length), dtype=torch.bool,device=device)
+    sampled_traces  = torch.randint(0,2, size=(n_traces, n_ap, trace_length), generator=rng, dtype=torch.bool, device = device)
+    traces = torch.cat((baseline_zeros, baseline_ones, sampled_traces), dim=0)
     return traces
 
 
