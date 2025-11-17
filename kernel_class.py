@@ -137,7 +137,7 @@ class LTLKernel:
             raise ValueError('Traces tensor is empty, cannot evaluate cosine similarity.')
 
         one = torch.tensor(1.0, dtype=torch.float32, device=self.device)
-        zero = torch.tensor(0.0, dtype=torch.float32, device=self.device)
+        zero = torch.tensor(-1.0, dtype=torch.float32, device=self.device)
 
         def _formula_trace_vector(phi: Formula) -> torch.Tensor:
             vals = torch.empty(N, dtype=torch.float32, device=self.device)
