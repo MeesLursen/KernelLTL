@@ -222,7 +222,7 @@ class LTLKernel:
                 sats = eval_traces_batch(phi, batch)  # (B, T)
                 vals = torch.where(sats[:, time_index], 
                                    torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                                   torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
+                                   torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
                 F[i, j:j1] = vals
                 j = j1
         
@@ -283,7 +283,7 @@ class LTLKernel:
             phi_sats[j:j1] = vals
             j = j1
             
-        emb = self.F @ phi_sats # (m,)
+        emb = (self.F @ phi_sats) / float(N) # (m,)
 
         if self.device == 'cuda':
             emb = emb.cpu()
@@ -323,6 +323,6 @@ class LTLKernel:
             phi_sats[j:j1] = vals
             j = j1
             
-        emb = self.F @ phi_sats # (m,)
+        emb = (self.F @ phi_sats) / float(N) # (m,)
 
         return emb

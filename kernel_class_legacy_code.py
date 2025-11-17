@@ -509,7 +509,7 @@ class LTLKernel:
             phi_sats[j:j1] = vals
             j = j1
             
-        emb = self.F @ phi_sats # (m,)
+        emb = (self.F @ phi_sats) / float(N) # (m,)
 
         if self.device == 'cuda':
             emb = emb.cpu()
@@ -549,7 +549,7 @@ class LTLKernel:
             phi_sats[j:j1] = vals
             j = j1
             
-        emb = self.F @ phi_sats # (m,)
+        emb = (self.F @ phi_sats) / float(N) # (m,)
 
         return emb
 
