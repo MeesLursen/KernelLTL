@@ -279,14 +279,11 @@ class LTLKernel:
             batch_sats = eval_traces_batch(formula, batch)  # (B, T)
             vals = torch.where(batch_sats[:, time_index], 
                                 torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                                torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
+                                torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
             phi_sats[j:j1] = vals
             j = j1
             
-        phi_centered = phi_sats - phi_sats.mean()
-        F_centered = self.F - self.F.mean(dim=1, keepdim=True)
-
-        emb = (F_centered @ phi_centered) / float(N)
+        emb = self.F @ phi_sats # (m,)
 
         if self.device == 'cuda':
             emb = emb.cpu()
@@ -322,13 +319,10 @@ class LTLKernel:
             batch_sats = eval_traces_batch(formula, batch)  # (B, T)
             vals = torch.where(batch_sats[:, time_index], 
                                 torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                                torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
+                                torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
             phi_sats[j:j1] = vals
             j = j1
-
-        phi_centered = phi_sats - phi_sats.mean()
-        F_centered = self.F - self.F.mean(dim=1, keepdim=True)
-
-        emb = (F_centered @ phi_centered) / float(N)
+            
+        emb = self.F @ phi_sats # (m,)
 
         return emb
