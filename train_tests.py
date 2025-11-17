@@ -33,7 +33,7 @@ def main():
 
     reinforce_weight = 0.3
     reinforce_baseline_momentum = 0.9
-    reinforce_reward_clip = 1.0
+    reinforce_reward_clip = None
         
     # Create output directory
     output_dir = "ltl_model_outputs"
@@ -48,7 +48,8 @@ def main():
     kernel.sample_traces_kernel(N)  # adjust N based on your needs
     #kernel.construct_anchor_formulas_kernel()  # m should match model's n_embd
     kernel.sample_anchor_formulas_kernel_cosine_controlled(m=m, batch_size=10240, max_attempts_per_formula=500)
-    print(kernel.anchor_formulas)
+    for phi in kernel.anchor_formulas:
+        print(phi)
     kernel.build_F(batch_size=10240)
     
     print(kernel.F)
