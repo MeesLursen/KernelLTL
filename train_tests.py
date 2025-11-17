@@ -17,7 +17,7 @@ def main():
         torch.cuda.set_device(local_rank)
 
     # Hyperparameters
-    num_epochs = 10
+    num_epochs = 2
 
     learning_rate = 5e-5
 
@@ -27,9 +27,9 @@ def main():
 
     eps     = 0.01
     delta   = 1 - 0.99
-    m       = 1024
+    m       = 512
 
-    train_batch_size = 32
+    train_batch_size = 8
 
     reinforce_weight = 0.3
     reinforce_baseline_momentum = 0.9
@@ -48,6 +48,7 @@ def main():
     kernel.sample_traces_kernel(N)  # adjust N based on your needs
     #kernel.construct_anchor_formulas_kernel()  # m should match model's n_embd
     kernel.sample_anchor_formulas_kernel_cosine_controlled(m=m, batch_size=10240, max_attempts_per_formula=500)
+    print(kernel.anchor_formulas)
     kernel.build_F(batch_size=10240)
     
     print(kernel.F)
@@ -57,7 +58,7 @@ def main():
     train_dataset = LTLDataset()
     train_dataset.construct_dataset_from_kernel(
         kernel=kernel,
-        k=150000,  # adjust dataset size as needed
+        k=10000,  # adjust dataset size as needed
         p_leaf=0.45,
         max_depth=2,
         batch_size=10240
@@ -66,7 +67,7 @@ def main():
     eval_dataset = LTLDataset()
     eval_dataset.construct_dataset_from_kernel(
         kernel=kernel,
-        k=2000,  # smaller validation set
+        k=500,  # smaller validation set
         p_leaf=0.45,
         max_depth=2,
         batch_size=10240
@@ -96,7 +97,7 @@ def main():
         warmup_steps=math.ceil((len(train_dataset) / train_batch_size) * 0.2),
         weight_decay=0.01,
         logging_dir=f"{output_dir}/logs",
-        logging_steps=500,
+        logging_steps=20,
         eval_strategy="steps",
         save_strategy="steps",
         save_steps=0.2,

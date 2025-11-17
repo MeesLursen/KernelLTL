@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 from transformers import Trainer
 
 from formula_utils import str_to_formula
@@ -69,23 +70,20 @@ class HybridTrainer(Trainer):
         # ----------- REINFORCE loss -----------
         reinforce_term = None
         if effective_weight > 0.0:
+            logits = getattr(outputs, "logits", None)
             attention_mask = inputs.get("attention_mask")
             semantic_embeddings = inputs.get("semantic_embeddings")
             target_token_ids = inputs.get("labels")
-            if semantic_embeddings is not None:
-                max_length = None
-                if attention_mask is not None:
-                    max_length = int(attention_mask.size(-1))
-                elif hasattr(model, "config") and getattr(model.config, "n_positions", None):
-                    max_length = int(getattr(model.config, "n_positions"))
-                if max_length is None:
-                    max_length = 32
-
+            if (
+                logits is not None
+                and attention_mask is not None
+                and semantic_embeddings is not None
+            ):
                 reinforce_term = self._compute_reinforce_term(
-                    model=model,
-                    semantic_embeddings=semantic_embeddings,
+                    logits=logits,
+                    attention_mask=attention_mask,
+                    target_embeddings=semantic_embeddings,
                     target_token_ids=target_token_ids,
-                    generation_max_length=max_length,
                 )
 
         # ----------- Combine losses -----------
@@ -128,76 +126,48 @@ class HybridTrainer(Trainer):
     def _compute_reinforce_term(
         self,
         *,
-        model,
-        semantic_embeddings: torch.Tensor,
-        generation_max_length: int,
+        logits: torch.Tensor,
+        attention_mask: torch.Tensor,
+        target_embeddings: torch.Tensor,
         target_token_ids: torch.Tensor | None = None,
     ) -> torch.Tensor | None:
-        if semantic_embeddings is None or semantic_embeddings.ndim < 2:
+        if logits.ndim != 3:
             return None
+        device = logits.device
+        batch_size, seq_len, vocab_size = logits.shape
 
-        generation_max_length = max(1, int(generation_max_length))
-        device = semantic_embeddings.device
-        pad_id = getattr(self.formula_tokenizer, "pad_token_id", None)
-        eos_id = getattr(self.formula_tokenizer, "eos_token_id", None)
+        mask = attention_mask.to(dtype=logits.dtype)
+        lengths = mask.sum(dim=-1).clamp(min=1.0)
+
+        log_probs = torch.log_softmax(logits, dim=-1)
+        with torch.no_grad():
+            probs = torch.softmax(logits, dim=-1).reshape(-1, vocab_size)
+            sampled = torch.multinomial(probs, num_samples=1, generator=self.rng).view(batch_size, seq_len)
+        token_log_probs = log_probs.gather(-1, sampled.unsqueeze(-1)).squeeze(-1)
+        seq_log_prob = (token_log_probs * mask).sum(dim=-1) / lengths
+
+        sampled_tokens = sampled.detach().cpu().tolist()
+        mask_tokens = mask.detach().cpu().tolist()
         bos_id = getattr(self.formula_tokenizer, "bos_token_id", None)
-
-        generate_kwargs: dict[str, object] = {
-            "semantic_embeddings": semantic_embeddings,
-            "do_sample": True,
-            "max_new_tokens": generation_max_length,
-            "num_beams": 1,
-            "num_return_sequences": 1,
-            "return_dict_in_generate": True,
-            "output_scores": True,
-            "temperature": 1.0,
-        }
-        if pad_id is not None:
-            generate_kwargs["pad_token_id"] = pad_id
-        if eos_id is not None:
-            generate_kwargs["eos_token_id"] = eos_id
-        if bos_id is not None:
-            generate_kwargs["bos_token_id"] = bos_id
+        eos_id = getattr(self.formula_tokenizer, "eos_token_id", None)
+        pad_id = getattr(self.formula_tokenizer, "pad_token_id", None)
+        trimmed_tokens = []
+        for row_tokens, row_mask in zip(sampled_tokens, mask_tokens):
+            seq = []
+            for token_id, mask_val in zip(row_tokens, row_mask):
+                if mask_val <= 0:
+                    break
+                if pad_id is not None and token_id == pad_id:
+                    break
+                if bos_id is not None and token_id == bos_id:
+                    continue
+                seq.append(token_id)
+                if eos_id is not None and token_id == eos_id:
+                    break
+            trimmed_tokens.append(seq)
 
         try:
-            generation = model.generate(**generate_kwargs)
-        except Exception:
-            return None
-
-        sequences = getattr(generation, "sequences", None)
-        scores = getattr(generation, "scores", None)
-        if sequences is None or scores is None or len(scores) == 0:
-            return None
-
-        if isinstance(scores, tuple):
-            scores = list(scores)
-
-        total_steps = len(scores)
-        seq_len = sequences.size(-1)
-        prefix_len = max(0, seq_len - total_steps)
-        generated_tokens = sequences[:, prefix_len:].long()
-        if generated_tokens.size(-1) > total_steps:
-            generated_tokens = generated_tokens[:, :total_steps]
-
-        score_tensor = torch.stack(scores, dim=0).transpose(0, 1)  # (B, T, V)
-        log_probs = torch.log_softmax(score_tensor, dim=-1)
-        generated_tokens = generated_tokens.to(log_probs.device)
-        token_log_probs = log_probs.gather(
-            dim=-1, index=generated_tokens.unsqueeze(-1)
-        ).squeeze(-1)
-
-        if pad_id is not None:
-            gen_mask = (generated_tokens != pad_id).to(log_probs.dtype)
-        else:
-            gen_mask = torch.ones_like(generated_tokens, dtype=log_probs.dtype)
-        lengths = gen_mask.sum(dim=-1).clamp(min=1.0)
-        seq_log_prob = (token_log_probs * gen_mask).sum(dim=-1) / lengths
-
-        generated_tokens_cpu = generated_tokens.detach().cpu()
-        try:
-            generated_strings = self.formula_tokenizer.batch_decode(
-                generated_tokens_cpu, skip_special_tokens=True
-            )
+            generated_strings = self.formula_tokenizer.batch_decode(trimmed_tokens, skip_special_tokens=True)
         except Exception:
             return None
 
@@ -216,11 +186,11 @@ class HybridTrainer(Trainer):
 
         reward_values: list[torch.Tensor] = []
         valid_count = 0
-        generated_embeds: list[torch.Tensor | None] = []
+        generated_embeds: list[torch.Tensor] = []
         target_embeds_cpu: list[torch.Tensor] = []
 
         with torch.no_grad():
-            for generated_str, target_emb in zip(generated_strings, semantic_embeddings):
+            for generated_str, target_emb in zip(generated_strings, target_embeddings):
                 target_vec = target_emb.detach()
                 try:
                     generated_formula = str_to_formula(generated_str)
