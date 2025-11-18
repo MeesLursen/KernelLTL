@@ -51,6 +51,31 @@ class LTLKernel:
                                     trace_length=self.T,
                                     rng=self.rng,
                                     device=self.device)
+    
+
+
+        # ----------- Sampling -----------
+    def sample_traces_kernel_robustness(self, N: int) -> torch.Tensor:
+        """
+        Method for adding a random sample of traces to the kernel.
+        - N: specifies the number of sampled traces.
+        Implicit arguments are, AP, T, seed:
+        - AP: specifies the number of atomic propositions in each trace.
+        - T: specifies the length of each of the sampled traces.
+        - rng: specifies the random number generator used, for reproducibility.
+        """
+        self.traces = sample_traces(N,
+                                    n_ap=self.AP,
+                                    trace_length=self.T,
+                                    rng=self.rng,
+                                    device=self.device)
+
+        # Reset cached structures that depend on the trace set
+        self.F = None
+        self.F_robustness = None
+        self.trace_atom_distances = None
+
+        self._precompute_atomwise_hamming()
 
 
 
@@ -360,6 +385,28 @@ class LTLKernel:
 
 
 
+    def build_F_robustness(self, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+        """Construct robustness feature matrix for all anchor formulas."""
+        if self.traces is None:
+            raise ValueError('Please sample traces before building robustness features.')
+
+        if not self.anchor_formulas:
+            raise ValueError('Please add anchor formulas before building robustness features.')
+
+        if self.trace_atom_distances is None:
+            raise ValueError('Trace distances are unavailable. Ensure sample_traces_kernel has been called.')
+
+        N = self.traces.size(dim=0)
+        m = len(self.anchor_formulas)
+        F_r = torch.empty((m, N), dtype=torch.float32, device=self.device)
+        for i, phi in enumerate(self.anchor_formulas):
+            F_r[i] = self._compute_formula_robustness_vector(phi, batch_size, time_index)
+
+        self.F_robustness = F_r
+        return self.F_robustness
+
+
+
     def build_K(self):
         """
         Method for building the kernel matrix, K, from feature matrix F. 
@@ -631,3 +678,130 @@ class LTLKernel:
         emb = (F_centered @ phi_centered) / float(N)
 
         return emb
+    
+
+    
+    def compute_formula_embedding_robustness(self, formula: Formula, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+        """Return robustness-kernel embedding of the given formula."""
+        if self.F_robustness is None:
+            raise ValueError('Robustness feature matrix has not been built. Call build_F_robustness first.')
+
+        if self.traces is None:
+            raise ValueError('Please sample traces before computing embeddings.')
+
+        N = self.traces.size(dim=0)
+        phi_rho = self._compute_formula_robustness_vector(formula, batch_size, time_index)
+        emb = (self.F_robustness @ phi_rho) / float(N)
+
+        if self.device == 'cuda':
+            emb = emb.cpu()
+            torch.cuda.empty_cache()
+        elif self.device == 'mps':
+            emb = emb.cpu()
+            torch.mps.empty_cache()
+
+        return emb
+
+
+
+    def compute_formula_embedding_robustness_no_move(self, formula: Formula, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+        """Return robustness-kernel embedding of the given formula."""
+        if self.F_robustness is None:
+            raise ValueError('Robustness feature matrix has not been built. Call build_F_robustness first.')
+
+        if self.traces is None:
+            raise ValueError('Please sample traces before computing embeddings.')
+
+        N = self.traces.size(dim=0)
+        phi_rho = self._compute_formula_robustness_vector(formula, batch_size, time_index)
+        emb = (self.F_robustness @ phi_rho) / float(N)
+
+        return emb
+    
+
+
+    # ----------- Robustness Kernel Helpers -----------
+    def _precompute_atomwise_hamming(self) -> None:
+        """Precompute pairwise Hamming distances per atom across all traces."""
+        if self.traces is None:
+            raise ValueError('Traces must be sampled before precomputing distances.')
+
+        N = self.traces.size(dim=0)
+        if N == 0:
+            raise ValueError('At least one trace is required to precompute distances.')
+
+        traces_device = self.traces.to(self.device, dtype=torch.float32)
+        pairwise = torch.empty((self.AP, N, N), dtype=torch.float32, device=self.device)
+        for atom_idx in range(self.AP):
+            atom_traces = traces_device[:, atom_idx, :]  # (N, T)
+            dist = torch.cdist(atom_traces, atom_traces, p=1)  # (N, N)
+            pairwise[atom_idx] = dist
+
+        self.trace_atom_distances = pairwise
+
+
+    def _evaluate_formula_on_traces(self, formula: Formula, batch_size: int, time_index: int) -> torch.Tensor:
+        """Return boolean satisfaction vector of length N for the provided formula."""
+        if self.traces is None:
+            raise ValueError('Please sample traces before evaluating formulas.')
+
+        N = self.traces.size(dim=0)
+        sats = torch.empty(N, dtype=torch.bool, device=self.device)
+        j = 0
+        while j < N:
+            j1 = min(N, j + batch_size)
+            batch = self.traces[j:j1]
+            batch_sats = eval_traces_batch(formula, batch)
+            sats[j:j1] = batch_sats[:, time_index]
+            j = j1
+        return sats
+
+
+    def _aggregate_atom_distances(self, atom_ids: list[int]) -> torch.Tensor:
+        """Aggregate precomputed atom-wise distances for the provided atom indices."""
+        if self.trace_atom_distances is None:
+            raise ValueError('Trace distances have not been precomputed. Call sample_traces_kernel first.')
+
+        if len(atom_ids) == 0:
+            N = self.traces.size(dim=0)
+            return torch.zeros((N, N), dtype=torch.float32, device=self.device)
+
+        idx_tensor = torch.tensor(atom_ids, dtype=torch.long, device=self.trace_atom_distances.device)
+        relevant = torch.index_select(self.trace_atom_distances, 0, idx_tensor)  # (k, N, N)
+        summed = relevant.sum(dim=0)  # (N, N)
+        return summed.to(self.device)
+
+
+    def _compute_formula_robustness_vector(self, formula: Formula, batch_size: int, time_index: int) -> torch.Tensor:
+        """Compute per-trace robustness scores for the provided formula."""
+        if self.traces is None:
+            raise ValueError('Please sample traces before computing robustness.')
+
+        sats = self._evaluate_formula_on_traces(formula, batch_size, time_index)
+        atom_ids = sorted(formula.atoms())
+        relevant_distances = self._aggregate_atom_distances(atom_ids)  # (N, N)
+
+        N = sats.size(dim=0)
+        robustness = torch.zeros(N, dtype=torch.float32, device=self.device)
+        pos_idx = torch.nonzero(sats, as_tuple=False).squeeze(1)
+        neg_idx = torch.nonzero(~sats, as_tuple=False).squeeze(1)
+
+        max_distance = float(self.T * len(atom_ids)) if atom_ids else 0.0
+
+        if pos_idx.numel() > 0 and neg_idx.numel() > 0:
+            pos_to_neg = relevant_distances.index_select(0, pos_idx)
+            pos_to_neg = pos_to_neg.index_select(1, neg_idx)
+            min_pos = pos_to_neg.min(dim=1).values
+            robustness[pos_idx] = min_pos
+
+            neg_to_pos = relevant_distances.index_select(0, neg_idx)
+            neg_to_pos = neg_to_pos.index_select(1, pos_idx)
+            min_neg = neg_to_pos.min(dim=1).values
+            robustness[neg_idx] = -min_neg
+        else:
+            if pos_idx.numel() > 0:
+                robustness[pos_idx] = max_distance
+            if neg_idx.numel() > 0:
+                robustness[neg_idx] = -max_distance
+
+        return robustness

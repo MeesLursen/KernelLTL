@@ -2,14 +2,13 @@ import math
 import os
 import torch
 
-from transformers import TrainingArguments
+from transformers import TrainingArguments, Trainer
 from tokenizer_pretrained_class import LTLTokenizer
 from kernel_class import LTLKernel
 from dataset_class import LTLDataset
 from model_class import LTLModel
 from config_class import LTLConfig
 from training_utils import SemanticEvaluationCallback
-from custom_trainer import HybridTrainer
 
 def main():
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -28,10 +27,6 @@ def main():
     eps     = 0.01
     delta   = 1 - 0.99
     m       = 1024
-
-    reinforce_weight = 0.1
-    reinforce_baseline_momentum = 0.9
-    reinforce_reward_clip = 1.0
         
     # Create output directory
     output_dir = "ltl_model_outputs"
@@ -81,7 +76,7 @@ def main():
         eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.pad_token_id
     )
-    
+"""
     model = LTLModel(config, semantic_emb_dim=kernel.m)  # semantic_emb_dim must match kernel's anchor set size
     
     # Training arguments
@@ -91,7 +86,7 @@ def main():
         learning_rate=learning_rate,
         per_device_train_batch_size=32,
         per_device_eval_batch_size=32,
-        warmup_steps=math.ceil((len(train_dataset) / 32) * 0.05),
+        warmup_steps=500,
         weight_decay=0.01,
         logging_dir=f"{output_dir}/logs",
         logging_steps=100,
@@ -117,20 +112,14 @@ def main():
     )
     
     # Create trainer
-    trainer = HybridTrainer(
+    trainer = Trainer(
         model=model,
         args=training_args,
         data_collator=lambda batch : tokenizer.collate_batch(batch, model.config.n_positions),
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
-        callbacks=[semantic_callback],
-        kernel=kernel,
-        tokenizer=tokenizer,
-        reinforce_weight=reinforce_weight,
-        baseline_momentum=reinforce_baseline_momentum,
-        reward_clip=reinforce_reward_clip,
-        generator=kernel.rng
+        callbacks=[semantic_callback]
     )
     
 
@@ -141,6 +130,6 @@ def main():
     
     # Save final model
     trainer.save_model(os.path.join(output_dir, "final_model"))
-
+"""
 if __name__ == "__main__":
     main()
