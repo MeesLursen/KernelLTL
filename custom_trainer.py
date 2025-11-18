@@ -263,18 +263,18 @@ class HybridTrainer(Trainer):
                 gen_str = generated_strings[idx]
                 tgt_str = target_strings[idx] if target_strings is not None and idx < len(target_strings) else "<unknown>"
                 reward_val = reward_tensor[idx].item() if idx < reward_tensor.numel() else float("nan")
-                gen_vec = generated_embeds[idx]
-                tgt_vec = target_embeds_cpu[idx]
+                # gen_vec = generated_embeds[idx]
+                # tgt_vec = target_embeds_cpu[idx]
                 print(f"  Sample {idx + 1}:")
                 print(f"    Target   : {tgt_str}")
                 print(f"    Generated: {gen_str}")
                 print(f"    Reward   : {reward_val:.4f}")
-                if gen_vec is not None:
-                    print(f"    Embeddings:")
-                    print(f"      target: {tgt_vec.numpy()}")
-                    print(f"      gen   : {gen_vec.numpy()}")
-                else:
-                    print("    Embeddings: generated embedding unavailable (invalid formula)")
+                # if gen_vec is not None:
+                #     print(f"    Embeddings:")
+                #     print(f"      target: {tgt_vec.numpy()}")
+                #     print(f"      gen   : {gen_vec.numpy()}")
+                # else:
+                #     print("    Embeddings: generated embedding unavailable (invalid formula)")
             print()
 
         if self._reward_baseline is None:

@@ -331,18 +331,12 @@ class LTLKernel:
         m = len(self.anchor_formulas)
         F = torch.empty((m, N), dtype=torch.float32, device=self.device)
         for i, phi in enumerate(self.anchor_formulas):
-            # fill column i across batches
-            j = 0
-            while j < N:
-                j1 = min(N, j + batch_size)
-                batch = self.traces[j:j1]  # (B, AP, T)
-                sats = eval_traces_batch(phi, batch)  # (B, T)
-                vals = torch.where(sats[:, time_index], 
-                                   torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                                   torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
-                F[i, j:j1] = vals
-                j = j1
-        
+            sats = self._evaluate_formula_on_traces(formula=phi,batch_size=batch_size,time_index=time_index)
+            vals = torch.where(sats, 
+                               torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                               torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
+            F[i,:] = vals
+
         self.F = F
 
 
@@ -369,18 +363,12 @@ class LTLKernel:
         m = len(self.anchor_formulas)
         F = torch.empty((m, N), dtype=torch.float32, device=self.device)
         for i, phi in enumerate(self.anchor_formulas):
-            # fill column i across batches
-            j = 0
-            while j < N:
-                j1 = min(N, j + batch_size)
-                batch = self.traces[j:j1]  # (B, AP, T)
-                sats = eval_traces_batch(phi, batch)  # (B, T)
-                vals = torch.where(sats[:, time_index], 
-                                   torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                                   torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
-                F[i, j:j1] = vals
-                j = j1
-        
+            sats = self._evaluate_formula_on_traces(formula=phi,batch_size=batch_size,time_index=time_index)
+            vals = torch.where(sats, 
+                               torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                               torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
+            F[i,:] = vals
+
         self.F = F
 
 
@@ -431,28 +419,22 @@ class LTLKernel:
 
 
 
-    # ----------- Dataset Sampling -----------
-    def sample_dataset_formulas_kernel(self, k: int, p_leaf: float, max_depth: int, force_tree: bool = True):
-        """
-        Method for adding a random sample of formulae to the kernel.
-        - k: specifies the number of sampled formulae.
-        - p_leaf: (Default = 0.5) specifies the odds of each node being a leaf. Higher probability reduces average (bounded) formula complexity.
-        - max_depth: (Default = 6) specifies the maximum formula complexity.
-        - force_tree: (Default = True) forces the root of the syntax tree to be an operator. Without this, p_leaf percent of the sample will be just an AP.
+    # ----------- Kernel eval helper -----------
+    def _evaluate_formula_on_traces(self, formula: Formula, batch_size: int, time_index: int) -> torch.Tensor:
+        """Return boolean satisfaction vector of length N for the provided formula."""
+        if self.traces is None:
+            raise ValueError('Please sample traces before evaluating formulas.')
 
-        Implicit arguments are: AP, T, seed.
-        - AP: specifies the number of atomic propositions available to each formula.
-        - rng: specifies the random number generator used, for reproducibility.
-        """
-        sample = sample_formulas(n_formula=k,
-                                 p_leaf=p_leaf,
-                                 max_depth=max_depth,
-                                 n_ap=self.AP,
-                                 force_tree=force_tree,
-                                 rng=self.rng,
-                                 device=self.device)
-
-        return sample
+        N = self.traces.size(dim=0)
+        sats = torch.empty(N, dtype=torch.bool, device=self.device)
+        j = 0
+        while j < N:
+            j1 = min(N, j + batch_size)
+            batch = self.traces[j:j1]
+            batch_sats = eval_traces_batch(formula, batch)
+            sats[j:j1] = batch_sats[:, time_index]
+            j = j1
+        return sats
 
 
     # ----------- Embedding Computation -----------
@@ -470,20 +452,13 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device)
+        phi_sats = self._evaluate_formula_on_traces(formula=formula,batch_size=batch_size,time_index=time_index)
 
-        j = 0
-        while j < N:
-            j1 = min(N, j + batch_size)
-            batch = self.traces[j:j1]  # (B, AP, T)
-            batch_sats = eval_traces_batch(formula, batch)  # (B, T)
-            vals = torch.where(batch_sats[:, time_index], 
-                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                                torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
-            phi_sats[j:j1] = vals
-            j = j1
+        phi_vals = torch.where(phi_sats,
+                               torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                               torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
             
-        emb = self.F @ phi_sats # (m,)
+        emb = (self.F @ phi_vals) / float(N) # (m,)
 
         if self.device == 'cuda':
             emb = emb.cpu()
@@ -493,6 +468,7 @@ class LTLKernel:
             torch.mps.empty_cache()
         
         return emb
+    
     
 
 
@@ -510,21 +486,14 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device)
+        phi_sats = self._evaluate_formula_on_traces(formula=formula,batch_size=batch_size,time_index=time_index)
 
-        j = 0
-        while j < N:
-            j1 = min(N, j + batch_size)
-            batch = self.traces[j:j1]  # (B, AP, T)
-            batch_sats = eval_traces_batch(formula, batch)  # (B, T)
-            vals = torch.where(batch_sats[:, time_index], 
-                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                                torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
-            phi_sats[j:j1] = vals
-            j = j1
+        phi_vals = torch.where(phi_sats,
+                               torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                               torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
             
-        emb = self.F @ phi_sats # (m,)
-
+        emb = (self.F @ phi_vals) / float(N) # (m,)
+        
         return emb
     
 
@@ -543,20 +512,13 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device)
+        phi_sats = self._evaluate_formula_on_traces(formula=formula,batch_size=batch_size,time_index=time_index)
 
-        j = 0
-        while j < N:
-            j1 = min(N, j + batch_size)
-            batch = self.traces[j:j1]  # (B, AP, T)
-            batch_sats = eval_traces_batch(formula, batch)  # (B, T)
-            vals = torch.where(batch_sats[:, time_index], 
-                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                                torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
-            phi_sats[j:j1] = vals
-            j = j1
+        phi_vals = torch.where(phi_sats,
+                               torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                               torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
             
-        emb = (self.F @ phi_sats) / float(N) # (m,)
+        emb = (self.F @ phi_vals) / float(N) # (m,)
 
         if self.device == 'cuda':
             emb = emb.cpu()
@@ -583,21 +545,14 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device)
+        phi_sats = self._evaluate_formula_on_traces(formula=formula,batch_size=batch_size,time_index=time_index)
 
-        j = 0
-        while j < N:
-            j1 = min(N, j + batch_size)
-            batch = self.traces[j:j1]  # (B, AP, T)
-            batch_sats = eval_traces_batch(formula, batch)  # (B, T)
-            vals = torch.where(batch_sats[:, time_index], 
-                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                                torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
-            phi_sats[j:j1] = vals
-            j = j1
+        phi_vals = torch.where(phi_sats,
+                               torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                               torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
             
-        emb = (self.F @ phi_sats) / float(N) # (m,)
-
+        emb = (self.F @ phi_vals) / float(N) # (m,)
+        
         return emb
 
 
@@ -616,20 +571,13 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device)
+        phi_sats = self._evaluate_formula_on_traces(formula=formula,batch_size=batch_size,time_index=time_index)
 
-        j = 0
-        while j < N:
-            j1 = min(N, j + batch_size)
-            batch = self.traces[j:j1]  # (B, AP, T)
-            batch_sats = eval_traces_batch(formula, batch)  # (B, T)
-            vals = torch.where(batch_sats[:, time_index], 
-                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                                torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
-            phi_sats[j:j1] = vals
-            j = j1
+        phi_vals = torch.where(phi_sats,
+                               torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                               torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
             
-        phi_centered = phi_sats - phi_sats.mean()
+        phi_centered = phi_vals - phi_vals.mean()
         F_centered = self.F - self.F.mean(dim=1, keepdim=True)
 
         emb = (F_centered @ phi_centered) / float(N)
@@ -659,20 +607,13 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         
-        phi_sats = torch.empty(N, dtype=torch.float32, device=self.device)
+        phi_sats = self._evaluate_formula_on_traces(formula=formula,batch_size=batch_size,time_index=time_index)
 
-        j = 0
-        while j < N:
-            j1 = min(N, j + batch_size)
-            batch = self.traces[j:j1]  # (B, AP, T)
-            batch_sats = eval_traces_batch(formula, batch)  # (B, T)
-            vals = torch.where(batch_sats[:, time_index], 
-                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                                torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
-            phi_sats[j:j1] = vals
-            j = j1
-
-        phi_centered = phi_sats - phi_sats.mean()
+        phi_vals = torch.where(phi_sats,
+                               torch.tensor(1.0, dtype=torch.float32, device=self.device),
+                               torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
+            
+        phi_centered = phi_vals - phi_vals.mean()
         F_centered = self.F - self.F.mean(dim=1, keepdim=True)
 
         emb = (F_centered @ phi_centered) / float(N)
@@ -717,6 +658,31 @@ class LTLKernel:
         emb = (self.F_robustness @ phi_rho) / float(N)
 
         return emb
+
+
+
+    # ----------- Dataset Sampling -----------
+    def sample_dataset_formulas_kernel(self, k: int, p_leaf: float, max_depth: int, force_tree: bool = True):
+        """
+        Method for adding a random sample of formulae to the kernel.
+        - k: specifies the number of sampled formulae.
+        - p_leaf: (Default = 0.5) specifies the odds of each node being a leaf. Higher probability reduces average (bounded) formula complexity.
+        - max_depth: (Default = 6) specifies the maximum formula complexity.
+        - force_tree: (Default = True) forces the root of the syntax tree to be an operator. Without this, p_leaf percent of the sample will be just an AP.
+
+        Implicit arguments are: AP, T, seed.
+        - AP: specifies the number of atomic propositions available to each formula.
+        - rng: specifies the random number generator used, for reproducibility.
+        """
+        sample = sample_formulas(n_formula=k,
+                                 p_leaf=p_leaf,
+                                 max_depth=max_depth,
+                                 n_ap=self.AP,
+                                 force_tree=force_tree,
+                                 rng=self.rng,
+                                 device=self.device)
+
+        return sample
     
 
 
@@ -740,22 +706,6 @@ class LTLKernel:
         self.trace_atom_distances = pairwise
 
 
-    def _evaluate_formula_on_traces(self, formula: Formula, batch_size: int, time_index: int) -> torch.Tensor:
-        """Return boolean satisfaction vector of length N for the provided formula."""
-        if self.traces is None:
-            raise ValueError('Please sample traces before evaluating formulas.')
-
-        N = self.traces.size(dim=0)
-        sats = torch.empty(N, dtype=torch.bool, device=self.device)
-        j = 0
-        while j < N:
-            j1 = min(N, j + batch_size)
-            batch = self.traces[j:j1]
-            batch_sats = eval_traces_batch(formula, batch)
-            sats[j:j1] = batch_sats[:, time_index]
-            j = j1
-        return sats
-
 
     def _aggregate_atom_distances(self, atom_ids: list[int]) -> torch.Tensor:
         """Aggregate precomputed atom-wise distances for the provided atom indices."""
@@ -770,6 +720,7 @@ class LTLKernel:
         relevant = torch.index_select(self.trace_atom_distances, 0, idx_tensor)  # (k, N, N)
         summed = relevant.sum(dim=0)  # (N, N)
         return summed.to(self.device)
+
 
 
     def _compute_formula_robustness_vector(self, formula: Formula, batch_size: int, time_index: int) -> torch.Tensor:
