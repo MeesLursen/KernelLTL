@@ -289,5 +289,9 @@ class HybridTrainer(Trainer):
 
         reinforce_loss = -(advantage * seq_log_prob).mean()
         if torch.isnan(reinforce_loss):
+            print("[HybridTrainer] reinforce_loss is NaN")
+            print("  reward_tensor:", reward_tensor)
+            print("  baseline:", baseline)
+            print("  seq_log_prob:", seq_log_prob) # WIP: Run and test this 
             return None
         return reinforce_loss
