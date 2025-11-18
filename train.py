@@ -18,7 +18,7 @@ def main():
     # Hyperparameters
     num_epochs = 10
 
-    learning_rate = 5e-5
+    learning_rate = 5e-4
 
     T       = 20
     AP      = 5
@@ -76,7 +76,7 @@ def main():
         eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.pad_token_id
     )
-"""
+
     model = LTLModel(config, semantic_emb_dim=kernel.m)  # semantic_emb_dim must match kernel's anchor set size
     
     # Training arguments
@@ -130,6 +130,6 @@ def main():
     
     # Save final model
     trainer.save_model(os.path.join(output_dir, "final_model"))
-"""
+
 if __name__ == "__main__":
     main()
