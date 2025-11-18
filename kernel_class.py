@@ -209,7 +209,7 @@ class LTLKernel:
             sats = self._evaluate_formula_on_traces(formula=phi,batch_size=batch_size,time_index=time_index)
             vals = torch.where(sats, 
                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                               torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
+                               torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
             F[i,:] = vals
 
         self.F = F
@@ -254,12 +254,9 @@ class LTLKernel:
 
         phi_vals = torch.where(phi_sats,
                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                               torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
+                               torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
             
-        phi_centered = phi_vals - phi_vals.mean()
-        F_centered = self.F - self.F.mean(dim=1, keepdim=True)
-
-        emb = (F_centered @ phi_centered) / float(N)
+        emb = (self.F @ phi_vals) / float(N) # (m,)
 
         if self.device == 'cuda':
             emb = emb.cpu()
@@ -290,13 +287,10 @@ class LTLKernel:
 
         phi_vals = torch.where(phi_sats,
                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                               torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
+                               torch.tensor(-1.0, dtype=torch.float32, device=self.device))  # (B,)
             
-        phi_centered = phi_vals - phi_vals.mean()
-        F_centered = self.F - self.F.mean(dim=1, keepdim=True)
-
-        emb = (F_centered @ phi_centered) / float(N)
-
+        emb = (self.F @ phi_vals) / float(N) # (m,)
+        
         return emb
 
 
