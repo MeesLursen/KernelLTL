@@ -148,17 +148,6 @@ class LTLKernel:
         one = torch.tensor(1.0, dtype=torch.float32, device=self.device)
         zero = torch.tensor(-1.0, dtype=torch.float32, device=self.device)
 
-        def _formula_trace_vector(phi: Formula) -> torch.Tensor:
-            vals = torch.empty(N, dtype=torch.float32, device=self.device)
-            j = 0
-            while j < N:
-                j1 = min(N, j + batch_size)
-                batch = self.traces[j:j1]
-                sats = eval_traces_batch(phi, batch)
-                vals[j:j1] = torch.where(sats[:, time_index], one, zero)
-                j = j1
-            return vals
-
         selected_formulas: list[Formula]       = []
         normalized_vectors: list[torch.Tensor] = []
 
@@ -174,7 +163,8 @@ class LTLKernel:
                                             rng=self.rng,
                                             device=self.device)[0]
 
-                candidate_vec = _formula_trace_vector(candidate)
+                candidate_vec = self._evaluate_formula_on_traces(formula=candidate,batch_size=batch_size,time_index=time_index)
+                candidate_vec = torch.where(candidate_vec, one, zero)
                 denom = torch.linalg.norm(candidate_vec)
                 if denom > 1e-8:
                     candidate_norm = candidate_vec / denom
@@ -220,7 +210,7 @@ class LTLKernel:
 
         N = self.traces.size(dim=0)
         m = len(self.anchor_formulas)
-        F_r = torch.empty((m, N), dtype=torch.float32, device=self.device)
+        F_r = torch.empty((m, N), dtype=torch.int16, device=self.device)
         for i, phi in enumerate(self.anchor_formulas):
             F_r[i] = self._compute_formula_robustness_vector(phi, batch_size, time_index)
 
@@ -319,10 +309,10 @@ class LTLKernel:
         if N == 0:
             raise ValueError('At least one trace is required to precompute distances.')
 
-        traces_device = self.traces.to(self.device, dtype=torch.float32)
-        pairwise = torch.empty((self.AP, N, N), dtype=torch.float32, device=self.device)
+        traces_device = self.traces.to(self.device)
+        pairwise = torch.empty((self.AP, N, N), dtype=torch.uint8, device=self.device)
         for atom_idx in range(self.AP):
-            atom_traces = traces_device[:, atom_idx, :]  # (N, T)
+            atom_traces = traces_device[:, atom_idx, :].to(dtype=torch.float32)  # (N, T)
             dist = torch.cdist(atom_traces, atom_traces, p=1)  # (N, N)
             pairwise[atom_idx] = dist
 
@@ -353,9 +343,9 @@ class LTLKernel:
 
         if len(atom_ids) == 0:
             N = self.traces.size(dim=0)
-            return torch.zeros((N, N), dtype=torch.float32, device=self.device)
+            return torch.zeros((N, N), dtype=torch.uint8, device=self.device)
 
-        idx_tensor = torch.tensor(atom_ids, dtype=torch.long, device=self.trace_atom_distances.device)
+        idx_tensor = torch.tensor(atom_ids, dtype=torch.uint8, device=self.trace_atom_distances.device)
         relevant = torch.index_select(self.trace_atom_distances, 0, idx_tensor)  # (k, N, N)
         summed = relevant.sum(dim=0)  # (N, N)
         return summed.to(self.device)
@@ -371,11 +361,11 @@ class LTLKernel:
         relevant_distances = self._aggregate_atom_distances(atom_ids)  # (N, N)
 
         N = sats.size(dim=0)
-        robustness = torch.zeros(N, dtype=torch.float32, device=self.device)
+        robustness = torch.zeros(N, dtype=torch.int16, device=self.device)
         pos_idx = torch.nonzero(sats, as_tuple=False).squeeze(1)
         neg_idx = torch.nonzero(~sats, as_tuple=False).squeeze(1)
 
-        max_distance = float(self.T * len(atom_ids)) if atom_ids else 0.0
+        max_distance = int(self.T * len(atom_ids)) if atom_ids else int(0)
 
         if pos_idx.numel() > 0 and neg_idx.numel() > 0:
             pos_to_neg = relevant_distances.index_select(0, pos_idx)
