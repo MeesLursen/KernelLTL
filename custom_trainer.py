@@ -162,9 +162,8 @@ class HybridTrainer(Trainer):
         if bos_id is not None:
             generate_kwargs["bos_token_id"] = bos_id
 
-        gen_model = model
-        if hasattr(model, "module"):
-            gen_model = model.module
+        gen_model = model.module if hasattr(model, 'module') else model
+
         try:
             generation = gen_model.generate(**generate_kwargs)
         except Exception as e:
