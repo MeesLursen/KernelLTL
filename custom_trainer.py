@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+import math
 from transformers import Trainer
 
 from formula_utils import str_to_formula
@@ -121,11 +122,29 @@ class HybridTrainer(Trainer):
                 log_payload["reward_std"] = self._last_reward_std
             if self._last_valid_ratio is not None:
                 log_payload["valid_ratio"] = self._last_valid_ratio
+            grad_metrics = None
+            if (
+                model.training
+                and effective_weight > 0.0
+                and ce_term is not None
+                and reinforce_term is not None
+                and ce_term.requires_grad
+                and reinforce_term.requires_grad
+            ):
+                grad_metrics = self._compute_gradient_alignment_metrics(
+                    ce_loss=ce_term,
+                    reinforce_loss=reinforce_term,
+                    model=model,
+                )
+            if grad_metrics:
+                log_payload.update(grad_metrics)
             self.log(log_payload)
 
         if return_outputs:
             return loss, outputs
         return loss
+
+
 
     def _compute_reinforce_term(
         self,
@@ -303,3 +322,51 @@ class HybridTrainer(Trainer):
             print("  seq_log_prob:", seq_log_prob) # WIP: Run and test this 
             return None
         return reinforce_loss
+    
+
+    def _compute_gradient_alignment_metrics(self, *, ce_loss, reinforce_loss, model):
+        params = [p for p in model.parameters() if p.requires_grad]
+        if not params:
+            return None
+        try:
+            ce_grads = torch.autograd.grad(
+                ce_loss, params, retain_graph=True, create_graph=False, allow_unused=True
+            )
+            reinforce_grads = torch.autograd.grad(
+                reinforce_loss, params, retain_graph=True, create_graph=False, allow_unused=True
+            )
+        except RuntimeError as err:
+            print(f"[HybridTrainer] Gradient alignment computation failed: {err!r}")
+            return None
+
+        ce_sq = 0.0
+        reinforce_sq = 0.0
+        dot = 0.0
+        for g_ce, g_rl in zip(ce_grads, reinforce_grads):
+            if g_ce is not None:
+                ce_sq += g_ce.detach().float().pow(2).sum().item()
+            if g_rl is not None:
+                reinforce_sq += g_rl.detach().float().pow(2).sum().item()
+            if g_ce is not None and g_rl is not None:
+                dot += (g_ce.detach().float() * g_rl.detach().float()).sum().item()
+
+        ce_norm = math.sqrt(ce_sq)
+        reinforce_norm = math.sqrt(reinforce_sq)
+        cosine = (
+            dot / (ce_norm * reinforce_norm + 1e-12)
+            if ce_norm > 0.0 and reinforce_norm > 0.0
+            else float("nan")
+        )
+        mag_similarity = (
+            (2.0 * ce_norm * reinforce_norm)
+            / (ce_sq + reinforce_sq + 1e-12)
+            if ce_sq > 0.0 or reinforce_sq > 0.0
+            else float("nan")
+        )
+
+        return {
+            "grad_ce_norm": ce_norm,
+            "grad_reinforce_norm": reinforce_norm,
+            "grad_cosine_similarity": cosine,
+            "grad_mag_similarity": mag_similarity,
+        }
