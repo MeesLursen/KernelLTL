@@ -33,7 +33,7 @@ def main():
 
     reinforce_weight = 0.3
     reinforce_baseline_momentum = 0.9
-    reinforce_reward_clip = 1
+    reinforce_reward_clip = 1.0
         
     # Create output directory
     output_dir = "ltl_model_outputs"
@@ -98,6 +98,7 @@ def main():
         warmup_steps=math.ceil((len(train_dataset) / train_batch_size) * 0.2),
         weight_decay=0.01,
         logging_dir=f"{output_dir}/logs",
+        logging_strategy="steps",
         logging_steps=500,
         eval_strategy="steps",
         save_strategy="steps",

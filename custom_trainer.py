@@ -113,6 +113,8 @@ class HybridTrainer(Trainer):
                 log_payload["loss_ce"] = ce_term.detach().item()
             if reinforce_term is not None:
                 log_payload["loss_reinforce"] = reinforce_term.detach().item()
+            else:
+                log_payload["loss_reinforce"] = 'None'
             if self._last_reward_mean is not None:
                 log_payload["reward_mean"] = self._last_reward_mean
             if self._last_reward_std is not None:
@@ -134,6 +136,7 @@ class HybridTrainer(Trainer):
         target_token_ids: torch.Tensor | None = None,
     ) -> torch.Tensor | None:
         if semantic_embeddings is None or semantic_embeddings.ndim < 2:
+            print("[HybridTrainer] RL: semantic_embeddings invalid -> returning None")
             return None
 
         generation_max_length = max(1, int(generation_max_length))
@@ -161,12 +164,14 @@ class HybridTrainer(Trainer):
 
         try:
             generation = model.generate(**generate_kwargs)
-        except Exception:
+        except Exception as e:
+            print("[HybridTrainer] RL: model.generate failed:", repr(e))
             return None
 
         sequences = getattr(generation, "sequences", None)
         scores = getattr(generation, "scores", None)
         if sequences is None or scores is None or len(scores) == 0:
+            print("[HybridTrainer] RL: empty sequences/scores -> returning None")
             return None
 
         if isinstance(scores, tuple):
@@ -198,7 +203,8 @@ class HybridTrainer(Trainer):
             generated_strings = self.formula_tokenizer.batch_decode(
                 generated_tokens_cpu, skip_special_tokens=True
             )
-        except Exception:
+        except Exception as e:
+            print("[HybridTrainer] RL: batch_decode failed:", repr(e))
             return None
 
         target_strings: list[str] | None = None
