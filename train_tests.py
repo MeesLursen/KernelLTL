@@ -59,7 +59,7 @@ def main():
     train_dataset = LTLDataset()
     train_dataset.construct_dataset_from_kernel(
         kernel=kernel,
-        k=78000,  # adjust dataset size as needed
+        k=10000,  # adjust dataset size as needed
         p_leaf=0.45,
         max_depth=2,
         batch_size=10240
@@ -99,7 +99,7 @@ def main():
         weight_decay=0.01,
         logging_dir=f"{output_dir}/logs",
         logging_strategy="steps",
-        logging_steps=500,
+        logging_steps=200,
         eval_strategy="steps",
         save_strategy="steps",
         save_steps=0.2,
