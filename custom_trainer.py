@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 import math
 from transformers import Trainer
+from transformers.generation.utils import GenerationMixin
 
 from formula_utils import str_to_formula
 from kernel_class import LTLKernel
