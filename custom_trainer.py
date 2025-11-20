@@ -74,19 +74,19 @@ class HybridTrainer(Trainer):
             semantic_embeddings = inputs.get("semantic_embeddings")
             target_token_ids = inputs.get("labels")
             if semantic_embeddings is not None:
-                max_length = None
+                generation_max_length = None
                 if attention_mask is not None:
-                    max_length = int(attention_mask.size(-1))
+                    generation_max_length = int(attention_mask.size(-1))
                 elif hasattr(model, "config") and getattr(model.config, "n_positions", None):
-                    max_length = int(getattr(model.config, "n_positions"))
-                if max_length is None:
-                    max_length = 32
+                    generation_max_length = int(getattr(model.config, "n_positions"))
+                if generation_max_length is None:
+                    generation_max_length = 32
 
                 reinforce_term = self._compute_reinforce_term(
                     model=model,
                     semantic_embeddings=semantic_embeddings,
                     target_token_ids=target_token_ids,
-                    generation_max_length=max_length,
+                    generation_max_length=generation_max_length,
                 )
 
         # ----------- Combine losses -----------
@@ -126,16 +126,19 @@ class HybridTrainer(Trainer):
             if (
                 model.training
                 and effective_weight > 0.0
-                and ce_term is not None
-                and reinforce_term is not None
-                and ce_term.requires_grad
-                and reinforce_term.requires_grad
+                and generation_max_length is not None
             ):
-                grad_metrics = self._compute_gradient_alignment_metrics(
-                    ce_loss=ce_term,
-                    reinforce_loss=reinforce_term,
+                rerun_ce, rerun_reinforce = self._rerun_losses_for_logging(
                     model=model,
+                    inputs=inputs,
+                    generation_max_length=generation_max_length,
                 )
+                if rerun_ce is not None and rerun_reinforce is not None:
+                    grad_metrics = self._compute_gradient_alignment_metrics(
+                        ce_loss=rerun_ce,
+                        reinforce_loss=rerun_reinforce,
+                        model=model,
+                    )
             if grad_metrics:
                 log_payload.update(grad_metrics)
             self.log(log_payload)
@@ -323,6 +326,49 @@ class HybridTrainer(Trainer):
             return None
         return reinforce_loss
     
+    def _rerun_losses_for_logging(self, *, model, inputs, generation_max_length: int | None):
+        if generation_max_length is None:
+            return None, None
+
+        cloned_inputs: dict[str, object] = {}
+        for key, value in inputs.items():
+            if isinstance(value, torch.Tensor):
+                cloned_inputs[key] = value.detach().clone()
+            else:
+                cloned_inputs[key] = value
+
+        rerun_inputs = self._prepare_inputs(cloned_inputs)
+        semantic_embeddings = rerun_inputs.get("semantic_embeddings")
+        if semantic_embeddings is None:
+            return None, None
+
+        target_token_ids = rerun_inputs.get("labels")
+
+        was_training = model.training
+        if not was_training:
+            model.train()
+
+        try:
+            with torch.enable_grad():
+                outputs = model(**rerun_inputs)
+                ce_loss = outputs.loss if hasattr(outputs, "loss") and outputs.loss is not None else outputs[0]
+                reinforce_loss = self._compute_reinforce_term(
+                    model=model,
+                    semantic_embeddings=semantic_embeddings,
+                    target_token_ids=target_token_ids,
+                    generation_max_length=generation_max_length,
+                )
+        except Exception as e:
+            print(f"[HybridTrainer] Gradient logging rerun failed: {e!r}")
+            return None, None
+        finally:
+            if not was_training:
+                model.eval()
+
+        if ce_loss is None or reinforce_loss is None:
+            return None, None
+
+        return ce_loss, reinforce_loss
 
     def _compute_gradient_alignment_metrics(self, *, ce_loss, reinforce_loss, model):
         params = [p for p in model.parameters() if p.requires_grad]
