@@ -435,7 +435,7 @@ class HybridTrainer(Trainer):
         if not require_grad:
             return gen_model.generate(**generate_kwargs)
 
-        raw_generate = getattr(gen_model.generate, "__wrapped__", None)
+        raw_generate = getattr(GenerationMixin.generate, "__wrapped__", None)
         if raw_generate is None:
             raise RuntimeError(
                 "[HybridTrainer] Cannot run generate with gradients because __wrapped__ is unavailable."
