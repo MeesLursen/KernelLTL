@@ -3,7 +3,6 @@ from __future__ import annotations
 import torch
 import math
 from transformers import Trainer
-from transformers.generation.utils import GenerationMixin
 
 from formula_utils import str_to_formula
 from kernel_class import LTLKernel
@@ -71,26 +70,31 @@ class HybridTrainer(Trainer):
                 effective_weight = self.reinforce_weight * alpha
 
         # ----------- REINFORCE loss -----------
-        reinforce_term = None
-        if effective_weight > 0.0:
-            attention_mask = inputs.get("attention_mask")
-            semantic_embeddings = inputs.get("semantic_embeddings")
-            target_token_ids = inputs.get("labels")
-            if semantic_embeddings is not None:
-                generation_max_length = None
-                if attention_mask is not None:
-                    generation_max_length = int(attention_mask.size(-1))
-                elif hasattr(model, "config") and getattr(model.config, "n_positions", None):
-                    generation_max_length = int(getattr(model.config, "n_positions"))
-                if generation_max_length is None:
-                    generation_max_length = 32
+        attention_mask = inputs.get("attention_mask")
+        semantic_embeddings = inputs.get("semantic_embeddings")
+        target_token_ids = inputs.get("labels")
+        generation_max_length: int | None = None
+        if semantic_embeddings is not None:
+            if attention_mask is not None:
+                generation_max_length = int(attention_mask.size(-1))
+            elif hasattr(model, "config") and getattr(model.config, "n_positions", None):
+                generation_max_length = int(getattr(model.config, "n_positions"))
+            else:
+                generation_max_length = 32
 
-                reinforce_term = self._compute_reinforce_term(
-                    model=model,
-                    semantic_embeddings=semantic_embeddings,
-                    target_token_ids=target_token_ids,
-                    generation_max_length=generation_max_length,
-                )
+        reinforce_term = None
+        if (
+            effective_weight > 0.0
+            and semantic_embeddings is not None
+            and generation_max_length is not None
+        ):
+            reinforce_term = self._compute_reinforce_term(
+                model=model,
+                semantic_embeddings=semantic_embeddings,
+                target_token_ids=target_token_ids,
+                generation_max_length=generation_max_length,
+                require_grad=model.training,
+            )
 
         # ----------- Combine losses -----------
         if reinforce_term is None or effective_weight <= 0.0:
@@ -129,19 +133,16 @@ class HybridTrainer(Trainer):
             if (
                 model.training
                 and effective_weight > 0.0
-                and generation_max_length is not None
+                and ce_term is not None
+                and reinforce_term is not None
+                and ce_term.requires_grad
+                and reinforce_term.requires_grad
             ):
-                rerun_ce, rerun_reinforce = self._rerun_losses_for_logging(
+                grad_metrics = self._compute_gradient_alignment_metrics(
+                    ce_loss=ce_term,
+                    reinforce_loss=reinforce_term,
                     model=model,
-                    inputs=inputs,
-                    generation_max_length=generation_max_length,
                 )
-                if rerun_ce is not None and rerun_reinforce is not None:
-                    grad_metrics = self._compute_gradient_alignment_metrics(
-                        ce_loss=rerun_ce,
-                        reinforce_loss=rerun_reinforce,
-                        model=model,
-                    )
             if grad_metrics:
                 log_payload.update(grad_metrics)
             self.log(log_payload)
@@ -191,11 +192,7 @@ class HybridTrainer(Trainer):
         gen_model = model.module if hasattr(model, 'module') else model
 
         try:
-            generation = self._call_generate_with_optional_grad(
-                gen_model=gen_model,
-                generate_kwargs=generate_kwargs,
-                require_grad=require_grad,
-            )
+            generation = gen_model.generate(**generate_kwargs)
         except Exception as e:
             print("[HybridTrainer] RL: model.generate failed:", repr(e))
             return None
@@ -217,11 +214,21 @@ class HybridTrainer(Trainer):
             generated_tokens = generated_tokens[:, :total_steps]
 
         score_tensor = torch.stack(scores, dim=0).transpose(0, 1)  # (B, T, V)
-        log_probs = torch.log_softmax(score_tensor, dim=-1)
-        generated_tokens = generated_tokens.to(log_probs.device)
-        token_log_probs = log_probs.gather(
-            dim=-1, index=generated_tokens.unsqueeze(-1)
-        ).squeeze(-1)
+        generated_tokens = generated_tokens.to(score_tensor.device)
+        if require_grad:
+            token_log_probs = self._recompute_log_probs_with_grad(
+                model=model,
+                sequences=sequences,
+                generated_tokens=generated_tokens,
+                semantic_embeddings=semantic_embeddings,
+                prefix_len=prefix_len,
+                pad_id=pad_id,
+            )
+        else:
+            log_probs = torch.log_softmax(score_tensor, dim=-1)
+            token_log_probs = log_probs.gather(
+                dim=-1, index=generated_tokens.unsqueeze(-1)
+            ).squeeze(-1)
 
         if pad_id is not None:
             gen_mask = (generated_tokens != pad_id).to(log_probs.dtype)
@@ -333,53 +340,38 @@ class HybridTrainer(Trainer):
             print("  seq_log_prob:", seq_log_prob) # WIP: Run and test this 
             return None
         return reinforce_loss
-    
 
 
-    def _rerun_losses_for_logging(self, *, model, inputs, generation_max_length: int | None):
-        if generation_max_length is None:
-            return None, None
 
-        cloned_inputs: dict[str, object] = {}
-        for key, value in inputs.items():
-            if isinstance(value, torch.Tensor):
-                cloned_inputs[key] = value.detach().clone()
-            else:
-                cloned_inputs[key] = value
+    def _recompute_log_probs_with_grad(
+        self,
+        *,
+        model,
+        sequences: torch.Tensor,
+        generated_tokens: torch.Tensor,
+        semantic_embeddings: torch.Tensor,
+        prefix_len: int,
+        pad_id: int | None,
+    ) -> torch.Tensor:
+        target_len = generated_tokens.size(-1)
+        teacher_inputs = sequences[:, : prefix_len + target_len].detach()
+        shifted_inputs = teacher_inputs[:, :-1]
 
-        rerun_inputs = self._prepare_inputs(cloned_inputs)
-        semantic_embeddings = rerun_inputs.get("semantic_embeddings")
-        if semantic_embeddings is None:
-            return None, None
+        with torch.enable_grad():
+            outputs = model(
+                input_ids=shifted_inputs,
+                semantic_embeddings=semantic_embeddings,
+            )
+            logits = outputs.logits[:, -target_len:, :]
+            log_probs = torch.log_softmax(logits, dim=-1)
+            gather_tokens = generated_tokens.unsqueeze(-1)
+            tf_log_probs = log_probs.gather(dim=-1, index=gather_tokens).squeeze(-1)
 
-        target_token_ids = rerun_inputs.get("labels")
+        if pad_id is not None:
+            mask = (generated_tokens != pad_id).to(tf_log_probs.dtype)
+            tf_log_probs = tf_log_probs * mask
 
-        was_training = model.training
-        if not was_training:
-            model.train()
-
-        try:
-            with torch.enable_grad():
-                outputs = model(**rerun_inputs)
-                ce_loss = outputs.loss if hasattr(outputs, "loss") and outputs.loss is not None else outputs[0]
-                reinforce_loss = self._compute_reinforce_term(
-                    model=model,
-                    semantic_embeddings=semantic_embeddings,
-                    target_token_ids=target_token_ids,
-                    generation_max_length=generation_max_length,
-                    require_grad=True,
-                )
-        except Exception as e:
-            print(f"[HybridTrainer] Gradient logging rerun failed: {e!r}")
-            return None, None
-        finally:
-            if not was_training:
-                model.eval()
-
-        if ce_loss is None or reinforce_loss is None:
-            return None, None
-
-        return ce_loss, reinforce_loss
+        return tf_log_probs
 
 
 
@@ -429,17 +421,3 @@ class HybridTrainer(Trainer):
             "grad_cosine_similarity": cosine,
             "grad_mag_similarity": mag_similarity,
         }
-    
-
-
-    def _call_generate_with_optional_grad(self, *, gen_model, generate_kwargs, require_grad: bool):
-        if not require_grad:
-            return gen_model.generate(**generate_kwargs)
-
-        raw_generate = getattr(GenerationMixin.generate, "__wrapped__", None)
-        if raw_generate is None:
-            raise RuntimeError(
-                "[HybridTrainer] Cannot run generate with gradients because __wrapped__ is unavailable."
-            )
-        with torch.enable_grad():
-            return raw_generate(gen_model, **generate_kwargs)
