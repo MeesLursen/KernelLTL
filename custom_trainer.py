@@ -230,10 +230,11 @@ class HybridTrainer(Trainer):
                 dim=-1, index=generated_tokens.unsqueeze(-1)
             ).squeeze(-1)
 
+        mask_dtype = token_log_probs.dtype
         if pad_id is not None:
-            gen_mask = (generated_tokens != pad_id).to(log_probs.dtype)
+            gen_mask = (generated_tokens != pad_id).to(mask_dtype)
         else:
-            gen_mask = torch.ones_like(generated_tokens, dtype=log_probs.dtype)
+            gen_mask = torch.ones_like(generated_tokens, dtype=mask_dtype)
         lengths = gen_mask.sum(dim=-1).clamp(min=1.0)
         seq_log_prob = (token_log_probs * gen_mask).sum(dim=-1) / lengths
 
