@@ -43,6 +43,8 @@ class HybridTrainer(Trainer):
         self.inspect = inspect
         self.inspect_sample_count = max(1, inspect_sample_count)
 
+
+
     def compute_loss(
         self,
         model,
@@ -156,6 +158,7 @@ class HybridTrainer(Trainer):
         semantic_embeddings: torch.Tensor,
         generation_max_length: int,
         target_token_ids: torch.Tensor | None = None,
+        require_grad: bool = False,
     ) -> torch.Tensor | None:
         if semantic_embeddings is None or semantic_embeddings.ndim < 2:
             print("[HybridTrainer] RL: semantic_embeddings invalid -> returning None")
@@ -187,7 +190,11 @@ class HybridTrainer(Trainer):
         gen_model = model.module if hasattr(model, 'module') else model
 
         try:
-            generation = gen_model.generate(**generate_kwargs)
+            generation = self._call_generate_with_optional_grad(
+                gen_model=gen_model,
+                generate_kwargs=generate_kwargs,
+                require_grad=require_grad,
+            )
         except Exception as e:
             print("[HybridTrainer] RL: model.generate failed:", repr(e))
             return None
@@ -326,6 +333,8 @@ class HybridTrainer(Trainer):
             return None
         return reinforce_loss
     
+
+
     def _rerun_losses_for_logging(self, *, model, inputs, generation_max_length: int | None):
         if generation_max_length is None:
             return None, None
@@ -357,6 +366,7 @@ class HybridTrainer(Trainer):
                     semantic_embeddings=semantic_embeddings,
                     target_token_ids=target_token_ids,
                     generation_max_length=generation_max_length,
+                    require_grad=True,
                 )
         except Exception as e:
             print(f"[HybridTrainer] Gradient logging rerun failed: {e!r}")
@@ -369,6 +379,8 @@ class HybridTrainer(Trainer):
             return None, None
 
         return ce_loss, reinforce_loss
+
+
 
     def _compute_gradient_alignment_metrics(self, *, ce_loss, reinforce_loss, model):
         params = [p for p in model.parameters() if p.requires_grad]
@@ -416,3 +428,17 @@ class HybridTrainer(Trainer):
             "grad_cosine_similarity": cosine,
             "grad_mag_similarity": mag_similarity,
         }
+    
+
+
+    def _call_generate_with_optional_grad(self, *, gen_model, generate_kwargs, require_grad: bool):
+        if not require_grad:
+            return gen_model.generate(**generate_kwargs)
+
+        raw_generate = getattr(gen_model.generate, "__wrapped__", None)
+        if raw_generate is None:
+            raise RuntimeError(
+                "[HybridTrainer] Cannot run generate with gradients because __wrapped__ is unavailable."
+            )
+        with torch.enable_grad():
+            return raw_generate(gen_model, **generate_kwargs)
