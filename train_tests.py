@@ -99,7 +99,7 @@ def main():
         weight_decay=0.01,
         logging_dir=f"{output_dir}/logs",
         logging_strategy="steps",
-        logging_steps=200,
+        logging_steps=100,
         eval_strategy="steps",
         save_strategy="steps",
         save_steps=0.2,
