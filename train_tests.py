@@ -125,7 +125,7 @@ def main():
     trainer = HybridTrainer(
         model=model,
         args=training_args,
-        data_collator=lambda batch : tokenizer.collate_batch(batch, model.config.n_positions),
+        data_collator=lambda batch : tokenizer.collate_batch(batch=batch, max_len=model.config.n_positions),
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
