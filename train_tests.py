@@ -17,7 +17,7 @@ def main():
         torch.cuda.set_device(local_rank)
 
     # Hyperparameters
-    num_epochs = 4
+    num_epochs = 10
 
     learning_rate = 5e-4
 
