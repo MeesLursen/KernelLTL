@@ -16,7 +16,7 @@ def main():
         torch.cuda.set_device(local_rank)
 
     # Hyperparameters
-    num_epochs = 50
+    num_epochs = 10
 
     learning_rate = 5e-4
 
@@ -38,7 +38,9 @@ def main():
     # Initialize kernel for semantic embeddings
     kernel = LTLKernel(T, AP, seed)  # adjust T and AP as needed
     N       = math.ceil((2 / eps**2) * math.log(2 * m / delta))
-    kernel.sample_traces_kernel(N)  # adjust N based on your needs
+    print(f'N = {N}')
+    kernel.sample_traces_kernel_correlated(N,0.3)  # adjust N based on your needs
+    print(f'Deduplicated N = {kernel.traces.size(dim=0)}')
     #kernel.construct_anchor_formulas_kernel()  # m should match model's n_embd
     kernel.sample_anchor_formulas_kernel_cosine_controlled(m=m, batch_size=10240, max_attempts_per_formula=500)
     kernel.build_F(batch_size=10240)
