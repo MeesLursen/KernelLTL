@@ -1,6 +1,6 @@
 import torch
 from formula_class import eval_traces_batch, Formula, Atom, And, Next, Not
-from formula_utils import sample_traces, sample_formulas
+from formula_utils import sample_traces, sample_traces_correlated, sample_formulas
 
 class LTLKernel:
     def __init__(self, T: int, AP: int, seed: int | None = None):
@@ -51,6 +51,17 @@ class LTLKernel:
                                     trace_length=self.T,
                                     rng=self.rng,
                                     device=self.device)
+
+
+    def sample_traces_kernel_correlated(self, N: int, low_variance_ratio: float = 0.5, low_var_switch_prob: float = 0.1) -> torch.Tensor:
+        """Sample a mixture of low-variance and high-variance traces with automatic deduplication."""
+        self.traces = sample_traces_correlated(N,
+                                               n_ap=self.AP,
+                                               trace_length=self.T,
+                                               rng=self.rng,
+                                               device=self.device,
+                                               low_variance_ratio=low_variance_ratio,
+                                               low_var_switch_prob=low_var_switch_prob)
 
 
 

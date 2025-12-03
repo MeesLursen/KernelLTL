@@ -107,6 +107,63 @@ def sample_traces(n_traces: int, n_ap:int, trace_length:int, rng: torch.Generato
     return traces
 
 
+def sample_traces_correlated(n_traces: int,
+                             n_ap: int,
+                             trace_length: int,
+                             rng: torch.Generator,
+                             device: str,
+                             low_variance_ratio: float = 0.5,
+                             low_var_switch_prob: float = 0.1) -> torch.Tensor:
+    """Sample traces from a mixture of high-variance Bernoulli and low-variance correlated processes.
+
+    Args:
+        n_traces: Number of *additional* random traces (excluding the added all-zero/all-one baselines).
+        n_ap: Number of atomic propositions per trace.
+        trace_length: Length of each trace.
+        rng: Torch RNG for reproducibility.
+        device: Target device for the returned tensor.
+        low_variance_ratio: Fraction of traces generated with strong temporal correlation (in [0,1]).
+        low_var_switch_prob: Probability of flipping a proposition at each time-step for the correlated traces.
+
+    Returns:
+        Tensor of unique traces with shape (<= n_traces + 2, n_ap, trace_length).
+    """
+
+    n_low = int(round(low_variance_ratio * n_traces))
+    n_high = max(0, n_traces - n_low)
+
+    def _sample_low_variance(count: int) -> torch.Tensor:
+        if count == 0:
+            return torch.empty((0, n_ap, trace_length), dtype=torch.bool, device=device)
+
+        traces = torch.empty((count, n_ap, trace_length), dtype=torch.bool, device=device)
+        current = torch.randint(0, 2, (count, n_ap), generator=rng, dtype=torch.bool, device=device)
+        traces[:, :, 0] = current
+
+        for t in range(1, trace_length):
+            flip_mask = torch.rand((count, n_ap), generator=rng, device=device) < low_var_switch_prob
+            current = torch.where(flip_mask, torch.logical_not(current), current)
+            traces[:, :, t] = current
+
+        return traces
+
+    def _sample_high_variance(count: int) -> torch.Tensor:
+        if count == 0:
+            return torch.empty((0, n_ap, trace_length), dtype=torch.bool, device=device)
+        return torch.randint(0, 2, (count, n_ap, trace_length), generator=rng, dtype=torch.bool, device=device)
+
+    baseline_zeros = torch.zeros((1, n_ap, trace_length), dtype=torch.bool, device=device)
+    baseline_ones = torch.ones((1, n_ap, trace_length), dtype=torch.bool, device=device)
+    low_variance_traces = _sample_low_variance(n_low)
+    high_variance_traces = _sample_high_variance(n_high)
+
+    traces = torch.cat((baseline_zeros, baseline_ones, low_variance_traces, high_variance_traces), dim=0)
+    flat = traces.reshape(traces.size(0), -1)
+    unique_flat = torch.unique(flat, dim=0)
+    unique_traces = unique_flat.reshape(-1, n_ap, trace_length)
+    return unique_traces
+
+
 
 # ------------------------- formula string parser -------------------------
 # helper functions
