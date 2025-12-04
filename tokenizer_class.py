@@ -134,8 +134,9 @@ class LTLTokenizer:
                       max_len: int,
                       include_metadata: bool = False):
 
-        # DEBUG: inspect first element structure
-        print("DEBUG collate_batch: sample[0] =", batch[0], "type:", type(batch[0]))
+        print("DEBUG collate_batch: batch size =", len(batch))
+        for i, sample in enumerate(batch):
+            print(f"DEBUG collate_batch: sample[{i}] keys={list(sample.keys())}")
 
         input_embeddings = []
         labels = []
