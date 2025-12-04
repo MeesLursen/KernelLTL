@@ -139,7 +139,7 @@ class LTLKernel:
         if self.traces is None:
             raise ValueError('Please sample traces before calling sample_anchor_formulas_kernel2 so cosine similarity can be computed.')
 
-        similarity_threshold = 0.8
+        similarity_threshold = 0.7
         time_index = 0
 
         if time_index < 0 or time_index >= self.T:
