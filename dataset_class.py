@@ -5,9 +5,42 @@ from kernel_class import LTLKernel
 
 class LTLDataset(Dataset):
 
-    def __init__(self):
+    def __init__(self,
+                 store_formula_str: bool = False,
+                 store_satisfaction: bool = False,
+                 satisfaction_batch_size: int = 512,
+                 satisfaction_time_index: int = 0):
+        self.store_formula_str = store_formula_str
+        self.store_satisfaction = store_satisfaction
+        self.satisfaction_batch_size = satisfaction_batch_size
+        self.satisfaction_time_index = satisfaction_time_index
+
+        self._reset_storage()
+
+
+    def _reset_storage(self):
         self.formulas: list[Formula] = []
         self.embeddings: list[torch.Tensor] = []
+        self.formula_strs: list[str] | None = [] if self.store_formula_str else None
+        self.satisfactions: list[torch.Tensor] | None = [] if self.store_satisfaction else None
+
+
+    def _append_entry(self,
+                      formula: Formula,
+                      embedding: torch.Tensor,
+                      satisfaction: torch.Tensor | None):
+        self.formulas.append(formula)
+        self.embeddings.append(embedding.to(dtype=torch.float32, device='cpu'))
+
+        if self.store_formula_str and self.formula_strs is not None:
+            self.formula_strs.append(str(formula))
+
+        if self.store_satisfaction:
+            if satisfaction is None:
+                raise ValueError("Satisfaction vector is required when store_satisfaction=True")
+            if self.satisfactions is None:
+                self.satisfactions = []
+            self.satisfactions.append(satisfaction.to(dtype=torch.bool, device='cpu'))
 
 
 
@@ -22,11 +55,17 @@ class LTLDataset(Dataset):
         """
         
         dataset_formulas = kernel.sample_dataset_formulas_kernel(k=k, p_leaf=p_leaf, max_depth=max_depth, force_tree=True)
-        self.formulas = dataset_formulas
-        
+        self._reset_storage()
+
         for phi in dataset_formulas:
-            emb = kernel.compute_formula_embedding(phi, batch_size=batch_size)
-            self.embeddings.append(emb)
+            phi_sats = kernel._evaluate_formula_on_traces(
+                formula=phi,
+                batch_size=self.satisfaction_batch_size if self.store_satisfaction else batch_size,
+                time_index=self.satisfaction_time_index
+            )
+            emb = kernel.compute_embedding_from_satisfaction(phi_sats, move_to_cpu=True)
+            sats_to_store = phi_sats.clone().to('cpu') if self.store_satisfaction else None
+            self._append_entry(phi, emb, sats_to_store)
     
 
 
@@ -41,14 +80,20 @@ class LTLDataset(Dataset):
         """
         
         dataset_formulas = kernel.sample_dataset_formulas_kernel(k=k, p_leaf=p_leaf, max_depth=max_depth, force_tree=True)
+        unique_formulas = list(dict.fromkeys(dataset_formulas))
+        self._reset_storage()
 
-        self.formulas = list(set(dataset_formulas))
-
-        print(f'The deduplicated dataset contains {len(self.formulas)} many formulae.')
+        print(f'The deduplicated dataset contains {len(unique_formulas)} many formulae.')
         
-        for phi in dataset_formulas:
-            emb = kernel.compute_formula_embedding(phi, batch_size=batch_size)
-            self.embeddings.append(emb)
+        for phi in unique_formulas:
+            phi_sats = kernel._evaluate_formula_on_traces(
+                formula=phi,
+                batch_size=self.satisfaction_batch_size if self.store_satisfaction else batch_size,
+                time_index=self.satisfaction_time_index
+            )
+            emb = kernel.compute_embedding_from_satisfaction(phi_sats, move_to_cpu=True)
+            sats_to_store = phi_sats.clone().to('cpu') if self.store_satisfaction else None
+            self._append_entry(phi, emb, sats_to_store)
     
 
 
@@ -58,11 +103,17 @@ class LTLDataset(Dataset):
         - kernel: the kernel we want to use for computing embeddings of the input formulae.
         - batch_size: (Default = 512) the size of the batches used during evaluation of the formulae, adjustable for memory management.
         """
-        self.formulas = input_formula_list
+        self._reset_storage()
 
         for phi in input_formula_list:
-            emb = kernel.compute_formula_embedding(phi, batch_size=batch_size)
-            self.embeddings.append(emb)
+            phi_sats = kernel._evaluate_formula_on_traces(
+                formula=phi,
+                batch_size=self.satisfaction_batch_size if self.store_satisfaction else batch_size,
+                time_index=self.satisfaction_time_index
+            )
+            emb = kernel.compute_embedding_from_satisfaction(phi_sats, move_to_cpu=True)
+            sats_to_store = phi_sats.clone().to('cpu') if self.store_satisfaction else None
+            self._append_entry(phi, emb, sats_to_store)
 
 
     
@@ -73,4 +124,15 @@ class LTLDataset(Dataset):
 
     def __getitem__(self, idx):
         # returns CPU tensors/strings only
-        return self.formulas[idx], self.embeddings[idx]
+        item = {
+            "formula": self.formulas[idx],
+            "embedding": self.embeddings[idx]
+        }
+
+        if self.store_formula_str and self.formula_strs is not None:
+            item["formula_str"] = self.formula_strs[idx]
+
+        if self.store_satisfaction and self.satisfactions is not None:
+            item["satisfaction"] = self.satisfactions[idx]
+
+        return item

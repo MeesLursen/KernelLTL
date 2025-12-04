@@ -130,17 +130,32 @@ class LTLTokenizer:
 
 
     def collate_batch(self, 
-                      batch: list[tuple[Formula, torch.Tensor]],
-                      max_len: int):
+                      batch: list[dict[str, torch.Tensor | Formula | str]],
+                      max_len: int,
+                      include_metadata: bool = False):
 
         input_embeddings = []
         labels = []
+        formulas: list[Formula] = []
+        formula_strs: list[str] = []
+        satisfactions: list[torch.Tensor] = []
 
-        for formula, emb in batch:
-            s = str(formula)
-            ids = torch.tensor(self.encode(s, max_length=max_len), dtype=torch.long)
+        for sample in batch:
+            formula: Formula = sample["formula"]
+            emb: torch.Tensor = sample["embedding"]
+
+            text = sample.get("formula_str")
+            if text is None:
+                text = str(formula)
+
+            ids = torch.tensor(self.encode(text, max_length=max_len), dtype=torch.long)
             labels.append(ids)
             input_embeddings.append(emb)
+            formulas.append(formula)
+            formula_strs.append(text)
+
+            if include_metadata and "satisfaction" in sample:
+                satisfactions.append(sample["satisfaction"])
 
         labels = pad_sequence(labels, batch_first=True, padding_value=self.pad_token_id)  # (B, L)
         attention_mask = (labels != self.pad_token_id).long()
@@ -150,9 +165,18 @@ class LTLTokenizer:
 
         encoder_embs = torch.stack(input_embeddings, dim=0).to(dtype=torch.float32)  # (B, m)
 
-        return {
+        batch_dict: dict[str, torch.Tensor | list[str] | list[Formula]] = {
             "labels": loss_labels,
             "input_ids": labels,
             "attention_mask": attention_mask,
             "semantic_embeddings": encoder_embs
-        } 
+        }
+
+        if include_metadata:
+            batch_dict["target_formulas"] = formulas
+            batch_dict["target_formula_strs"] = formula_strs
+            if len(satisfactions) != len(batch):
+                raise ValueError("include_metadata=True but some samples lack 'satisfaction'")
+            batch_dict["target_satisfaction"] = torch.stack(satisfactions, dim=0)
+
+        return batch_dict

@@ -270,7 +270,8 @@ class HybridTrainer(Trainer):
                 target_vec = target_emb.detach()
                 try:
                     generated_formula = str_to_formula(generated_str)
-                    generated_vec = self.kernel.compute_formula_embedding_no_move(generated_formula)
+                    generated_sats = self.kernel._evaluate_formula_on_traces(generated_formula, 10240, 0)
+                    generated_vec = self.kernel.compute_embedding_from_satisfaction(generated_formula)
                     generated_vec = generated_vec.to(device=device, dtype=torch.float32, non_blocking=True)
                     target_vec = target_vec.to(device=device, dtype=torch.float32, non_blocking=True)
                     diff = generated_vec - target_vec

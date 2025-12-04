@@ -58,7 +58,10 @@ def main():
         batch_size=10240
     )
     
-    eval_dataset = LTLDataset()
+    eval_dataset = LTLDataset(store_formula_str=True,
+                              store_satisfaction=True,
+                              satisfaction_batch_size=10240,
+                              satisfaction_time_index=0)
     eval_dataset.construct_dataset_from_kernel(
         kernel=kernel,
         k=1000,  # smaller validation set
@@ -110,7 +113,9 @@ def main():
     semantic_callback = SemanticEvaluationCallback(
         kernel=kernel,
         tokenizer=tokenizer,
-        eval_dataset=eval_dataset
+        eval_dataset=eval_dataset,
+        kernel_eval_batch_size=10240,
+        kernel_time_index=0
     )
     
     # Create trainer

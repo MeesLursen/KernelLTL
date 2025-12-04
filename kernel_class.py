@@ -245,6 +245,27 @@ class LTLKernel:
         return sats
 
 
+    def _compute_embedding_from_sats(self, phi_sats: torch.Tensor, move_to_cpu: bool) -> torch.Tensor:
+        if self.F is None:
+            raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
+        if self.traces is None:
+            raise ValueError('Please sample traces before computing embeddings.')
+
+        N = self.traces.size(dim=0)
+        phi_vals = phi_sats.to(device=self.device, dtype=torch.float32)
+        phi_centered = phi_vals - phi_vals.mean()
+        F_centered = self.F - self.F.mean(dim=1, keepdim=True)
+        emb = (F_centered @ phi_centered) / float(N)
+
+        if move_to_cpu and self.device in ('cuda', 'mps'):
+            emb = emb.cpu()
+            if self.device == 'cuda':
+                torch.cuda.empty_cache()
+            else:
+                torch.mps.empty_cache()
+        return emb
+
+
 
     # ----------- Embedding Computation -----------
     def compute_formula_embedding(self, formula: Formula, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
@@ -256,30 +277,8 @@ class LTLKernel:
         Returns:
             - emb: Tensor (m), the embedding of formula, where m = len(self.anchor_formulas) the number of anchor formulae.
         """ 
-        if self.F is None:
-            raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
-
-        N = self.traces.size(dim=0)
-        
-        phi_sats = self._evaluate_formula_on_traces(formula=formula,batch_size=batch_size,time_index=time_index)
-
-        phi_vals = torch.where(phi_sats,
-                               torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                               torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
-            
-        phi_centered = phi_vals - phi_vals.mean()
-        F_centered = self.F - self.F.mean(dim=1, keepdim=True)
-
-        emb = (F_centered @ phi_centered) / float(N)
-
-        if self.device == 'cuda':
-            emb = emb.cpu()
-            torch.cuda.empty_cache()
-        elif self.device == 'mps':
-            emb = emb.cpu() 
-            torch.mps.empty_cache()
-        
-        return emb
+        phi_sats = self._evaluate_formula_on_traces(formula=formula, batch_size=batch_size, time_index=time_index)
+        return self._compute_embedding_from_sats(phi_sats, move_to_cpu=True)
     
 
 
@@ -292,23 +291,13 @@ class LTLKernel:
         Returns:
             - emb: Tensor (m), the embedding of formula, where m = len(self.anchor_formulas) the number of anchor formulae.
         """ 
-        if self.F is None:
-            raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
+        phi_sats = self._evaluate_formula_on_traces(formula=formula, batch_size=batch_size, time_index=time_index)
+        return self._compute_embedding_from_sats(phi_sats, move_to_cpu=False)
 
-        N = self.traces.size(dim=0)
-        
-        phi_sats = self._evaluate_formula_on_traces(formula=formula,batch_size=batch_size,time_index=time_index)
 
-        phi_vals = torch.where(phi_sats,
-                               torch.tensor(1.0, dtype=torch.float32, device=self.device),
-                               torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
-            
-        phi_centered = phi_vals - phi_vals.mean()
-        F_centered = self.F - self.F.mean(dim=1, keepdim=True)
-
-        emb = (F_centered @ phi_centered) / float(N)
-
-        return emb
+    def compute_embedding_from_satisfaction(self, phi_sats: torch.Tensor, move_to_cpu: bool = False) -> torch.Tensor:
+        """Compute the kernel embedding directly from a boolean satisfaction vector."""
+        return self._compute_embedding_from_sats(phi_sats, move_to_cpu=move_to_cpu)
 
 
 

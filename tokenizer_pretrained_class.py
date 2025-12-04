@@ -201,8 +201,8 @@ class LTLTokenizer(PreTrainedTokenizer):
     # ---------------------------------------------------------------------
     # Collation helpers (delegated to the existing implementation)
     # ---------------------------------------------------------------------
-    def collate_batch(self, batch: list[tuple[Formula, torch.Tensor]], max_len: int):
-        return self._legacy.collate_batch(batch, max_len=max_len)
+    def collate_batch(self, batch: list[dict[str, torch.Tensor | Formula | str]], max_len: int, include_metadata: bool = False):
+        return self._legacy.collate_batch(batch, max_len=max_len, include_metadata=include_metadata)
 
     # ---------------------------------------------------------------------
     # Convenience constructors

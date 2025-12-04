@@ -83,11 +83,11 @@ def main() -> None:
 	print()
 
 	print("=== Collate helper ===")
-	# Fake embeddings to mimic dataset output ((Formula, semantic_embedding))
+	# Fake embeddings to mimic dataset output ({"formula": Formula, "embedding": semantic_embedding})
 	embedding_dim = 1024
 	max_sequence_length = max(len(case) for case in encoded_cases)
 	dummy_batch = [
-		(formulas[i], torch.randn(embedding_dim))
+		{"formula": formulas[i], "embedding": torch.randn(embedding_dim)}
 		for i in range(len(formulas))
 	]
 	collated = tokenizer.collate_batch(dummy_batch, max_len=max_sequence_length)

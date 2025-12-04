@@ -1,7 +1,6 @@
 import torch
 from torch.utils.data import DataLoader
 from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
-from formula_class import Formula
 from formula_utils import str_to_formula
 from kernel_class import LTLKernel
 from tokenizer_pretrained_class import LTLTokenizer
@@ -16,7 +15,9 @@ class SemanticEvaluationCallback(TrainerCallback):
     def __init__(self, 
                  kernel: LTLKernel,
                  tokenizer: LTLTokenizer,
-                 eval_dataset):
+                 eval_dataset,
+                 kernel_eval_batch_size: int = 512,
+                 kernel_time_index: int = 0):
         """
         Args:
             kernel: LTLKernel instance for computing semantic embeddings
@@ -25,6 +26,8 @@ class SemanticEvaluationCallback(TrainerCallback):
         self.kernel = kernel
         self.tokenizer: LTLTokenizer = tokenizer
         self.eval_dataset = eval_dataset
+        self.kernel_eval_batch_size = kernel_eval_batch_size
+        self.kernel_time_index = kernel_time_index
         
         # metrics history
         self.epochs: list[int] = []
@@ -51,7 +54,7 @@ class SemanticEvaluationCallback(TrainerCallback):
             eval_dataset,
             batch_size=args.per_device_eval_batch_size,
             num_workers=args.dataloader_num_workers,
-            collate_fn=lambda batch : self.tokenizer.collate_batch(batch, model.config.n_positions),
+            collate_fn=lambda batch : self.tokenizer.collate_batch(batch, model.config.n_positions, include_metadata=True),
             pin_memory=args.dataloader_pin_memory,
             shuffle=False
         )
@@ -69,11 +72,22 @@ class SemanticEvaluationCallback(TrainerCallback):
                 input_ids = batch['input_ids'] 
                 target_embeddings = batch['semantic_embeddings'].to(model.device, non_blocking=True)
                 attention_mask = batch['attention_mask']
+                target_formulas = batch.get('target_formulas')
+                target_formula_strs = batch.get('target_formula_strs')
+                target_satisfaction = batch.get('target_satisfaction')
+                if target_satisfaction is not None:
+                    target_satisfaction = target_satisfaction.to(self.kernel.device)
                 
-                target_strs = []
-                for ids, mask in zip(input_ids, attention_mask):
-                    valid_ids = ids[mask.bool()].tolist()
-                    target_strs.append(self.tokenizer.decode(valid_ids, skip_special_tokens=True))
+                if target_formula_strs is not None:
+                    target_strs = target_formula_strs
+                else:
+                    target_strs = []
+                    for ids, mask in zip(input_ids, attention_mask):
+                        valid_ids = ids[mask.bool()].tolist()
+                        target_strs.append(self.tokenizer.decode(valid_ids, skip_special_tokens=True))
+
+                if target_formulas is None:
+                    target_formulas = [str_to_formula(s) for s in target_strs]
 
                 batch_size = target_embeddings.size(0)
                 total_samples += batch_size
@@ -92,16 +106,27 @@ class SemanticEvaluationCallback(TrainerCallback):
                 for i in range(batch_size):
                     generated_str = generated_strs[i]
                     target_str = target_strs[i]
-                    target_formula = str_to_formula(target_str)
-                    target_embedding = target_embeddings[i]
+                    target_formula = target_formulas[i]
+                    if target_satisfaction is not None:
+                        target_sats = target_satisfaction[i]
+                    else:
+                        target_sats = self.kernel._evaluate_formula_on_traces(
+                            formula=target_formula,
+                            batch_size=self.kernel_eval_batch_size,
+                            time_index=self.kernel_time_index
+                        )
 
                     try:
                         generated_formula = str_to_formula(generated_str)
-                        generated_embedding = self.kernel.compute_formula_embedding_no_move(formula = generated_formula)
-                        
-                        # Cosine similarity as distance
-                        distance = 1 - torch.nn.functional.cosine_similarity(target_embedding, generated_embedding, dim=0)
-                        total_distance += distance.item()
+                        generated_sats = self.kernel._evaluate_formula_on_traces(
+                            formula=generated_formula,
+                            batch_size=self.kernel_eval_batch_size,
+                            time_index=self.kernel_time_index
+                        )
+
+                        xor = torch.logical_xor(target_sats, generated_sats)
+                        distance = xor.to(dtype=torch.float32).mean().item()
+                        total_distance += distance
                         
                         if str(generated_formula) == str(target_formula):
                             exact_matches += 1
