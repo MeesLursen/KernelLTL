@@ -128,7 +128,7 @@ def main():
         data_collator=lambda batch : tokenizer.collate_batch(batch, model.config.n_positions),
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        processing_class=tokenizer,
+        #processing_class=tokenizer,
         callbacks=[semantic_callback]
     )
     
