@@ -57,6 +57,9 @@ def main():
         max_depth=2,
         batch_size=10240
     )
+
+    print("train_dataset type:", type(train_dataset))
+    print("sample[0]:", train_dataset[0])
     
     eval_dataset = LTLDataset(store_formula_str=True,
                               store_satisfaction=True,

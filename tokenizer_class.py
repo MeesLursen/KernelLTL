@@ -140,7 +140,9 @@ class LTLTokenizer:
         formula_strs: list[str] = []
         satisfactions: list[torch.Tensor] = []
 
-        for sample in batch:
+        for i, sample in enumerate(batch):
+            if "formula" not in sample:
+                raise KeyError(f"batch[{i}] has no 'formula' key; sample={sample!r}, type={type(sample)}")
             formula: Formula = sample["formula"]
             emb: torch.Tensor = sample["embedding"]
 
