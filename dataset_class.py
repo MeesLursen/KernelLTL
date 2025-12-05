@@ -123,10 +123,6 @@ class LTLDataset(Dataset):
 
 
     def __getitem__(self, idx):
-        print(f"DEBUG __getitem__ called with idx={idx}")
-        if idx < 0 or idx >= len(self.formulas):
-            raise IndexError(f"LTLDataset index out of range: {idx}")
-
         item = {
             "formula": self.formulas[idx],
             "embedding": self.embeddings[idx]
@@ -138,5 +134,4 @@ class LTLDataset(Dataset):
         if self.store_satisfaction and self.satisfactions is not None:
             item["satisfaction"] = self.satisfactions[idx]
 
-        print(f"DEBUG __getitem__ returning keys={list(item.keys())}")
         return item

@@ -134,19 +134,13 @@ class LTLTokenizer:
                       max_len: int,
                       include_metadata: bool = False):
 
-        print("DEBUG collate_batch: batch size =", len(batch))
-        for i, sample in enumerate(batch):
-            print(f"DEBUG collate_batch: sample[{i}] keys={list(sample.keys())}")
-
         input_embeddings = []
         labels = []
         formulas: list[Formula] = []
         formula_strs: list[str] = []
         satisfactions: list[torch.Tensor] = []
 
-        for i, sample in enumerate(batch):
-            if "formula" not in sample:
-                raise KeyError(f"batch[{i}] has no 'formula' key; sample={sample!r}, type={type(sample)}")
+        for sample in batch:
             formula: Formula = sample["formula"]
             emb: torch.Tensor = sample["embedding"]
 
