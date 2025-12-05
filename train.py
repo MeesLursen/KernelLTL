@@ -57,9 +57,6 @@ def main():
         max_depth=2,
         batch_size=10240
     )
-
-    print("train_dataset type:", type(train_dataset))
-    print("sample[0]:", train_dataset[0])
     
     eval_dataset = LTLDataset(store_formula_str=True,
                               store_satisfaction=True,
@@ -107,6 +104,7 @@ def main():
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         dataloader_num_workers=4,
+        remove_unused_columns=False,
         dataloader_pin_memory=True,
         report_to="none",
         ddp_find_unused_parameters=False
@@ -128,7 +126,7 @@ def main():
         data_collator=lambda batch : tokenizer.collate_batch(batch, model.config.n_positions),
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        #processing_class=tokenizer,
+        processing_class=tokenizer,
         callbacks=[semantic_callback]
     )
     
