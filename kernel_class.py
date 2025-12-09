@@ -1,6 +1,10 @@
+import json
+import os
+from typing import Any
+
 import torch
 from formula_class import eval_traces_batch, Formula, Atom, And, Next, Not
-from formula_utils import sample_traces, sample_traces_correlated, sample_formulas
+from formula_utils import sample_traces, sample_traces_correlated, sample_formulas, str_to_formula
 
 class LTLKernel:
     def __init__(self, T: int, AP: int, seed: int | None = None):
@@ -324,3 +328,93 @@ class LTLKernel:
                                  device=self.device)
 
         return sample
+
+
+
+    # ----------- Persistence -----------
+    def save(self, dirpath: str) -> None:
+        """Persist kernel hyperparameters, sampled structures and RNG state."""
+        os.makedirs(dirpath, exist_ok=True)
+
+        metadata: dict[str, Any] = {
+            "T": self.T,
+            "AP": self.AP,
+            "seed": self.seed,
+            "device": self.device,
+            "m": self.m,
+            "has_traces": self.traces is not None,
+            "has_F": self.F is not None,
+        }
+
+        metadata_path = os.path.join(dirpath, "metadata.json")
+        anchor_path = os.path.join(dirpath, "anchor_formulas.jsonl")
+        rng_state_path = os.path.join(dirpath, "rng_state.pt")
+
+        # Anchor formulas (one per line for readability)
+        with open(anchor_path, "w", encoding="utf-8") as fp:
+            for formula in self.anchor_formulas:
+                fp.write(str(formula) + "\n")
+        metadata["anchor_formula_count"] = len(self.anchor_formulas)
+
+        if self.traces is not None:
+            torch.save(self.traces.detach().to("cpu"), os.path.join(dirpath, "traces.pt"))
+
+        if self.F is not None:
+            torch.save(self.F.detach().to("cpu"), os.path.join(dirpath, "F.pt"))
+
+        if self.rng is not None:
+            torch.save(self.rng.get_state().cpu(), rng_state_path)
+            metadata["has_rng_state"] = True
+        else:
+            metadata["has_rng_state"] = False
+
+        with open(metadata_path, "w", encoding="utf-8") as fp:
+            json.dump(metadata, fp, indent=2)
+
+
+    @classmethod
+    def load(cls, dirpath: str, device: str | None = None) -> "LTLKernel":
+        """Restore a kernel that was saved via :meth:`save`."""
+        metadata_path = os.path.join(dirpath, "metadata.json")
+        if not os.path.exists(metadata_path):
+            raise FileNotFoundError(f"No kernel metadata found at {metadata_path}")
+
+        with open(metadata_path, "r", encoding="utf-8") as fp:
+            metadata = json.load(fp)
+
+        kernel = cls(T=int(metadata["T"]), AP=int(metadata["AP"]), seed=metadata.get("seed"))
+
+        # Override device if requested
+        if device is not None and device != kernel.device:
+            kernel.device = device
+            kernel.rng = torch.Generator(device=device)
+
+        # Anchor formulas
+        anchor_path = os.path.join(dirpath, "anchor_formulas.jsonl")
+        anchor_formulas: list[Formula] = []
+        if os.path.exists(anchor_path):
+            with open(anchor_path, "r", encoding="utf-8") as fp:
+                for line in fp:
+                    text = line.strip()
+                    if text:
+                        anchor_formulas.append(str_to_formula(text))
+        kernel.anchor_formulas = anchor_formulas
+        kernel.m = len(anchor_formulas) if anchor_formulas else metadata.get("m")
+
+        # Tensors
+        traces_path = os.path.join(dirpath, "traces.pt")
+        if metadata.get("has_traces") and os.path.exists(traces_path):
+            kernel.traces = torch.load(traces_path, map_location=kernel.device)
+
+        F_path = os.path.join(dirpath, "F.pt")
+        if metadata.get("has_F") and os.path.exists(F_path):
+            kernel.F = torch.load(F_path, map_location=kernel.device)
+
+        # RNG state (if present)
+        rng_state_path = os.path.join(dirpath, "rng_state.pt")
+        if metadata.get("has_rng_state") and os.path.exists(rng_state_path):
+            state_tensor = torch.load(rng_state_path, map_location="cpu")
+            kernel.rng = torch.Generator(device=kernel.device)
+            kernel.rng.set_state(state_tensor.to(device=kernel.device))
+
+        return kernel

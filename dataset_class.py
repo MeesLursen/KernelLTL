@@ -1,6 +1,12 @@
-from torch.utils.data import Dataset
+import json
+import os
+from typing import Any
+
 import torch
+from torch.utils.data import Dataset
+
 from formula_class import Formula
+from formula_utils import str_to_formula
 from kernel_class import LTLKernel
 
 class LTLDataset(Dataset):
@@ -14,6 +20,7 @@ class LTLDataset(Dataset):
         self.store_satisfaction = store_satisfaction
         self.satisfaction_batch_size = satisfaction_batch_size
         self.satisfaction_time_index = satisfaction_time_index
+        self.metadata: dict[str, Any] = {}
 
         self._reset_storage()
 
@@ -56,6 +63,16 @@ class LTLDataset(Dataset):
         
         dataset_formulas = kernel.sample_dataset_formulas_kernel(k=k, p_leaf=p_leaf, max_depth=max_depth, force_tree=True)
         self._reset_storage()
+        self.metadata = {
+            "source": "kernel",
+            "k": k,
+            "p_leaf": p_leaf,
+            "max_depth": max_depth,
+            "batch_size": batch_size,
+            "kernel_T": kernel.T,
+            "kernel_AP": kernel.AP,
+            "kernel_seed": kernel.seed,
+        }
 
         for phi in dataset_formulas:
             phi_sats = kernel._evaluate_formula_on_traces(
@@ -82,6 +99,17 @@ class LTLDataset(Dataset):
         dataset_formulas = kernel.sample_dataset_formulas_kernel(k=k, p_leaf=p_leaf, max_depth=max_depth, force_tree=True)
         unique_formulas = list(dict.fromkeys(dataset_formulas))
         self._reset_storage()
+        self.metadata = {
+            "source": "kernel_dedupe",
+            "requested_k": k,
+            "actual_k": len(unique_formulas),
+            "p_leaf": p_leaf,
+            "max_depth": max_depth,
+            "batch_size": batch_size,
+            "kernel_T": kernel.T,
+            "kernel_AP": kernel.AP,
+            "kernel_seed": kernel.seed,
+        }
 
         print(f'The deduplicated dataset contains {len(unique_formulas)} many formulae.')
         
@@ -104,6 +132,14 @@ class LTLDataset(Dataset):
         - batch_size: (Default = 512) the size of the batches used during evaluation of the formulae, adjustable for memory management.
         """
         self._reset_storage()
+        self.metadata = {
+            "source": "list",
+            "count": len(input_formula_list),
+            "batch_size": batch_size,
+            "kernel_T": kernel.T,
+            "kernel_AP": kernel.AP,
+            "kernel_seed": kernel.seed,
+        }
 
         for phi in input_formula_list:
             phi_sats = kernel._evaluate_formula_on_traces(
@@ -135,3 +171,87 @@ class LTLDataset(Dataset):
             item["satisfaction"] = self.satisfactions[idx]
 
         return item
+
+
+    # ----------- Persistence -----------
+    def save(self, dirpath: str) -> None:
+        os.makedirs(dirpath, exist_ok=True)
+
+        num_examples = len(self.formulas)
+        embedding_dim = self.embeddings[0].numel() if self.embeddings else 0
+
+        metadata: dict[str, Any] = {
+            "store_formula_str": self.store_formula_str,
+            "store_satisfaction": self.store_satisfaction,
+            "satisfaction_batch_size": self.satisfaction_batch_size,
+            "satisfaction_time_index": self.satisfaction_time_index,
+            "size": num_examples,
+            "embedding_dim": embedding_dim,
+            "has_satisfactions": self.store_satisfaction and self.satisfactions is not None and len(self.satisfactions) == num_examples,
+            "extra_metadata": self.metadata,
+        }
+
+        metadata_path = os.path.join(dirpath, "metadata.json")
+        formulas_path = os.path.join(dirpath, "formulas.jsonl")
+        embeddings_path = os.path.join(dirpath, "embeddings.pt")
+        satisfactions_path = os.path.join(dirpath, "satisfactions.pt")
+
+        with open(formulas_path, "w", encoding="utf-8") as fp:
+            for formula in self.formulas:
+                fp.write(str(formula) + "\n")
+
+        if num_examples > 0:
+            embeddings_tensor = torch.stack(self.embeddings, dim=0).to(dtype=torch.float32, device="cpu")
+        else:
+            embeddings_tensor = torch.empty((0, embedding_dim), dtype=torch.float32)
+        torch.save(embeddings_tensor, embeddings_path)
+
+        if metadata["has_satisfactions"] and self.satisfactions is not None:
+            sats_tensor = torch.stack(self.satisfactions, dim=0).to(dtype=torch.bool, device="cpu")
+            torch.save(sats_tensor, satisfactions_path)
+
+        with open(metadata_path, "w", encoding="utf-8") as fp:
+            json.dump(metadata, fp, indent=2)
+
+
+    @classmethod
+    def load(cls, dirpath: str) -> "LTLDataset":
+        metadata_path = os.path.join(dirpath, "metadata.json")
+        if not os.path.exists(metadata_path):
+            raise FileNotFoundError(f"Dataset metadata not found in {dirpath}")
+
+        with open(metadata_path, "r", encoding="utf-8") as fp:
+            metadata = json.load(fp)
+
+        dataset = cls(
+            store_formula_str=metadata.get("store_formula_str", False),
+            store_satisfaction=metadata.get("store_satisfaction", False),
+            satisfaction_batch_size=metadata.get("satisfaction_batch_size", 512),
+            satisfaction_time_index=metadata.get("satisfaction_time_index", 0)
+        )
+
+        formulas_path = os.path.join(dirpath, "formulas.jsonl")
+        embeddings_path = os.path.join(dirpath, "embeddings.pt")
+        satisfactions_path = os.path.join(dirpath, "satisfactions.pt")
+
+        formulas: list[Formula] = []
+        if os.path.exists(formulas_path):
+            with open(formulas_path, "r", encoding="utf-8") as fp:
+                for line in fp:
+                    text = line.strip()
+                    if text:
+                        formulas.append(str_to_formula(text))
+        dataset.formulas = formulas
+
+        embeddings_tensor = torch.load(embeddings_path, map_location="cpu")
+        dataset.embeddings = [embeddings_tensor[i].clone().detach() for i in range(embeddings_tensor.size(0))]
+
+        if dataset.store_formula_str and dataset.formula_strs is not None:
+            dataset.formula_strs = [str(f) for f in formulas]
+
+        if metadata.get("has_satisfactions") and os.path.exists(satisfactions_path):
+            sats_tensor = torch.load(satisfactions_path, map_location="cpu")
+            dataset.satisfactions = [sats_tensor[i].clone().detach() for i in range(sats_tensor.size(0))]
+
+        dataset.metadata = metadata.get("extra_metadata", {})
+        return dataset

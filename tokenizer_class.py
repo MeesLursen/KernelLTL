@@ -1,3 +1,6 @@
+import json
+from typing import Any
+
 import torch
 from torch.nn.utils.rnn import pad_sequence
 from formula_class import Formula
@@ -18,6 +21,7 @@ class LTLTokenizer:
         self.vocab_size: int            = len(self.all_tokens)
         self.token_to_id: dict[str,int] = {t:i for i,t in enumerate(all_tokens)}
         self.id_to_token: dict[str,int] = {i:t for t,i in self.token_to_id.items()}
+        self.n_ap: int                   = n_ap
 
         self.pad_token, self.bos_token, self.eos_token, self.unk_token = pad_token, bos_token, eos_token, unk_token
 
@@ -28,20 +32,76 @@ class LTLTokenizer:
 
 
 
+    def save_state(self, path: str) -> str:
+        data: dict[str, Any] = {
+            "version": 1,
+            "tokens": self.all_tokens,
+            "base_tokens": self.base_tokens,
+            "ops_and_props": self.ops_and_props,
+            "n_ap": self.n_ap,
+            "special_tokens": {
+                "pad_token": self.pad_token,
+                "bos_token": self.bos_token,
+                "eos_token": self.eos_token,
+                "unk_token": self.unk_token,
+            },
+        }
+
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        return path
+
+
+
     def save_vocab(self, path: str):
-        import json
-        with open(path, 'w') as f:
-            json.dump(self.all_tokens, f)
+        self.save_state(path)
 
 
 
-    # TODO: fix this to be more flexible, don't store vocab.json as just a list of tokens. Might want to add aditional tokens during tokenizer init.
     @classmethod
-    def load_vocab(cls, path: str):
-        import json
-        with open(path, 'r') as f:
-            tokens: list[str] = json.load(f)
-        # reconstruct object: infer num_props from tokens
+    def load_state(cls, path: str) -> "LTLTokenizer":
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        if isinstance(data, list):
+            return cls._from_token_list(data)
+
+        tokens: list[str] = data["tokens"]
+        n_ap = data.get("n_ap")
+        if n_ap is None:
+            n_ap = sum(1 for tok in tokens if tok.startswith('p_'))
+
+        special_tokens = data.get("special_tokens", {})
+        pad_token = special_tokens.get("pad_token", "<pad>")
+        bos_token = special_tokens.get("bos_token", "<bos>")
+        eos_token = special_tokens.get("eos_token", "<eos>")
+        unk_token = special_tokens.get("unk_token", "<unk>")
+
+        obj = cls(n_ap,
+                  pad_token=pad_token,
+                  bos_token=bos_token,
+                  eos_token=eos_token,
+                  unk_token=unk_token)
+
+        obj.base_tokens = data.get("base_tokens", obj.base_tokens)
+        obj.ops_and_props = data.get("ops_and_props", tokens[len(obj.base_tokens):])
+        obj.all_tokens = tokens
+        obj.token_to_id = {t: i for i, t in enumerate(tokens)}
+        obj.id_to_token = {i: t for t, i in obj.token_to_id.items()}
+        obj.vocab_size = len(tokens)
+        obj.n_ap = n_ap
+        obj.pad_token_id = obj.token_to_id[obj.pad_token]
+        obj.bos_token_id = obj.token_to_id[obj.bos_token]
+        obj.eos_token_id = obj.token_to_id[obj.eos_token]
+        obj.unk_token_id = obj.token_to_id[obj.unk_token]
+
+        return obj
+
+
+
+    @classmethod
+    def _from_token_list(cls, tokens: list[str]) -> "LTLTokenizer":
         prop_tokens = [t for t in tokens if t.startswith('p_')]
         num_props = len(prop_tokens)
         obj = cls(num_props)
@@ -53,7 +113,15 @@ class LTLTokenizer:
         obj.bos_token_id = obj.token_to_id['<bos>']
         obj.eos_token_id = obj.token_to_id['<eos>']
         obj.unk_token_id = obj.token_to_id['<unk>']
+        obj.vocab_size = len(tokens)
+        obj.n_ap = num_props
         return obj
+
+
+
+    @classmethod
+    def load_vocab(cls, path: str) -> "LTLTokenizer":
+        return cls.load_state(path)
 
 
 
@@ -117,6 +185,7 @@ class LTLTokenizer:
                 s += f"{t} "
         return s
     
+
     def batch_decode(self, sequences: torch.Tensor | list[list[int]], skip_special_tokens=True):
         """
         sequences: List[List[int]] or torch.Tensor of shape (B, L)
@@ -127,6 +196,7 @@ class LTLTokenizer:
             sequences = sequences.tolist()
         
         return [self.decode(seq, skip_special_tokens=skip_special_tokens) for seq in sequences]
+
 
 
     def collate_batch(self, 

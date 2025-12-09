@@ -1,4 +1,3 @@
-import json
 import os
 import torch
 from formula_class import Formula
@@ -34,7 +33,7 @@ class LTLTokenizer(PreTrainedTokenizer):
         if vocab_file is not None:
             if not os.path.isfile(vocab_file):
                 raise FileNotFoundError(f"The vocabulary file '{vocab_file}' could not be found.")
-            legacy_tokenizer = _LegacyLTLTokenizer.load_vocab(vocab_file)
+            legacy_tokenizer = _LegacyLTLTokenizer.load_state(vocab_file)
         else:
             legacy_tokenizer = _LegacyLTLTokenizer(
                 n_ap=n_ap,
@@ -82,15 +81,17 @@ class LTLTokenizer(PreTrainedTokenizer):
         # compatibility shim for code that expects `tokenizer.vocab`
         return self.get_vocab()
 
+    @property
+    def num_atomic_props(self) -> int | None:
+        return getattr(self._legacy, "n_ap", None)
+
     def save_vocabulary(
         self, save_directory: str, filename_prefix: str | None = None
     ) -> tuple[str]:  # type: ignore[override]
         os.makedirs(save_directory, exist_ok=True)
         filename = "vocab.json" if filename_prefix is None else f"{filename_prefix}-vocab.json"
         save_path = os.path.join(save_directory, filename)
-
-        with open(save_path, "w", encoding="utf-8") as fp:
-            json.dump(self._all_tokens, fp, ensure_ascii=False, indent=2)
+        self._legacy.save_state(save_path)
 
         return (save_path,)
 
