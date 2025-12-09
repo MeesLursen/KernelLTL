@@ -1,0 +1,145 @@
+"""Generate and persist train/eval datasets derived from a saved LTL kernel."""
+
+from __future__ import annotations
+
+import argparse
+import os
+from typing import Callable
+
+from dataset_class import LTLDataset
+from kernel_class import LTLKernel
+
+
+def _positive_int(value: str) -> int:
+    ival = int(value)
+    if ival <= 0:
+        raise argparse.ArgumentTypeError("Value must be a positive integer")
+    return ival
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Sample formula datasets (train/eval) from a persisted kernel and save them for curriculum stages.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+
+    parser.add_argument("--kernel-dir", required=True, help="Directory containing a previously saved kernel")
+
+    # Train dataset options
+    train = parser.add_argument_group("Training dataset")
+    train.add_argument("--train-out", required=True, help="Output directory for the training dataset")
+    train.add_argument("--train-k", type=_positive_int, required=True, help="Number of formulas to sample for training")
+    train.add_argument("--train-p-leaf", type=float, default=0.45, help="Probability that a sampled node becomes a leaf")
+    train.add_argument("--train-max-depth", type=_positive_int, default=2, help="Maximum tree depth for training formulas")
+    train.add_argument("--train-batch-size", type=_positive_int, default=1024, help="Batch size when evaluating satisfactions")
+    train.add_argument("--train-dedupe", action="store_true", help="Deduplicate formulas before computing embeddings")
+    train.add_argument("--train-store-formula-str", action="store_true", help="Persist canonical formula strings in the dataset")
+    train.add_argument("--train-store-satisfaction", action="store_true", help="Persist satisfaction tensors in the dataset")
+    train.add_argument("--train-satisfaction-batch-size", type=_positive_int, default=512, help="Batch size used when recording satisfactions")
+    train.add_argument("--train-satisfaction-time-index", type=int, default=0, help="Trace time index used when recording satisfactions")
+
+    # Eval dataset options (optional)
+    eval_group = parser.add_argument_group("Evaluation dataset")
+    eval_group.add_argument("--eval-out", help="Output directory for the evaluation dataset")
+    eval_group.add_argument("--eval-k", type=_positive_int, help="Number of formulas for eval dataset")
+    eval_group.add_argument("--eval-p-leaf", type=float, default=0.45, help="Probability that a sampled node becomes a leaf")
+    eval_group.add_argument("--eval-max-depth", type=_positive_int, default=2, help="Maximum tree depth for eval formulas")
+    eval_group.add_argument("--eval-batch-size", type=_positive_int, default=1024, help="Batch size when evaluating satisfactions")
+    eval_group.add_argument("--eval-dedupe", action="store_true", help="Deduplicate formulas before computing embeddings")
+    eval_group.add_argument("--eval-store-formula-str", dest="eval_store_formula_str", action="store_true", help="Persist canonical formula strings in the eval dataset")
+    eval_group.add_argument("--no-eval-store-formula-str", dest="eval_store_formula_str", action="store_false", help="Disable formula string storage for eval dataset")
+    eval_group.add_argument("--eval-store-satisfaction", dest="eval_store_satisfaction", action="store_true", help="Persist evaluation satisfactions")
+    eval_group.add_argument("--no-eval-store-satisfaction", dest="eval_store_satisfaction", action="store_false", help="Disable satisfaction storage for eval dataset")
+    eval_group.add_argument("--eval-satisfaction-batch-size", type=_positive_int, default=1024, help="Batch size used when recording eval satisfactions")
+    eval_group.add_argument("--eval-satisfaction-time-index", type=int, default=0, help="Trace time index used when recording eval satisfactions")
+    parser.set_defaults(eval_store_formula_str=True, eval_store_satisfaction=True)
+
+    return parser.parse_args()
+
+
+def _build_dataset(
+    name: str,
+    kernel: LTLKernel,
+    out_dir: str,
+    k: int,
+    p_leaf: float,
+    max_depth: int,
+    batch_size: int,
+    dedupe: bool,
+    store_formula_str: bool,
+    store_satisfaction: bool,
+    satisfaction_batch_size: int,
+    satisfaction_time_index: int,
+) -> None:
+    print(f"\nBuilding {name} dataset with k={k}, p_leaf={p_leaf}, max_depth={max_depth}, dedupe={dedupe}")
+    os.makedirs(out_dir, exist_ok=True)
+
+    dataset = LTLDataset(
+        store_formula_str=store_formula_str,
+        store_satisfaction=store_satisfaction,
+        satisfaction_batch_size=satisfaction_batch_size,
+        satisfaction_time_index=satisfaction_time_index,
+    )
+
+    construct_fn: Callable[..., None]
+    if dedupe:
+        construct_fn = dataset.construct_dataset_from_kernel_dedupe
+    else:
+        construct_fn = dataset.construct_dataset_from_kernel
+
+    construct_fn(
+        kernel=kernel,
+        k=k,
+        p_leaf=p_leaf,
+        max_depth=max_depth,
+        batch_size=batch_size,
+    )
+
+    dataset.save(out_dir)
+    print(f"Saved {name} dataset to {out_dir}")
+
+
+def main() -> None:
+    args = parse_args()
+    kernel = LTLKernel.load(args.kernel_dir)
+    if kernel.traces is None or kernel.F is None:
+        raise RuntimeError(
+            "Loaded kernel is missing traces or feature matrix F. Rerun prepare_kernel.py with --build-f options before generating datasets."
+        )
+
+    _build_dataset(
+        name="training",
+        kernel=kernel,
+        out_dir=args.train_out,
+        k=args.train_k,
+        p_leaf=args.train_p_leaf,
+        max_depth=args.train_max_depth,
+        batch_size=args.train_batch_size,
+        dedupe=args.train_dedupe,
+        store_formula_str=args.train_store_formula_str,
+        store_satisfaction=args.train_store_satisfaction,
+        satisfaction_batch_size=args.train_satisfaction_batch_size,
+        satisfaction_time_index=args.train_satisfaction_time_index,
+    )
+
+    if args.eval_out and args.eval_k:
+        _build_dataset(
+            name="evaluation",
+            kernel=kernel,
+            out_dir=args.eval_out,
+            k=args.eval_k,
+            p_leaf=args.eval_p_leaf,
+            max_depth=args.eval_max_depth,
+            batch_size=args.eval_batch_size,
+            dedupe=args.eval_dedupe,
+            store_formula_str=args.eval_store_formula_str,
+            store_satisfaction=args.eval_store_satisfaction,
+            satisfaction_batch_size=args.eval_satisfaction_batch_size,
+            satisfaction_time_index=args.eval_satisfaction_time_index,
+        )
+    elif args.eval_out or args.eval_k:
+        raise ValueError("Both --eval-out and --eval-k must be provided together to build the eval dataset.")
+
+
+if __name__ == "__main__":
+    main()
