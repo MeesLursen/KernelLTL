@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
     train.add_argument("--train-dedupe", action="store_true", help="Deduplicate formulas before computing embeddings")
     train.add_argument("--train-store-formula-str", action="store_true", help="Persist canonical formula strings in the dataset")
     train.add_argument("--train-store-satisfaction", action="store_true", help="Persist satisfaction tensors in the dataset")
-    train.add_argument("--train-satisfaction-batch-size", type=_positive_int, default=512, help="Batch size used when recording satisfactions")
+    train.add_argument("--train-satisfaction-batch-size", type=_positive_int, default=1024, help="Batch size used when recording satisfactions")
     train.add_argument("--train-satisfaction-time-index", type=int, default=0, help="Trace time index used when recording satisfactions")
 
     # Eval dataset options (optional)
