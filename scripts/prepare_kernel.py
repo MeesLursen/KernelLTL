@@ -51,6 +51,7 @@ def parse_args() -> argparse.Namespace:
     anchor_group.add_argument("--anchor-force-tree", dest="anchor_force_tree", action="store_true", default=True, help="Ensure sampled formulas start with an operator (default: True)")
     anchor_group.add_argument("--no-anchor-force-tree", dest="anchor_force_tree", action="store_false", help="Allow root-level atomic propositions")
     anchor_group.add_argument("--cosine-batch-size", type=_positive_int, default=1024, help="Batch size used when evaluating cosine-controlled anchors")
+    anchor_group.add_argument("--cosine-threshold", type=float, default=0.8, help="Threshold used when evaluating cosine-similarity anchors")
     anchor_group.add_argument("--cosine-max-attempts", type=_positive_int, default=100, help="Max attempts per anchor for cosine-controlled sampling")
 
     build_group = parser.add_argument_group("Feature matrix (F) construction")
@@ -83,6 +84,7 @@ def _sample_anchors(kernel: LTLKernel, args: argparse.Namespace) -> None:
             max_depth=args.anchor_max_depth,
             force_tree=args.anchor_force_tree,
             batch_size=args.cosine_batch_size,
+            threshold= args.cosine_threshold,
             max_attempts_per_formula=args.cosine_max_attempts,
         )
     else:

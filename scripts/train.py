@@ -42,7 +42,7 @@ def main():
     kernel.sample_traces_kernel_correlated(N,0.3)  # adjust N based on your needs
     print(f'Deduplicated N = {kernel.traces.size(dim=0)}')
     #kernel.construct_anchor_formulas_kernel()  # m should match model's n_embd
-    kernel.sample_anchor_formulas_kernel_cosine_controlled(m=m, batch_size=10240, max_attempts_per_formula=500)
+    kernel.sample_anchor_formulas_kernel_cosine_controlled(m=m, batch_size=10240, threshold=0.6, max_attempts_per_formula=1000)
     kernel.build_F(batch_size=10240)
     
     print(kernel.F)

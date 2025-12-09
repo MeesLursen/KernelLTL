@@ -127,7 +127,7 @@ class LTLKernel:
 
 
 
-    def sample_anchor_formulas_kernel_cosine_controlled(self, m: int = 1024, p_leaf: float = 0.5, max_depth: int = 6, force_tree: bool = True, batch_size = 512, max_attempts_per_formula = 100):
+    def sample_anchor_formulas_kernel_cosine_controlled(self, m: int = 1024, p_leaf: float = 0.5, max_depth: int = 6, force_tree: bool = True, batch_size = 512, threshold = 0.8, max_attempts_per_formula = 100):
         """
         Method for adding a random sample of formulae to the kernel.
         - m: specifies the number of sampled formulae.
@@ -143,7 +143,6 @@ class LTLKernel:
         if self.traces is None:
             raise ValueError('Please sample traces before calling sample_anchor_formulas_kernel2 so cosine similarity can be computed.')
 
-        similarity_threshold = 0.7
         time_index = 0
 
         if time_index < 0 or time_index >= self.T:
@@ -181,7 +180,7 @@ class LTLKernel:
 
                 too_similar = False
                 for prev_vec in normalized_vectors:
-                    if torch.dot(candidate_norm, prev_vec).item() > similarity_threshold:
+                    if torch.dot(candidate_norm, prev_vec).item() > threshold:
                         too_similar = True
                         break
 
