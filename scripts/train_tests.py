@@ -57,13 +57,12 @@ def main():
 
     # Create datasets
     dataset_eval_batch_size = 10240
-    train_dataset = LTLDataset()
+    train_dataset = LTLDataset(satisfaction_batch_size=dataset_eval_batch_size)
     train_dataset.construct_dataset_from_kernel(
         kernel=kernel,
         k=78000,  # adjust dataset size as needed
         p_leaf=0.45,
         max_depth=2,
-        batch_size=10240
     )
     
     eval_dataset = LTLDataset(store_formula_str=True,
@@ -75,7 +74,6 @@ def main():
         k=3000,  # smaller validation set
         p_leaf=0.45,
         max_depth=2,
-        batch_size=10240
     )
     
     print("Finished train and eval dataset construction.")

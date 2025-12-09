@@ -51,14 +51,14 @@ class LTLDataset(Dataset):
 
 
 
-    def construct_dataset_from_kernel(self, kernel: LTLKernel, k: int, p_leaf: float, max_depth: int, batch_size: int = 512):
+    def construct_dataset_from_kernel(self, kernel: LTLKernel, k: int, p_leaf: float, max_depth: int):
         """
         Method for constructing the dataset through the kernel, specifies self.formulas and self.embeddings.
         - kernel: the kernel we want to use for sampling formulae and computing their embeddings.
         - k: specifies the number of sampled formulae.
         - p_leaf: specifies the odds of each node being a leaf. Higher probability reduces average sampled formula complexity (bounded by max_depth).
         - max_depth: specifies the maximum formula complexity.
-        - batch_size: (Default = 512) the size of the batches used during evaluation of the formulae, adjustable for memory management.
+        - satisfaction_batch_size: configurable through LTLDataset to control evaluation batch sizes.
         """
         
         dataset_formulas = kernel.sample_dataset_formulas_kernel(k=k, p_leaf=p_leaf, max_depth=max_depth, force_tree=True)
@@ -68,7 +68,7 @@ class LTLDataset(Dataset):
             "k": k,
             "p_leaf": p_leaf,
             "max_depth": max_depth,
-            "batch_size": batch_size,
+            "batch_size": self.satisfaction_batch_size,
             "kernel_T": kernel.T,
             "kernel_AP": kernel.AP,
             "kernel_seed": kernel.seed,
@@ -77,7 +77,7 @@ class LTLDataset(Dataset):
         for phi in dataset_formulas:
             phi_sats = kernel._evaluate_formula_on_traces(
                 formula=phi,
-                batch_size=self.satisfaction_batch_size if self.store_satisfaction else batch_size,
+                batch_size=self.satisfaction_batch_size,
                 time_index=self.satisfaction_time_index
             )
             emb = kernel.compute_embedding_from_satisfaction(phi_sats, move_to_cpu=True)
@@ -86,14 +86,14 @@ class LTLDataset(Dataset):
     
 
 
-    def construct_dataset_from_kernel_dedupe(self, kernel: LTLKernel, k: int, p_leaf: float, max_depth: int, batch_size: int = 512):
+    def construct_dataset_from_kernel_dedupe(self, kernel: LTLKernel, k: int, p_leaf: float, max_depth: int):
         """
         Method for constructing the dataset through the kernel, specifies self.formulas and self.embeddings.
         - kernel: the kernel we want to use for sampling formulae and computing their embeddings.
         - k: specifies the number of sampled formulae.
         - p_leaf: specifies the odds of each node being a leaf. Higher probability reduces average sampled formula complexity (bounded by max_depth).
         - max_depth: specifies the maximum formula complexity.
-        - batch_size: (Default = 512) the size of the batches used during evaluation of the formulae, adjustable for memory management.
+        - satisfaction_batch_size: configurable through LTLDataset to control evaluation batch sizes.
         """
         
         dataset_formulas = kernel.sample_dataset_formulas_kernel(k=k, p_leaf=p_leaf, max_depth=max_depth, force_tree=True)
@@ -105,7 +105,7 @@ class LTLDataset(Dataset):
             "actual_k": len(unique_formulas),
             "p_leaf": p_leaf,
             "max_depth": max_depth,
-            "batch_size": batch_size,
+            "batch_size": self.satisfaction_batch_size,
             "kernel_T": kernel.T,
             "kernel_AP": kernel.AP,
             "kernel_seed": kernel.seed,
@@ -116,7 +116,7 @@ class LTLDataset(Dataset):
         for phi in unique_formulas:
             phi_sats = kernel._evaluate_formula_on_traces(
                 formula=phi,
-                batch_size=self.satisfaction_batch_size if self.store_satisfaction else batch_size,
+                batch_size=self.satisfaction_batch_size,
                 time_index=self.satisfaction_time_index
             )
             emb = kernel.compute_embedding_from_satisfaction(phi_sats, move_to_cpu=True)
@@ -125,17 +125,17 @@ class LTLDataset(Dataset):
     
 
 
-    def construct_dataset_from_list(self, input_formula_list: list[Formula], kernel: LTLKernel, batch_size: int = 512):
+    def construct_dataset_from_list(self, input_formula_list: list[Formula], kernel: LTLKernel):
         """
         Method for constructing the dataset through the kernel, specifies self.formulas and self.embeddings.
         - kernel: the kernel we want to use for computing embeddings of the input formulae.
-        - batch_size: (Default = 512) the size of the batches used during evaluation of the formulae, adjustable for memory management.
+        - satisfaction_batch_size: configurable through LTLDataset to control evaluation batch sizes.
         """
         self._reset_storage()
         self.metadata = {
             "source": "list",
             "count": len(input_formula_list),
-            "batch_size": batch_size,
+            "batch_size": self.satisfaction_batch_size,
             "kernel_T": kernel.T,
             "kernel_AP": kernel.AP,
             "kernel_seed": kernel.seed,
@@ -144,7 +144,7 @@ class LTLDataset(Dataset):
         for phi in input_formula_list:
             phi_sats = kernel._evaluate_formula_on_traces(
                 formula=phi,
-                batch_size=self.satisfaction_batch_size if self.store_satisfaction else batch_size,
+                batch_size=self.satisfaction_batch_size,
                 time_index=self.satisfaction_time_index
             )
             emb = kernel.compute_embedding_from_satisfaction(phi_sats, move_to_cpu=True)

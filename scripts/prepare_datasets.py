@@ -31,7 +31,6 @@ def parse_args() -> argparse.Namespace:
     train.add_argument("--train-k", type=_positive_int, required=True, help="Number of formulas to sample for training")
     train.add_argument("--train-p-leaf", type=float, default=0.45, help="Probability that a sampled node becomes a leaf")
     train.add_argument("--train-max-depth", type=_positive_int, default=2, help="Maximum tree depth for training formulas")
-    train.add_argument("--train-batch-size", type=_positive_int, default=1024, help="Batch size when evaluating satisfactions")
     train.add_argument("--train-dedupe", action="store_true", help="Deduplicate formulas before computing embeddings")
     train.add_argument("--train-store-formula-str", action="store_true", help="Persist canonical formula strings in the dataset")
     train.add_argument("--train-store-satisfaction", action="store_true", help="Persist satisfaction tensors in the dataset")
@@ -44,7 +43,6 @@ def parse_args() -> argparse.Namespace:
     eval_group.add_argument("--eval-k", type=_positive_int, help="Number of formulas for eval dataset")
     eval_group.add_argument("--eval-p-leaf", type=float, default=0.45, help="Probability that a sampled node becomes a leaf")
     eval_group.add_argument("--eval-max-depth", type=_positive_int, default=2, help="Maximum tree depth for eval formulas")
-    eval_group.add_argument("--eval-batch-size", type=_positive_int, default=1024, help="Batch size when evaluating satisfactions")
     eval_group.add_argument("--eval-dedupe", action="store_true", help="Deduplicate formulas before computing embeddings")
     eval_group.add_argument("--eval-store-formula-str", dest="eval_store_formula_str", action="store_true", help="Persist canonical formula strings in the eval dataset")
     eval_group.add_argument("--no-eval-store-formula-str", dest="eval_store_formula_str", action="store_false", help="Disable formula string storage for eval dataset")
@@ -64,7 +62,6 @@ def _build_dataset(
     k: int,
     p_leaf: float,
     max_depth: int,
-    batch_size: int,
     dedupe: bool,
     store_formula_str: bool,
     store_satisfaction: bool,
@@ -92,7 +89,6 @@ def _build_dataset(
         k=k,
         p_leaf=p_leaf,
         max_depth=max_depth,
-        batch_size=batch_size,
     )
 
     dataset.save(out_dir)
@@ -114,7 +110,6 @@ def main() -> None:
         k=args.train_k,
         p_leaf=args.train_p_leaf,
         max_depth=args.train_max_depth,
-        batch_size=args.train_batch_size,
         dedupe=args.train_dedupe,
         store_formula_str=args.train_store_formula_str,
         store_satisfaction=args.train_store_satisfaction,
@@ -130,7 +125,6 @@ def main() -> None:
             k=args.eval_k,
             p_leaf=args.eval_p_leaf,
             max_depth=args.eval_max_depth,
-            batch_size=args.eval_batch_size,
             dedupe=args.eval_dedupe,
             store_formula_str=args.eval_store_formula_str,
             store_satisfaction=args.eval_store_satisfaction,
