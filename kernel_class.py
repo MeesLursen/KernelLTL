@@ -414,6 +414,6 @@ class LTLKernel:
         if metadata.get("has_rng_state") and os.path.exists(rng_state_path):
             state_tensor = torch.load(rng_state_path, map_location="cpu")
             kernel.rng = torch.Generator(device=kernel.device)
-            kernel.rng.set_state(state_tensor.to(device=kernel.device))
+            kernel.rng.set_state(state_tensor)
 
         return kernel
