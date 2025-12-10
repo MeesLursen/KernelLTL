@@ -259,7 +259,6 @@ def main() -> None:
         data_collator=lambda batch: tokenizer.collate_batch(batch, model.config.n_positions),
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        tokenizer=tokenizer,
         callbacks=callbacks,
         processing_class=tokenizer,
     )
