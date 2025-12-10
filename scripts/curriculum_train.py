@@ -1,4 +1,9 @@
-"""Driver script for curriculum training across pre-generated datasets and kernels."""
+"""Driver script for curriculum training across pre-generated datasets and kernels.
+
+Highlights:
+- accepts ``--training-args-load-dir`` to seed :class:`transformers.TrainingArguments`
+    from a previous stage's ``training_args.bin`` before applying any overrides.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +14,7 @@ from typing import Any, Dict, Optional
 
 import torch
 from transformers import Trainer, TrainingArguments
+from transformers.trainer_utils import TRAINING_ARGS_NAME
 
 from config_class import LTLConfig
 from dataset_class import LTLDataset
@@ -47,7 +53,7 @@ def parse_args() -> argparse.Namespace:
         help="Directory where the trained model for this stage will be stored. Defaults to <output-dir>/final_model",
     )
     parser.add_argument("--config-json", help="Optional JSON file with LTLConfig parameters for fresh initialisations")
-    parser.add_argument("--training-args-file", help="JSON file whose contents override default TrainingArguments")
+    parser.add_argument("--training-args-load-dir", help="Directory containing a saved training_args.bin to seed TrainingArguments")
     parser.add_argument("--resume-from-checkpoint", help="Checkpoint directory passed to Trainer.train")
     parser.add_argument("--seed", type=int, default=None, help="Random seed passed to transformers.TrainingArguments")
 
@@ -107,33 +113,41 @@ def _load_tokenizer(path: str) -> LTLTokenizer:
 
 
 def _load_training_args(args: argparse.Namespace) -> TrainingArguments:
-    base_kwargs: Dict[str, Any] = {
-        "output_dir": args.output_dir,
-        "num_train_epochs": 10,
-        "learning_rate": 5e-4,
-        "per_device_train_batch_size": 32,
-        "per_device_eval_batch_size": 32,
-        "warmup_steps": 500,
-        "weight_decay": 0.01,
-        "logging_steps": 100,
-        "evaluation_strategy": "steps",
-        "save_strategy": "steps",
-        "save_steps": 1000,
-        "eval_steps": 1000,
-        "gradient_accumulation_steps": 1,
-        "remove_unused_columns": False,
-        "logging_dir": os.path.join(args.output_dir, "logs"),
-        "dataloader_num_workers": 4,
-        "dataloader_pin_memory": True,
-        "report_to": ["none"],
-        "save_safetensors": False,
-        "ddp_find_unused_parameters": False,
-    }
-
-    if args.training_args_file:
-        with open(args.training_args_file, "r", encoding="utf-8") as fp:
-            file_kwargs: Dict[str, Any] = json.load(fp)
-        base_kwargs.update(file_kwargs)
+    if args.training_args_load_dir:
+        load_path = os.path.join(args.training_args_load_dir, TRAINING_ARGS_NAME)
+        if not os.path.exists(load_path):
+            raise FileNotFoundError(f"Could not find {TRAINING_ARGS_NAME} in {args.training_args_load_dir}")
+        loaded_args = torch.load(load_path, map_location="cpu")
+        if not isinstance(loaded_args, TrainingArguments):
+            raise TypeError(
+                f"Expected {TRAINING_ARGS_NAME} to contain a TrainingArguments object, got {type(loaded_args)!r}"
+            )
+        base_kwargs: Dict[str, Any] = loaded_args.to_dict()
+        base_kwargs["output_dir"] = args.output_dir
+        base_kwargs["logging_dir"] = os.path.join(args.output_dir, "logs")
+    else:
+        base_kwargs = {
+            "output_dir": args.output_dir,
+            "num_train_epochs": 10,
+            "learning_rate": 5e-4,
+            "per_device_train_batch_size": 32,
+            "per_device_eval_batch_size": 32,
+            "warmup_steps": 500,
+            "weight_decay": 0.01,
+            "logging_steps": 100,
+            "evaluation_strategy": "steps",
+            "save_strategy": "steps",
+            "save_steps": 1000,
+            "eval_steps": 1000,
+            "gradient_accumulation_steps": 1,
+            "remove_unused_columns": False,
+            "logging_dir": os.path.join(args.output_dir, "logs"),
+            "dataloader_num_workers": 4,
+            "dataloader_pin_memory": True,
+            "report_to": ["none"],
+            "save_safetensors": False,
+            "ddp_find_unused_parameters": False,
+        }
 
     override_fields = {
         "num_train_epochs": args.num_train_epochs,
@@ -219,6 +233,11 @@ def main() -> None:
 
     training_args = _load_training_args(args)
     model = _build_model(args, kernel, tokenizer)
+
+    max_length_hint = getattr(model.config, "n_positions", None)
+    if isinstance(max_length_hint, int) and max_length_hint > 0:
+        tokenizer.model_max_length = max_length_hint
+
 
     callbacks = []
     if not args.disable_semantic_callback and eval_dataset is not None:
