@@ -137,7 +137,7 @@ def _load_training_args(args: argparse.Namespace) -> TrainingArguments:
             "logging_strategy": "steps",
             "logging_steps": 0.02,
             "logging_dir": os.path.join(args.output_dir, "logs"),
-            "evaluation_strategy": "steps",
+            "eval_strategy": "steps",
             "eval_steps": 0.02,
             "save_strategy": "steps",
             "save_steps": 0.2,
