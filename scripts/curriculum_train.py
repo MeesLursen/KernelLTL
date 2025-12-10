@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 
 import torch
 from transformers import Trainer, TrainingArguments
-from transformers.trainer_utils import TRAINING_ARGS_NAME
+from transformers.trainer import TRAINING_ARGS_NAME
 
 from config_class import LTLConfig
 from dataset_class import LTLDataset
