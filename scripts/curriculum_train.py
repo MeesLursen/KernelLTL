@@ -117,7 +117,7 @@ def _load_training_args(args: argparse.Namespace) -> TrainingArguments:
         load_path = os.path.join(args.training_args_load_dir, TRAINING_ARGS_NAME)
         if not os.path.exists(load_path):
             raise FileNotFoundError(f"Could not find {TRAINING_ARGS_NAME} in {args.training_args_load_dir}")
-        loaded_args = torch.load(load_path, map_location="cpu")
+        loaded_args = torch.load(load_path, map_location="cpu", weights_only=False)
         if not isinstance(loaded_args, TrainingArguments):
             raise TypeError(
                 f"Expected {TRAINING_ARGS_NAME} to contain a TrainingArguments object, got {type(loaded_args)!r}"
