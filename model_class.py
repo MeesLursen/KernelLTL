@@ -141,20 +141,47 @@ class LTLModel(nn.Module):
     def from_pretrained(cls, load_directory: str, device: torch.device = None):
         """
         Load HF model from save_directory and attach a projection (expected to be saved at encoder_proj.pt).
+        Handles checkpoints saved with 'base.' prefix on keys.
         """
         cfg = LTLConfig.from_pretrained(load_directory)
         proj_path = os.path.join(load_directory, "encoder_proj.pt")
         if not os.path.exists(proj_path):
             semantic_emb_dim = None
         else:
-            semantic_emb_dim = torch.load(proj_path, map_location='cpu')['weight'].size(dim=1)
+            semantic_emb_dim = torch.load(proj_path, map_location='cpu', weights_only=True)['weight'].size(dim=1)
             
         inst = cls(cfg, semantic_emb_dim=semantic_emb_dim)
-        # load HF weights
-        inst.base = AutoModelForCausalLM.from_pretrained(load_directory)
+        
+        # Load weights manually to handle 'base.' prefix from LTLModel wrapper
+        weights_path = os.path.join(load_directory, "pytorch_model.bin")
+        if not os.path.exists(weights_path):
+            weights_path = os.path.join(load_directory, "model.safetensors")
+        
+        if os.path.exists(weights_path):
+            state_dict = torch.load(weights_path, map_location="cpu", weights_only=True)
+            
+            # Strip "base." prefix if present (from LTLModel wrapper saves)
+            new_state_dict = {}
+            for k, v in state_dict.items():
+                if k.startswith("base."):
+                    new_state_dict[k[5:]] = v  # Remove "base." prefix
+                else:
+                    new_state_dict[k] = v
+            
+            # Load into base model
+            missing, unexpected = inst.base.load_state_dict(new_state_dict, strict=False)
+            if missing:
+                print(f"Warning: Missing keys when loading base model: {missing[:10]}{'...' if len(missing) > 10 else ''}")
+            if unexpected:
+                print(f"Warning: Unexpected keys when loading base model: {unexpected[:10]}{'...' if len(unexpected) > 10 else ''}")
+        else:
+            raise FileNotFoundError(f"No weights file found in {load_directory}")
+        
         if device is not None:
             inst.to(device)
-        # load projector if present
-        if inst.encoder_proj is not None:
-            inst.encoder_proj.load_state_dict(torch.load(proj_path, map_location=inst.device))
+        
+        # Load projector if present
+        if inst.encoder_proj is not None and os.path.exists(proj_path):
+            inst.encoder_proj.load_state_dict(torch.load(proj_path, map_location="cpu", weights_only=True))
+        
         return inst
