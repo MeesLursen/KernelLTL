@@ -269,8 +269,7 @@ def main() -> None:
     print(train_result)
 
     save_dir = args.model_save_dir or os.path.join(args.output_dir, "final_model")
-    trainer.save_model(save_dir)
-    tokenizer.save_pretrained(save_dir)
+    model.save_pretrained(save_dir)
 
 
 if __name__ == "__main__":
