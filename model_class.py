@@ -154,9 +154,7 @@ class LTLModel(nn.Module):
         
         # Load weights manually to handle 'base.' prefix from LTLModel wrapper
         weights_path = os.path.join(load_directory, "pytorch_model.bin")
-        if not os.path.exists(weights_path):
-            weights_path = os.path.join(load_directory, "model.safetensors")
-        
+                
         if os.path.exists(weights_path):
             state_dict = torch.load(weights_path, map_location="cpu", weights_only=True)
             
