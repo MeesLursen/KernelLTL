@@ -125,6 +125,7 @@ def _load_training_args(args: argparse.Namespace) -> TrainingArguments:
         base_kwargs: Dict[str, Any] = loaded_args.to_dict()
         base_kwargs["output_dir"] = args.output_dir
         base_kwargs["logging_dir"] = os.path.join(args.output_dir, "logs")
+        print('Loaded training_args from directory.')
     else:
         base_kwargs = {
             "output_dir": args.output_dir,
@@ -150,6 +151,7 @@ def _load_training_args(args: argparse.Namespace) -> TrainingArguments:
             "report_to": ["none"],
             "ddp_find_unused_parameters": False,
         }
+        print('Built training_args from scratch.')
 
     override_fields = {
         "num_train_epochs": args.num_train_epochs,
