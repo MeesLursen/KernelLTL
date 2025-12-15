@@ -46,3 +46,4 @@ class LTLConfig(GPT2Config):
             pad_token_id=pad_token_id,
             **kwargs,
         )
+        self.model_type = "gpt2"
