@@ -86,7 +86,7 @@ def parse_args() -> argparse.Namespace:
     # Semantic evaluation callback controls
     callback_group = parser.add_argument_group("Semantic evaluation callback")
     callback_group.add_argument("--disable-semantic-callback", action="store_true")
-    callback_group.add_argument("--semantic-eval-batch-size", type=_positive_int, default=1024)
+    callback_group.add_argument("--semantic-eval-batch-size", type=_positive_int, default=10240)
     callback_group.add_argument("--semantic-time-index", type=int, default=0)
 
     return parser.parse_args()
