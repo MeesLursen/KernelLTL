@@ -17,6 +17,13 @@ def _positive_int(value: str) -> int:
     return ival
 
 
+def _ratio(value: str) -> float:
+    fval = float(value)
+    if not (0.0 < fval < 1.0):
+        raise argparse.ArgumentTypeError("Value must be between 0 and 1 (exclusive)")
+    return fval
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Sample formula datasets (train/eval) from a persisted kernel and save them for curriculum stages.",
@@ -24,11 +31,24 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument("--kernel-dir", required=True, help="Directory containing a previously saved kernel")
+    
+    # Disjoint split mode
+    parser.add_argument(
+        "--disjoint-split",
+        action="store_true",
+        help="Use disjoint splitting: sample once and split into train/eval with no formula overlap (uses kernel's RNG for reproducibility)"
+    )
+    parser.add_argument(
+        "--eval-ratio",
+        type=_ratio,
+        default=0.05,
+        help="Target fraction of formulas for evaluation when using --disjoint-split (default: 0.05 = 5%%)"
+    )
 
     # Train dataset options
     train = parser.add_argument_group("Training dataset")
     train.add_argument("--train-out", required=True, help="Output directory for the training dataset")
-    train.add_argument("--train-k", type=_positive_int, required=True, help="Number of formulas to sample for training")
+    train.add_argument("--train-k", type=_positive_int, required=True, help="Number of formulas to sample for training (or total when using --disjoint-split)")
     train.add_argument("--train-p-leaf", type=float, default=0.45, help="Probability that a sampled node becomes a leaf")
     train.add_argument("--train-max-depth", type=_positive_int, default=2, help="Maximum tree depth for training formulas")
     train.add_argument("--train-dedupe", action="store_true", help="Deduplicate formulas before computing embeddings")
@@ -40,10 +60,10 @@ def parse_args() -> argparse.Namespace:
     # Eval dataset options (optional)
     eval_group = parser.add_argument_group("Evaluation dataset")
     eval_group.add_argument("--eval-out", help="Output directory for the evaluation dataset")
-    eval_group.add_argument("--eval-k", type=_positive_int, help="Number of formulas for eval dataset")
-    eval_group.add_argument("--eval-p-leaf", type=float, default=0.45, help="Probability that a sampled node becomes a leaf")
-    eval_group.add_argument("--eval-max-depth", type=_positive_int, default=2, help="Maximum tree depth for eval formulas")
-    eval_group.add_argument("--eval-dedupe", action="store_true", help="Deduplicate formulas before computing embeddings")
+    eval_group.add_argument("--eval-k", type=_positive_int, help="Number of formulas for eval dataset (ignored when using --disjoint-split)")
+    eval_group.add_argument("--eval-p-leaf", type=float, default=0.45, help="Probability that a sampled node becomes a leaf (ignored when using --disjoint-split)")
+    eval_group.add_argument("--eval-max-depth", type=_positive_int, default=2, help="Maximum tree depth for eval formulas (ignored when using --disjoint-split)")
+    eval_group.add_argument("--eval-dedupe", action="store_true", help="Deduplicate formulas before computing embeddings (ignored when using --disjoint-split)")
     eval_group.add_argument("--eval-store-formula-str", dest="eval_store_formula_str", action="store_true", help="Persist canonical formula strings in the eval dataset")
     eval_group.add_argument("--no-eval-store-formula-str", dest="eval_store_formula_str", action="store_false", help="Disable formula string storage for eval dataset")
     eval_group.add_argument("--eval-store-satisfaction", dest="eval_store_satisfaction", action="store_true", help="Persist evaluation satisfactions")
@@ -103,36 +123,69 @@ def main() -> None:
             "Loaded kernel is missing traces or feature matrix F. Rerun prepare_kernel.py with --build-f options before generating datasets."
         )
 
-    _build_dataset(
-        name="training",
-        kernel=kernel,
-        out_dir=args.train_out,
-        k=args.train_k,
-        p_leaf=args.train_p_leaf,
-        max_depth=args.train_max_depth,
-        dedupe=args.train_dedupe,
-        store_formula_str=args.train_store_formula_str,
-        store_satisfaction=args.train_store_satisfaction,
-        satisfaction_batch_size=args.train_satisfaction_batch_size,
-        satisfaction_time_index=args.train_satisfaction_time_index,
-    )
-
-    if args.eval_out and args.eval_k:
-        _build_dataset(
-            name="evaluation",
+    if args.disjoint_split:
+        # Use disjoint splitting mode
+        if not args.eval_out:
+            raise ValueError("--eval-out is required when using --disjoint-split")
+        
+        print(f"\nBuilding disjoint train/eval datasets with k={args.train_k}, "
+              f"p_leaf={args.train_p_leaf}, max_depth={args.train_max_depth}, "
+              f"eval_ratio={args.eval_ratio}")
+        
+        os.makedirs(args.train_out, exist_ok=True)
+        os.makedirs(args.eval_out, exist_ok=True)
+        
+        train_dataset, eval_dataset = LTLDataset.construct_disjoint_datasets(
             kernel=kernel,
-            out_dir=args.eval_out,
-            k=args.eval_k,
-            p_leaf=args.eval_p_leaf,
-            max_depth=args.eval_max_depth,
-            dedupe=args.eval_dedupe,
-            store_formula_str=args.eval_store_formula_str,
-            store_satisfaction=args.eval_store_satisfaction,
-            satisfaction_batch_size=args.eval_satisfaction_batch_size,
-            satisfaction_time_index=args.eval_satisfaction_time_index,
+            k=args.train_k,
+            p_leaf=args.train_p_leaf,
+            max_depth=args.train_max_depth,
+            eval_ratio=args.eval_ratio,
+            store_formula_str_train=args.train_store_formula_str,
+            store_formula_str_eval=args.eval_store_formula_str,
+            store_satisfaction_train=args.train_store_satisfaction,
+            store_satisfaction_eval=args.eval_store_satisfaction,
+            satisfaction_batch_size=args.train_satisfaction_batch_size,
+            satisfaction_time_index=args.train_satisfaction_time_index,
         )
-    elif args.eval_out or args.eval_k:
-        raise ValueError("Both --eval-out and --eval-k must be provided together to build the eval dataset.")
+        
+        train_dataset.save(args.train_out)
+        print(f"Saved training dataset to {args.train_out}")
+        
+        eval_dataset.save(args.eval_out)
+        print(f"Saved evaluation dataset to {args.eval_out}")
+    else:
+        # Original independent sampling mode
+        _build_dataset(
+            name="training",
+            kernel=kernel,
+            out_dir=args.train_out,
+            k=args.train_k,
+            p_leaf=args.train_p_leaf,
+            max_depth=args.train_max_depth,
+            dedupe=args.train_dedupe,
+            store_formula_str=args.train_store_formula_str,
+            store_satisfaction=args.train_store_satisfaction,
+            satisfaction_batch_size=args.train_satisfaction_batch_size,
+            satisfaction_time_index=args.train_satisfaction_time_index,
+        )
+
+        if args.eval_out and args.eval_k:
+            _build_dataset(
+                name="evaluation",
+                kernel=kernel,
+                out_dir=args.eval_out,
+                k=args.eval_k,
+                p_leaf=args.eval_p_leaf,
+                max_depth=args.eval_max_depth,
+                dedupe=args.eval_dedupe,
+                store_formula_str=args.eval_store_formula_str,
+                store_satisfaction=args.eval_store_satisfaction,
+                satisfaction_batch_size=args.eval_satisfaction_batch_size,
+                satisfaction_time_index=args.eval_satisfaction_time_index,
+            )
+        elif args.eval_out or args.eval_k:
+            raise ValueError("Both --eval-out and --eval-k must be provided together to build the eval dataset.")
 
 
 if __name__ == "__main__":

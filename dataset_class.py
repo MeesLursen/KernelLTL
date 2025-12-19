@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import json
 import os
+from collections import defaultdict
 from typing import Any
 
 import torch
@@ -150,6 +153,183 @@ class LTLDataset(Dataset):
             emb = kernel.compute_embedding_from_satisfaction(phi_sats, move_to_cpu=True)
             sats_to_store = phi_sats.clone().to('cpu') if self.store_satisfaction else None
             self._append_entry(phi, emb, sats_to_store)
+
+
+    @staticmethod
+    def construct_disjoint_datasets(
+        kernel: LTLKernel,
+        k: int,
+        p_leaf: float,
+        max_depth: int,
+        eval_ratio: float = 0.05,
+        store_formula_str_train: bool = False,
+        store_formula_str_eval: bool = True,
+        store_satisfaction_train: bool = False,
+        store_satisfaction_eval: bool = True,
+        satisfaction_batch_size: int = 512,
+        satisfaction_time_index: int = 0,
+    ) -> tuple[LTLDataset, LTLDataset]:
+        """
+        Construct disjoint train and eval datasets from a single sample of formulas.
+        
+        This method samples k formulas, groups duplicates together, and then randomly
+        moves entire groups to the eval set until the eval set contains at least
+        `eval_ratio` fraction of all sampled formulas. This ensures that:
+        1. Train and eval sets have no overlapping formulas
+        2. All copies of a formula end up in the same split
+        
+        Args:
+            kernel: The kernel to use for sampling and computing embeddings.
+                    The kernel's RNG is used for both sampling and splitting.
+            k: Total number of formulas to sample.
+            p_leaf: Probability of a node being a leaf during sampling.
+            max_depth: Maximum tree depth for sampled formulas.
+            eval_ratio: Target fraction of formulas for evaluation (default 0.05 = 5%).
+            store_formula_str_train: Whether to store formula strings in train dataset.
+            store_formula_str_eval: Whether to store formula strings in eval dataset.
+            store_satisfaction_train: Whether to store satisfaction tensors in train dataset.
+            store_satisfaction_eval: Whether to store satisfaction tensors in eval dataset.
+            satisfaction_batch_size: Batch size for computing satisfactions.
+            satisfaction_time_index: Time index for satisfaction computation.
+        
+        Returns:
+            A tuple (train_dataset, eval_dataset) with disjoint formulas.
+        """
+        # Sample all formulas (uses kernel's RNG)
+        all_formulas = kernel.sample_dataset_formulas_kernel(
+            k=k, p_leaf=p_leaf, max_depth=max_depth, force_tree=True
+        )
+        
+        # Group formulas by their canonical string representation
+        # Maps formula_str -> list of indices in all_formulas
+        formula_groups: dict[str, list[int]] = defaultdict(list)
+        for idx, phi in enumerate(all_formulas):
+            formula_groups[str(phi)].append(idx)
+        
+        unique_formula_strs = list(formula_groups.keys())
+        num_unique = len(unique_formula_strs)
+        
+        # Shuffle the unique formulas for random splitting using kernel's RNG
+        perm = torch.randperm(num_unique, generator=kernel.rng, device=kernel.device)
+        unique_formula_strs = [unique_formula_strs[i] for i in perm.tolist()]
+        
+        # Select groups for eval until we reach the target ratio
+        target_eval_count = int(k * eval_ratio)
+        eval_indices: set[int] = set()
+        eval_formula_strs: set[str] = set()
+        
+        for formula_str in unique_formula_strs:
+            if len(eval_indices) >= target_eval_count:
+                break
+            group_indices = formula_groups[formula_str]
+            eval_indices.update(group_indices)
+            eval_formula_strs.add(formula_str)
+        
+        # Remaining indices go to train
+        train_indices = [i for i in range(k) if i not in eval_indices]
+        eval_indices_list = sorted(eval_indices)
+        
+        print(f"Disjoint split: {len(train_indices)} train, {len(eval_indices_list)} eval "
+              f"({len(eval_indices_list) / k * 100:.1f}% eval)")
+        print(f"Unique formulas: {len(unique_formula_strs)} total, "
+              f"{len(eval_formula_strs)} in eval, {len(unique_formula_strs) - len(eval_formula_strs)} in train")
+        
+        # Create train dataset
+        train_dataset = LTLDataset(
+            store_formula_str=store_formula_str_train,
+            store_satisfaction=store_satisfaction_train,
+            satisfaction_batch_size=satisfaction_batch_size,
+            satisfaction_time_index=satisfaction_time_index,
+        )
+        train_dataset._reset_storage()
+        train_dataset.metadata = {
+            "source": "disjoint_split_train",
+            "total_sampled_k": k,
+            "train_count": len(train_indices),
+            "eval_count": len(eval_indices_list),
+            "eval_ratio_target": eval_ratio,
+            "eval_ratio_actual": len(eval_indices_list) / k,
+            "unique_formulas_total": num_unique,
+            "unique_formulas_train": num_unique - len(eval_formula_strs),
+            "unique_formulas_eval": len(eval_formula_strs),
+            "p_leaf": p_leaf,
+            "max_depth": max_depth,
+            "kernel_T": kernel.T,
+            "kernel_AP": kernel.AP,
+            "kernel_seed": kernel.seed,
+        }
+        
+        # Create eval dataset
+        eval_dataset = LTLDataset(
+            store_formula_str=store_formula_str_eval,
+            store_satisfaction=store_satisfaction_eval,
+            satisfaction_batch_size=satisfaction_batch_size,
+            satisfaction_time_index=satisfaction_time_index,
+        )
+        eval_dataset._reset_storage()
+        eval_dataset.metadata = {
+            "source": "disjoint_split_eval",
+            "total_sampled_k": k,
+            "train_count": len(train_indices),
+            "eval_count": len(eval_indices_list),
+            "eval_ratio_target": eval_ratio,
+            "eval_ratio_actual": len(eval_indices_list) / k,
+            "unique_formulas_total": num_unique,
+            "unique_formulas_train": num_unique - len(eval_formula_strs),
+            "unique_formulas_eval": len(eval_formula_strs),
+            "p_leaf": p_leaf,
+            "max_depth": max_depth,
+            "kernel_T": kernel.T,
+            "kernel_AP": kernel.AP,
+            "kernel_seed": kernel.seed,
+        }
+        
+        # Cache embeddings and satisfactions for unique formulas to avoid recomputation
+        # since we may have duplicates
+        embedding_cache: dict[str, torch.Tensor] = {}
+        satisfaction_cache: dict[str, torch.Tensor] = {}
+        
+        # Populate train dataset
+        print("Building train dataset...")
+        for idx in train_indices:
+            phi = all_formulas[idx]
+            phi_str = str(phi)
+            
+            if phi_str not in embedding_cache:
+                phi_sats = kernel._evaluate_formula_on_traces(
+                    formula=phi,
+                    batch_size=satisfaction_batch_size,
+                    time_index=satisfaction_time_index,
+                )
+                embedding_cache[phi_str] = kernel.compute_embedding_from_satisfaction(phi_sats, move_to_cpu=True)
+                if store_satisfaction_train:
+                    satisfaction_cache[phi_str] = phi_sats.clone().to('cpu')
+            
+            emb = embedding_cache[phi_str]
+            sats_to_store = satisfaction_cache.get(phi_str) if store_satisfaction_train else None
+            train_dataset._append_entry(phi, emb, sats_to_store)
+        
+        # Populate eval dataset
+        print("Building eval dataset...")
+        for idx in eval_indices_list:
+            phi = all_formulas[idx]
+            phi_str = str(phi)
+            
+            if phi_str not in embedding_cache:
+                phi_sats = kernel._evaluate_formula_on_traces(
+                    formula=phi,
+                    batch_size=satisfaction_batch_size,
+                    time_index=satisfaction_time_index,
+                )
+                embedding_cache[phi_str] = kernel.compute_embedding_from_satisfaction(phi_sats, move_to_cpu=True)
+                if store_satisfaction_eval:
+                    satisfaction_cache[phi_str] = phi_sats.clone().to('cpu')
+            
+            emb = embedding_cache[phi_str]
+            sats_to_store = satisfaction_cache.get(phi_str) if store_satisfaction_eval else None
+            eval_dataset._append_entry(phi, emb, sats_to_store)
+        
+        return train_dataset, eval_dataset
 
 
     
