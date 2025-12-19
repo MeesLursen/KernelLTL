@@ -3,7 +3,7 @@
 #SBATCH --output=logs/kernelltl_curriculum_%j.out
 #SBATCH --error=logs/kernelltl_curriculum_%j.err
 #SBATCH --time=72:00:00
-#SBATCH --partition=gpu
+#SBATCH --partition=gpu_a100
 #SBATCH --gpus=4
 #SBATCH --cpus-per-task=72
 #SBATCH --mem=256G

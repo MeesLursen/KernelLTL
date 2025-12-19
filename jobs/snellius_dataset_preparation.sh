@@ -3,7 +3,7 @@
 #SBATCH --output=logs/kernelltl_prep_%j.out
 #SBATCH --error=logs/kernelltl_prep_%j.err
 #SBATCH --time=04:00:00
-#SBATCH --partition=gpu
+#SBATCH --partition=gpu_a100
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=18
 #SBATCH --mem=64G
