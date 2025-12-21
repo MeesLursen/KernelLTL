@@ -148,7 +148,7 @@ def _load_training_args(args: argparse.Namespace) -> TrainingArguments:
             "remove_unused_columns": False,
             "dataloader_num_workers": 4,
             "dataloader_pin_memory": True,
-            "report_to": ["none"],
+            "report_to": ["all"],
             "ddp_find_unused_parameters": False,
         }
         print('Built training_args from scratch.')
