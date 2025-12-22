@@ -7,6 +7,9 @@ class Formula:
     def atoms(self) -> set[tuple]:
         raise NotImplementedError
 
+    def depth(self) -> int:
+        raise NotImplementedError
+
     def __str__(self) -> str:
         raise NotImplementedError
     
@@ -24,7 +27,10 @@ class Atom(Formula):
 
     def atoms(self) -> set[int]:
         return {self.name}
-
+    
+    def depth(self) -> int:
+        return 0
+    
     def __str__(self) -> str:
         return f'p_{self.name}'
     
@@ -42,7 +48,10 @@ class Not(Formula):
 
     def atoms(self) -> set[int]:
         return self.child.atoms()
-
+    
+    def depth(self) -> int:
+        return 1 + self.child.depth()
+    
     def __str__(self) -> str:
         return f"(~ {self.child})"
     
@@ -61,6 +70,9 @@ class And(Formula):
 
     def atoms(self) -> set[int]:
         return self.left.atoms() | self.right.atoms()
+    
+    def depth(self) -> int:
+        return 1 + max(self.left.depth(), self.right.depth())
 
     def __str__(self) -> str:
         return f"({self.left} AND {self.right})"
@@ -82,6 +94,9 @@ class Or(Formula):
 
     def atoms(self) -> set[int]:
         return self.left.atoms() | self.right.atoms()
+    
+    def depth(self) -> int:
+        return 1 + max(self.left.depth(), self.right.depth())
 
     def __str__(self) -> str:
         return f"({self.left} OR {self.right})"
@@ -103,6 +118,9 @@ class Implies(Formula):
 
     def atoms(self) -> set[int]:
         return self.left.atoms() | self.right.atoms()
+    
+    def depth(self) -> int:
+        return 1 + max(self.left.depth(), self.right.depth())
 
     def __str__(self) -> str:
         return f"({self.left} -> {self.right})"
@@ -127,6 +145,9 @@ class Next(Formula):
 
     def atoms(self) -> set[int]:
         return self.child.atoms()
+    
+    def depth(self) -> int:
+        return 1 + self.child.depth()
 
     def __str__(self) -> str:
         return f"(X {self.child})"
@@ -148,6 +169,9 @@ class Eventually(Formula):
 
     def atoms(self) -> set[int]:
         return self.child.atoms()
+    
+    def depth(self) -> int:
+        return 1 + self.child.depth()
 
     def __str__(self) -> str:
         return f"(F {self.child})"
@@ -174,6 +198,9 @@ class Globally(Formula):
 
     def atoms(self) -> set[int]:
         return self.child.atoms()
+    
+    def depth(self) -> int:
+        return 1 + self.child.depth()
 
     def __str__(self) -> str:
         return f"(G {self.child})"
@@ -202,6 +229,9 @@ class Until(Formula):
 
     def atoms(self) -> set[int]:
         return self.left.atoms() | self.right.atoms()
+    
+    def depth(self) -> int:
+        return 1 + max(self.left.depth(), self.right.depth())
 
     def __str__(self) -> str:
         return f"({self.left} U {self.right})"
