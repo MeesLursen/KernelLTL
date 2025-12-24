@@ -397,14 +397,14 @@ class LTLDataset(Dataset):
                 unique_train_formula_strs.add(phi_str)
 
                 if phi_str not in embedding_cache:
-                phi_sats = kernel._evaluate_formula_on_traces(
-                    formula=phi,
-                    batch_size=satisfaction_batch_size,
-                    time_index=satisfaction_time_index,
-                )
-                embedding_cache[phi_str] = kernel.compute_embedding_from_satisfaction(phi_sats, move_to_cpu=True)
-                if store_satisfaction_train:
-                    satisfaction_cache[phi_str] = phi_sats.clone().to('cpu')
+                    phi_sats = kernel._evaluate_formula_on_traces(
+                        formula=phi,
+                        batch_size=satisfaction_batch_size,
+                        time_index=satisfaction_time_index,
+                    )
+                    embedding_cache[phi_str] = kernel.compute_embedding_from_satisfaction(phi_sats, move_to_cpu=True)
+                    if store_satisfaction_train:
+                        satisfaction_cache[phi_str] = phi_sats.clone().to('cpu')
             
                 emb = embedding_cache[phi_str]
                 sats_to_store = satisfaction_cache.get(phi_str) if store_satisfaction_train else None

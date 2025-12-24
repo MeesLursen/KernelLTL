@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --job-name=kernelltl_prep
-#SBATCH --output=logs/kernelltl_prep_%j.out
-#SBATCH --error=logs/kernelltl_prep_%j.err
-#SBATCH --time=04:00:00
-#SBATCH --partition=gpu_a100
+#SBATCH --job-name=kernelltl_dataset_prep
+#SBATCH --output=logs/kernelltl_dataset_prep_%j.out
+#SBATCH --error=logs/kernelltl_dataset_prep_%j.err
+#SBATCH --time=06:00:00
+#SBATCH --partition=gpu_h100
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=18
 #SBATCH --mem=64G
@@ -32,8 +32,7 @@ VENV_DIR="$PROJECT_DIR/venv"
 # Path to the saved kernel
 KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
 
-# Base output directory for datasets
-DATASETS_BASE="$PROJECT_DIR/datasets"
+# Base output directory for datasetssq="$PROJECT_DIR/datasets"
 
 # ============================================================================
 # CURRICULUM STAGE DEFINITIONS
