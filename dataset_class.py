@@ -166,7 +166,7 @@ class LTLDataset(Dataset):
         store_formula_str_eval: bool = True,
         store_satisfaction_train: bool = False,
         store_satisfaction_eval: bool = True,
-        satisfaction_batch_size: int = 512,
+        satisfaction_batch_size: int = 10240,
         satisfaction_time_index: int = 0,
         dedupe_eval: bool = True,
     ) -> tuple[LTLDataset, LTLDataset]:

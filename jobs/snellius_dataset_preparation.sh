@@ -38,24 +38,32 @@ DATASETS_BASE="$PROJECT_DIR/datasets"
 # ============================================================================
 # CURRICULUM STAGE DEFINITIONS
 # ============================================================================
-# Format: "stage_name:k_samples:max_depth:p_leaf:eval_ratio"
+# Format: "stage_name:k_samples:max_depth:p_leaf_range:eval_ratio"
 # - k_samples: total number of formulas to sample
 # - max_depth: maximum formula tree depth
-# - p_leaf: probability of leaf node (higher = simpler formulas)
+# - p_leaf_range: probability of leaf node (higher = simpler formulas)
 # - eval_ratio: fraction for evaluation set (using disjoint split)
 
 STAGES=(
-    "stage1:50000:2:0.5:0.05"
-    "stage2:100000:3:0.45:0.05"
-    "stage3:200000:4:0.4:0.05"
+    "stage0:50000:1:(0.3,0.6):0.05"
+    "stage1:100000:2:(0.2,0.5):0.025"
+    "stage2:200000:3:(0.1,0.5):0.025"
 )
+#    "stage3:400000:4:(0.01,0.5):0.025"
+#    "stage4:800000:5:(0.01,0.4):0.025"
 
 # Common options
-DEDUPE="--train-dedupe"
-STORE_FORMULA_STR="--train-store-formula-str"
-STORE_SATISFACTION=""  # Add --train-store-satisfaction if needed
-SATISFACTION_BATCH_SIZE=1024
-SATISFACTION_TIME_INDEX=0
+TRAIN_DEDUPE=""
+TRAIN_STORE_FORMULA_STR=""
+TRAIN_STORE_SATISFACTION=""  # Add --train-store-satisfaction if needed
+TRAIN_SATISFACTION_BATCH_SIZE=40960
+TRAIN_SATISFACTION_TIME_INDEX=0
+EVAL_DEDUPE="--eval-dedupe"
+EVAL_STORE_FORMULA_STR="--eval-store-formula-str"
+EVAL_STORE_SATISFACTION="--eval-store-satisfaction"  # Add --eval-store-satisfaction if needed
+EVAL_SATISFACTION_BATCH_SIZE=40960
+EVAL_SATISFACTION_TIME_INDEX=0
+
 
 # ============================================================================
 # ENVIRONMENT SETUP
@@ -115,7 +123,7 @@ echo "=============================================="
 
 for stage_def in "${STAGES[@]}"; do
     # Parse stage definition
-    IFS=':' read -r STAGE_NAME K_SAMPLES MAX_DEPTH P_LEAF EVAL_RATIO <<< "$stage_def"
+    IFS=':' read -r STAGE_NAME K_SAMPLES MAX_DEPTH P_LEAF_RANGE EVAL_RATIO <<< "$stage_def"
     
     TRAIN_OUT="$DATASETS_BASE/$STAGE_NAME/train"
     EVAL_OUT="$DATASETS_BASE/$STAGE_NAME/eval"
@@ -125,7 +133,7 @@ for stage_def in "${STAGES[@]}"; do
     echo "Generating dataset for $STAGE_NAME"
     echo "  - Total samples: $K_SAMPLES"
     echo "  - Max depth: $MAX_DEPTH"
-    echo "  - P(leaf): $P_LEAF"
+    echo "  - P_leaf range: $P_LEAF_RANGE"
     echo "  - Eval ratio: $EVAL_RATIO"
     echo "  - Train output: $TRAIN_OUT"
     echo "  - Eval output: $EVAL_OUT"
@@ -143,21 +151,16 @@ for stage_def in "${STAGES[@]}"; do
         --eval-ratio "$EVAL_RATIO"
         --train-out "$TRAIN_OUT"
         --train-k "$K_SAMPLES"
-        --train-p-leaf "$P_LEAF"
+        --train-p-leaf-range "$P_LEAF_RANGE"
         --train-max-depth "$MAX_DEPTH"
+        $TRAIN_STORE_FORMULA_STR
+        $TRAIN_STORE_SATISFACTION
+        --train-satisfaction-batch-size "$TRAIN_SATISFACTION_BATCH_SIZE"
+        --train-satisfaction-time-index "$TRAIN_SATISFACTION_TIME_INDEX"
         --eval-out "$EVAL_OUT"
-        $DEDUPE
-        $STORE_FORMULA_STR
+        $EVAL_DEDUPE
+
     )
-    
-    # Add satisfaction options if enabled
-    if [ -n "$STORE_SATISFACTION" ]; then
-        CMD+=(
-            "$STORE_SATISFACTION"
-            --train-satisfaction-batch-size "$SATISFACTION_BATCH_SIZE"
-            --train-satisfaction-time-index "$SATISFACTION_TIME_INDEX"
-        )
-    fi
     
     echo "Running: ${CMD[*]}"
     "${CMD[@]}"

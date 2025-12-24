@@ -49,8 +49,8 @@ def parse_args() -> argparse.Namespace:
     train = parser.add_argument_group("Training dataset")
     train.add_argument("--train-out", required=True, help="Output directory for the training dataset")
     train.add_argument("--train-k", type=_positive_int, required=True, help="Number of formulas to sample for training (or total when using --disjoint-split)")
-    train.add_argument("--train-p-leaf-range", type=tuple[float,float], default=0.45, help="Probability that a sampled node becomes a leaf")
-    train.add_argument("--train-max-depth", type=_positive_int, default=2, help="Maximum tree depth for training formulas")
+    train.add_argument("--train-p-leaf-range", nargs=2, type=float, help="Probability that a sampled node becomes a leaf")
+    train.add_argument("--train-max-depth", type=_positive_int, help="Maximum tree depth for training formulas")
     train.add_argument("--train-dedupe", action="store_true", help="Deduplicate formulas before computing embeddings")
     train.add_argument("--train-store-formula-str", action="store_true", help="Persist canonical formula strings in the dataset")
     train.add_argument("--train-store-satisfaction", action="store_true", help="Persist satisfaction tensors in the dataset")
@@ -61,9 +61,9 @@ def parse_args() -> argparse.Namespace:
     eval_group = parser.add_argument_group("Evaluation dataset")
     eval_group.add_argument("--eval-out", help="Output directory for the evaluation dataset")
     eval_group.add_argument("--eval-k", type=_positive_int, help="Number of formulas for eval dataset (ignored when using --disjoint-split)")
-    eval_group.add_argument("--eval-p-leaf-range", type=tuple[float,float], default=0.45, help="Probability that a sampled node becomes a leaf (ignored when using --disjoint-split)")
-    eval_group.add_argument("--eval-max-depth", type=_positive_int, default=2, help="Maximum tree depth for eval formulas (ignored when using --disjoint-split)")
-    eval_group.add_argument("--eval-dedupe", action="store_true", help="Deduplicate formulas before computing embeddings (ignored when using --disjoint-split)")
+    eval_group.add_argument("--eval-p-leaf-range", nargs=2, type=float, help="Probability that a sampled node becomes a leaf (ignored when using --disjoint-split)")
+    eval_group.add_argument("--eval-max-depth", type=_positive_int, help="Maximum tree depth for eval formulas (ignored when using --disjoint-split)")
+    eval_group.add_argument("--eval-dedupe", action="store_true", help="Deduplicate formulas before computing embeddings")
     eval_group.add_argument("--eval-store-formula-str", dest="eval_store_formula_str", action="store_true", help="Persist canonical formula strings in the eval dataset")
     eval_group.add_argument("--no-eval-store-formula-str", dest="eval_store_formula_str", action="store_false", help="Disable formula string storage for eval dataset")
     eval_group.add_argument("--eval-store-satisfaction", dest="eval_store_satisfaction", action="store_true", help="Persist evaluation satisfactions")
@@ -118,6 +118,8 @@ def _build_dataset(
 def main() -> None:
     args = parse_args()
     kernel = LTLKernel.load(args.kernel_dir)
+    train_p_leaf_range = tuple(args.train_p_leaf_range)
+    eval_p_leaf_range = tuple(args.eval_p_leaf_range)
     if kernel.traces is None or kernel.F is None:
         raise RuntimeError(
             "Loaded kernel is missing traces or feature matrix F. Rerun prepare_kernel.py with --build-f options before generating datasets."
@@ -138,7 +140,7 @@ def main() -> None:
         train_dataset, eval_dataset = LTLDataset.construct_disjoint_datasets(
             kernel=kernel,
             k=args.train_k,
-            p_leaf_range=args.train_p_leaf_range,
+            p_leaf_range=train_p_leaf_range,
             max_depth=args.train_max_depth,
             eval_ratio=args.eval_ratio,
             store_formula_str_train=args.train_store_formula_str,
@@ -147,6 +149,7 @@ def main() -> None:
             store_satisfaction_eval=args.eval_store_satisfaction,
             satisfaction_batch_size=args.train_satisfaction_batch_size,
             satisfaction_time_index=args.train_satisfaction_time_index,
+            dedupe_eval=args.eval_dedupe,
         )
         
         train_dataset.save(args.train_out)
@@ -161,7 +164,7 @@ def main() -> None:
             kernel=kernel,
             out_dir=args.train_out,
             k=args.train_k,
-            p_leaf_range=args.train_p_leaf_range,
+            p_leaf_range=train_p_leaf_range,
             max_depth=args.train_max_depth,
             dedupe=args.train_dedupe,
             store_formula_str=args.train_store_formula_str,
@@ -176,7 +179,7 @@ def main() -> None:
                 kernel=kernel,
                 out_dir=args.eval_out,
                 k=args.eval_k,
-                p_leaf_range=args.eval_p_leaf_range,
+                p_leaf_range=eval_p_leaf_range,
                 max_depth=args.eval_max_depth,
                 dedupe=args.eval_dedupe,
                 store_formula_str=args.eval_store_formula_str,
