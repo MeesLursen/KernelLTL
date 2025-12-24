@@ -103,20 +103,20 @@ class LTLKernel:
 
 
 
-    def sample_anchor_formulas_kernel(self, m: int = 1024, p_leaf: float = 0.5, max_depth: int = 6, force_tree: bool = True):
+    def sample_anchor_formulas_kernel(self, m: int = 1024, p_leaf_range: float = (0.4,0.6), max_depth: int = 6, force_tree: bool = True):
         """
         Method for adding a random sample of formulae to the kernel.
         - m: specifies the number of sampled formulae.
-        - p_leaf: (Default = 0.5) specifies the odds of each node being a leaf. Higher probability reduces average (bounded) formula complexity.
+        - p_leaf_range: (Default = (0.4,0.6)) specifies the odds of each node being a leaf. Higher probability reduces average (bounded) formula complexity.
         - max_depth: (Default = 6) specifies the maximum formula complexity.
-        - force_tree: (Default = True) forces the root of the syntax tree to be an operator. Without this, p_leaf percent of the sample will be just an AP.
+        - force_tree: (Default = True) forces the root of the syntax tree to be an operator. Without this, p_leaf_range percent of the sample will be just an AP.
 
         Implicit arguments are: AP, T, seed.
         - AP: specifies the number of atomic propositions available to each formula.
         - rng: specifies the random number generator used, for reproducibility.
         """
         sample = sample_formulas(n_formula=m,
-                                 p_leaf=p_leaf,
+                                 p_leaf_range=p_leaf_range,
                                  max_depth=max_depth,
                                  n_ap=self.AP,
                                  force_tree=force_tree,
@@ -127,13 +127,13 @@ class LTLKernel:
 
 
 
-    def sample_anchor_formulas_kernel_cosine_controlled(self, m: int = 1024, p_leaf: float = 0.5, max_depth: int = 6, force_tree: bool = True, batch_size = 512, threshold = 0.8, max_attempts_per_formula = 100):
+    def sample_anchor_formulas_kernel_cosine_controlled(self, m: int = 1024, p_leaf_range: float = (0.4,0.6), max_depth: int = 6, force_tree: bool = True, batch_size = 512, threshold = 0.8, max_attempts_per_formula = 100):
         """
         Method for adding a random sample of formulae to the kernel.
         - m: specifies the number of sampled formulae.
-        - p_leaf: (Default = 0.5) specifies the odds of each node being a leaf. Higher probability reduces average (bounded) formula complexity.
+        - p_leaf_range: (Default = 0.5) specifies the odds of each node being a leaf. Higher probability reduces average (bounded) formula complexity.
         - max_depth: (Default = 6) specifies the maximum formula complexity.
-        - force_tree: (Default = True) forces the root of the syntax tree to be an operator. Without this, p_leaf percent of the sample will be just an AP.
+        - force_tree: (Default = True) forces the root of the syntax tree to be an operator. Without this, p_leaf_range percent of the sample will be just an AP.
 
         Implicit arguments are: AP, T, seed.
         - AP: specifies the number of atomic propositions available to each formula.
@@ -163,7 +163,7 @@ class LTLKernel:
             while attempts < max_attempts_per_formula:
                 attempts += 1
                 candidate = sample_formulas(n_formula=1,
-                                            p_leaf=p_leaf,
+                                            p_leaf_range=p_leaf_range,
                                             max_depth=max_depth,
                                             n_ap=self.AP,
                                             force_tree=force_tree,
@@ -306,20 +306,20 @@ class LTLKernel:
 
 
     # ----------- Dataset Generation -----------
-    def sample_dataset_formulas_kernel(self, k: int, p_leaf: float, max_depth: int, force_tree: bool = True):
+    def sample_dataset_formulas_kernel(self, k: int, p_leaf_range: float, max_depth: int, force_tree: bool = True):
         """
         Method for adding a random sample of formulae to the kernel.
         - k: specifies the number of sampled formulae.
-        - p_leaf: (Default = 0.5) specifies the odds of each node being a leaf. Higher probability reduces average (bounded) formula complexity.
+        - p_leaf_range: (Default = (0.4,0.6)) specifies the odds of each node being a leaf. Higher probability reduces average (bounded) formula complexity.
         - max_depth: (Default = 6) specifies the maximum formula complexity.
-        - force_tree: (Default = True) forces the root of the syntax tree to be an operator. Without this, p_leaf percent of the sample will be just an AP.
+        - force_tree: (Default = True) forces the root of the syntax tree to be an operator. Without this, p_leaf_range percent of the sample will be just an AP.
 
         Implicit arguments are: AP, T, seed.
         - AP: specifies the number of atomic propositions available to each formula.
         - rng: specifies the random number generator used, for reproducibility.
         """
         sample = sample_formulas(n_formula=k,
-                                 p_leaf=p_leaf,
+                                 p_leaf_range=p_leaf_range,
                                  max_depth=max_depth,
                                  n_ap=self.AP,
                                  force_tree=force_tree,
