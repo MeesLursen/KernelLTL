@@ -223,7 +223,7 @@ class LTLDataset(Dataset):
             n_at_depth = len(formulas_at_depth)
             
             # Shuffle formulas at this depth using kernel's RNG
-            perm = torch.randperm(n_at_depth, generator=kernel.rng, device='cpu') #TODO find out if this generator+'cpu' combo is an issue.
+            perm = torch.randperm(n_at_depth, generator=kernel.rng, device=kernel.device)
             shuffled = [formulas_at_depth[i] for i in perm.tolist()]
             
             # Take eval_ratio fraction, but at least 1 if there are any formulas
@@ -416,7 +416,7 @@ class LTLDataset(Dataset):
 
             if len(train_dataset) > int(math.ceil(k - eval_ratio * k)):
                 num_over = len(train_datset) - int(math.ceil(k - eval_ratio * k))
-                list_rand_delete_idx = torch.randint(0, (len(train_dataset)-1), (num_over,), generator=kernel.rng, device = 'cpu') 
+                list_rand_delete_idx = torch.randint(0, (len(train_dataset)-1), (num_over,), generator=kernel.rng, device = kernel.device).tolist()
                 for idx in list_rand_delete_idx:
                     train_dataset._delitem(idx)
             elif len(train_datset) = int(math.ceil(k - eval_ratio * k)):
