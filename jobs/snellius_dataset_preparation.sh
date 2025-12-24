@@ -45,12 +45,12 @@ DATASETS_BASE="$PROJECT_DIR/artifacts/datasets"
 # - eval_ratio: fraction for evaluation set (using disjoint split)
 
 STAGES=(
-    "stage0:50000:1:(0.3,0.6):0.05"
-    "stage1:100000:2:(0.2,0.5):0.025"
-    "stage2:200000:3:(0.1,0.5):0.025"
+    "stage0:50000:1:0.3 0.6:0.05"
+    "stage1:100000:2:0.2 0.5:0.025"
+    "stage2:200000:3:0.1 0.5:0.025"
 )
-#    "stage3:400000:4:(0.01,0.5):0.025"
-#    "stage4:800000:5:(0.01,0.4):0.025"
+#    "stage3:400000:4:0.01 0.5:0.025"
+#    "stage4:800000:5:0.01 0.4:0.025"
 
 # Common options
 TRAIN_DEDUPE=""
