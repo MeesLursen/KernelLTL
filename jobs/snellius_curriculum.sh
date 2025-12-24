@@ -78,7 +78,7 @@ mkdir -p "$PROJECT_DIR/logs"
 
 # Load modules
 module purge
-module load 2023
+module load 2025
 module load Python/3.11.3-GCCcore-12.3.0
 module load CUDA/12.1.1
 
