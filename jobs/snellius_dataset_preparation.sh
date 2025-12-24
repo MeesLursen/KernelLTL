@@ -32,7 +32,8 @@ VENV_DIR="$PROJECT_DIR/venv"
 # Path to the saved kernel
 KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
 
-# Base output directory for datasetssq="$PROJECT_DIR/datasets"
+# Base output directory for datasets
+DATASETS_BASE="$PROJECT_DIR/artifacts/datasets"
 
 # ============================================================================
 # CURRICULUM STAGE DEFINITIONS
