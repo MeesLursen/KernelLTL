@@ -47,7 +47,7 @@ def sample_formulas(n_formula: int,
         op = _ALL_OPS[torch.randint(0, len(_ALL_OPS), (), generator=rng, device=device).item()]
         if op in _UNARY_OPS:
             # unary
-            child : Formula = gen(depth + 1)
+            child : Formula = gen(depth + 1, p_leaf)
 
             # Avoid redundant unary nesting (e.g., G(G φ))
             while (op == 'G' and isinstance(child, Globally)) or \
@@ -85,7 +85,7 @@ def sample_formulas(n_formula: int,
     ls = []
     for _ in range(n_formula):
         p_leaf = p_leaf_range[0] + torch.rand((), generator=rng, device=device).item() * (p_leaf_range[1] - p_leaf_range[0])
-        formula = gen(0, p_leaf=p_leaf ,root_must_be_operator = force_tree)
+        formula = gen(0, p_leaf=p_leaf, root_must_be_operator = force_tree)
         ls.append(formula)
     
     return ls
