@@ -71,7 +71,7 @@ def sample_formulas(n_formula: int,
             right : Formula = gen(depth + 1, p_leaf_right)
 
             while left == right:
-                right = gen(depth + 1)
+                right = gen(depth + 1, p_leaf_right)
 
             if op == 'AND':
                 return And(left, right)
