@@ -119,7 +119,10 @@ def main() -> None:
     args = parse_args()
     kernel = LTLKernel.load(args.kernel_dir)
     train_p_leaf_range = tuple(args.train_p_leaf_range)
-    eval_p_leaf_range = tuple(args.eval_p_leaf_range)
+    if args.eval_p_leaf_range is not None:
+        eval_p_leaf_range = tuple(args.eval_p_leaf_range)
+    else:
+        eval_p_leaf_range = None
     if kernel.traces is None or kernel.F is None:
         raise RuntimeError(
             "Loaded kernel is missing traces or feature matrix F. Rerun prepare_kernel.py with --build-f options before generating datasets."
