@@ -49,7 +49,7 @@ STAGES=(
     "stage1:100000:2:0.2 0.5:0.025"
     "stage2:200000:3:0.1 0.5:0.025"
 )
-#    "stage3:400000:4:0.01 0.5:0.025" test
+#    "stage3:400000:4:0.01 0.5:0.025"
 #    "stage4:800000:5:0.01 0.4:0.025"
 
 # Common options
@@ -151,7 +151,7 @@ for stage_def in "${STAGES[@]}"; do
         --eval-ratio "$EVAL_RATIO"
         --train-out "$TRAIN_OUT"
         --train-k "$K_SAMPLES"
-        --train-p-leaf-range "$P_LEAF_RANGE"
+        --train-p-leaf-range $P_LEAF_RANGE
         --train-max-depth "$MAX_DEPTH"
         $TRAIN_STORE_FORMULA_STR
         $TRAIN_STORE_SATISFACTION
