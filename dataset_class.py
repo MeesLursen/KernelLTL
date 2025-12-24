@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from math import ceil
 import json
 import os
 from collections import defaultdict
@@ -370,7 +371,7 @@ class LTLDataset(Dataset):
             eval_dataset.metadata["eval_count_after_dedupe"] = len(eval_dataset)
 
         # Top up train_dataset with additional formulae until desired quantity is reached
-        while len(train_dataset) < int(math.ceil(k - eval_ratio * k)):
+        while len(train_dataset) < int(ceil(k - eval_ratio * k)):
             top_up_batch = kernel.sample_dataset_formulas_kernel(
                 k=10240, 
                 p_leaf_range=p_leaf_range,
@@ -388,7 +389,7 @@ class LTLDataset(Dataset):
 
             top_up_new_indeces: set[int] = set()
             for formula_str in formula_strs_not_in_train:
-                top_up_new_indices.update(top_up_formula_groups[formula_str])
+                top_up_new_indeces.update(top_up_formula_groups[formula_str])
 
             print("Topping up train dataset...")
             for idx in top_up_new_indeces:
@@ -414,12 +415,12 @@ class LTLDataset(Dataset):
             embedding_cache.clear()
             satisfaction_cache.clear()
 
-            if len(train_dataset) > int(math.ceil(k - eval_ratio * k)):
-                num_over = len(train_datset) - int(math.ceil(k - eval_ratio * k))
+            if len(train_dataset) > int(ceil(k - eval_ratio * k)):
+                num_over = len(train_dataset) - int(ceil(k - eval_ratio * k))
                 list_rand_delete_idx = torch.randint(0, (len(train_dataset)-1), (num_over,), generator=kernel.rng, device = kernel.device).tolist()
                 for idx in list_rand_delete_idx:
                     train_dataset._delitem(idx)
-            elif len(train_datset) = int(math.ceil(k - eval_ratio * k)):
+            elif len(train_dataset) == int(ceil(k - eval_ratio * k)):
                 break
 
         

@@ -5,8 +5,8 @@
 #SBATCH --time=06:00:00
 #SBATCH --partition=gpu_h100
 #SBATCH --gpus=1
-#SBATCH --cpus-per-task=18
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=180G
 
 # ============================================================================
 # Snellius Job Script for KernelLTL Dataset Preparation
@@ -16,7 +16,7 @@
 # Each stage uses different complexity parameters (depth, number of formulas).
 #
 # Usage:
-#   sbatch snellius_prepare_datasets.sh
+#   sbatch snellius_dataset_preparation.sh
 #
 # ============================================================================
 
