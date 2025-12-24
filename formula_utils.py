@@ -11,7 +11,7 @@ _ALL_OPS = _UNARY_OPS + _BINARY_OPS
 
 
 def sample_formulas(n_formula: int,
-                    p_leaf: float,
+                    p_leaf_range: tuple[float, float],
                     max_depth: int,
                     n_ap: int,
                     force_tree: bool,
@@ -19,7 +19,7 @@ def sample_formulas(n_formula: int,
                     device: str) -> list[Formula]:
     """Generate a random formula.
     - n_formula: Specifies the number of sampled formulae.
-    - p_leaf: probability to create an atomic proposition at a node.
+    - p_leaf_range: probability to create an atomic proposition at a node.
     - max_depth: maximum recursion depth (root at depth 0). When depth >= max_depth, we force a leaf.
     - n_ap: maximum number of distinct atomic proposition names (p0..p{n_ap-1}).
     - force_tree: specifies whether the root is forced to be an operator.
@@ -30,7 +30,7 @@ def sample_formulas(n_formula: int,
 
     atoms = list(range(n_ap))
 
-    def gen(depth: int, root_must_be_operator: bool = False) -> Formula:
+    def gen(depth: int, p_leaf: float, root_must_be_operator: bool = False) -> Formula:
         # If we're at max depth -> force leaf
         if depth >= max_depth:
             return Atom(atoms[torch.randint(0, len(atoms), (), generator=rng, device=device).item()])
@@ -53,7 +53,7 @@ def sample_formulas(n_formula: int,
             while (op == 'G' and isinstance(child, Globally)) or \
                   (op == 'F' and isinstance(child, Eventually)) or \
                   (op == 'NOT' and isinstance(child, Not)):
-                child = gen(depth + 1)
+                child = gen(depth + 1, p_leaf)
 
             if op == 'NOT':
                 return Not(child)
@@ -64,9 +64,11 @@ def sample_formulas(n_formula: int,
             if op == 'G':
                 return Globally(child)
         else:
+            p_leaf_left = p_leaf_range[0] + torch.rand((), generator=rng, device=device).item() * (p_leaf_range[1] - p_leaf_range[0])
+            p_leaf_right = p_leaf_range[0] + torch.rand((), generator=rng, device=device).item() * (p_leaf_range[1] - p_leaf_range[0])
             # binary
-            left : Formula = gen(depth + 1)
-            right : Formula = gen(depth + 1)
+            left : Formula = gen(depth + 1, p_leaf_left)
+            right : Formula = gen(depth + 1, p_leaf_right)
 
             while left == right:
                 right = gen(depth + 1)
@@ -82,7 +84,8 @@ def sample_formulas(n_formula: int,
 
     ls = []
     for _ in range(n_formula):
-        formula = gen(0, root_must_be_operator = force_tree)
+        p_leaf = p_leaf_range[0] + torch.rand((), generator=rng, device=device).item() * (p_leaf_range[1] - p_leaf_range[0])
+        formula = gen(0, p_leaf=p_leaf ,root_must_be_operator = force_tree)
         ls.append(formula)
     
     return ls

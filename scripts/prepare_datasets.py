@@ -49,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     train = parser.add_argument_group("Training dataset")
     train.add_argument("--train-out", required=True, help="Output directory for the training dataset")
     train.add_argument("--train-k", type=_positive_int, required=True, help="Number of formulas to sample for training (or total when using --disjoint-split)")
-    train.add_argument("--train-p-leaf", type=float, default=0.45, help="Probability that a sampled node becomes a leaf")
+    train.add_argument("--train-p-leaf-range", type=tuple[float,float], default=0.45, help="Probability that a sampled node becomes a leaf")
     train.add_argument("--train-max-depth", type=_positive_int, default=2, help="Maximum tree depth for training formulas")
     train.add_argument("--train-dedupe", action="store_true", help="Deduplicate formulas before computing embeddings")
     train.add_argument("--train-store-formula-str", action="store_true", help="Persist canonical formula strings in the dataset")
@@ -61,7 +61,7 @@ def parse_args() -> argparse.Namespace:
     eval_group = parser.add_argument_group("Evaluation dataset")
     eval_group.add_argument("--eval-out", help="Output directory for the evaluation dataset")
     eval_group.add_argument("--eval-k", type=_positive_int, help="Number of formulas for eval dataset (ignored when using --disjoint-split)")
-    eval_group.add_argument("--eval-p-leaf", type=float, default=0.45, help="Probability that a sampled node becomes a leaf (ignored when using --disjoint-split)")
+    eval_group.add_argument("--eval-p-leaf-range", type=tuple[float,float], default=0.45, help="Probability that a sampled node becomes a leaf (ignored when using --disjoint-split)")
     eval_group.add_argument("--eval-max-depth", type=_positive_int, default=2, help="Maximum tree depth for eval formulas (ignored when using --disjoint-split)")
     eval_group.add_argument("--eval-dedupe", action="store_true", help="Deduplicate formulas before computing embeddings (ignored when using --disjoint-split)")
     eval_group.add_argument("--eval-store-formula-str", dest="eval_store_formula_str", action="store_true", help="Persist canonical formula strings in the eval dataset")
@@ -80,7 +80,7 @@ def _build_dataset(
     kernel: LTLKernel,
     out_dir: str,
     k: int,
-    p_leaf: float,
+    p_leaf_range: tuple[float,float],
     max_depth: int,
     dedupe: bool,
     store_formula_str: bool,
@@ -88,7 +88,7 @@ def _build_dataset(
     satisfaction_batch_size: int,
     satisfaction_time_index: int,
 ) -> None:
-    print(f"\nBuilding {name} dataset with k={k}, p_leaf={p_leaf}, max_depth={max_depth}, dedupe={dedupe}")
+    print(f"\nBuilding {name} dataset with k={k}, p_leaf_range={p_leaf_range}, max_depth={max_depth}, dedupe={dedupe}")
     os.makedirs(out_dir, exist_ok=True)
 
     dataset = LTLDataset(
@@ -107,7 +107,7 @@ def _build_dataset(
     construct_fn(
         kernel=kernel,
         k=k,
-        p_leaf=p_leaf,
+        p_leaf_range=p_leaf_range,
         max_depth=max_depth,
     )
 
@@ -129,7 +129,7 @@ def main() -> None:
             raise ValueError("--eval-out is required when using --disjoint-split")
         
         print(f"\nBuilding disjoint train/eval datasets with k={args.train_k}, "
-              f"p_leaf={args.train_p_leaf}, max_depth={args.train_max_depth}, "
+              f"p_leaf_range={args.train_p_leaf_range}, max_depth={args.train_max_depth}, "
               f"eval_ratio={args.eval_ratio}")
         
         os.makedirs(args.train_out, exist_ok=True)
@@ -138,7 +138,7 @@ def main() -> None:
         train_dataset, eval_dataset = LTLDataset.construct_disjoint_datasets(
             kernel=kernel,
             k=args.train_k,
-            p_leaf=args.train_p_leaf,
+            p_leaf_range=args.train_p_leaf_range,
             max_depth=args.train_max_depth,
             eval_ratio=args.eval_ratio,
             store_formula_str_train=args.train_store_formula_str,
@@ -161,7 +161,7 @@ def main() -> None:
             kernel=kernel,
             out_dir=args.train_out,
             k=args.train_k,
-            p_leaf=args.train_p_leaf,
+            p_leaf_range=args.train_p_leaf_range,
             max_depth=args.train_max_depth,
             dedupe=args.train_dedupe,
             store_formula_str=args.train_store_formula_str,
@@ -176,7 +176,7 @@ def main() -> None:
                 kernel=kernel,
                 out_dir=args.eval_out,
                 k=args.eval_k,
-                p_leaf=args.eval_p_leaf,
+                p_leaf_range=args.eval_p_leaf_range,
                 max_depth=args.eval_max_depth,
                 dedupe=args.eval_dedupe,
                 store_formula_str=args.eval_store_formula_str,

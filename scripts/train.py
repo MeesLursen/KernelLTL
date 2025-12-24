@@ -53,7 +53,7 @@ def main():
     train_dataset.construct_dataset_from_kernel(
         kernel=kernel,
         k=78000,  # adjust dataset size as needed
-        p_leaf=0.45,
+        p_leaf_range=(0.3, 0.6),
         max_depth=2,
     )
     
@@ -64,7 +64,7 @@ def main():
     eval_dataset.construct_dataset_from_kernel(
         kernel=kernel,
         k=1000,  # smaller validation set
-        p_leaf=0.45,
+        p_leaf_range=(0.3, 0.6),
         max_depth=2,
     )
     

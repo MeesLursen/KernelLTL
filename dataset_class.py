@@ -54,22 +54,22 @@ class LTLDataset(Dataset):
 
 
 
-    def construct_dataset_from_kernel(self, kernel: LTLKernel, k: int, p_leaf: float, max_depth: int):
+    def construct_dataset_from_kernel(self, kernel: LTLKernel, k: int, p_leaf_range: tuple[float,float], max_depth: int):
         """
         Method for constructing the dataset through the kernel, specifies self.formulas and self.embeddings.
         - kernel: the kernel we want to use for sampling formulae and computing their embeddings.
         - k: specifies the number of sampled formulae.
-        - p_leaf: specifies the odds of each node being a leaf. Higher probability reduces average sampled formula complexity (bounded by max_depth).
+        - p_leaf_range: specifies the odds of each node being a leaf. Higher probability reduces average sampled formula complexity (bounded by max_depth).
         - max_depth: specifies the maximum formula complexity.
         - satisfaction_batch_size: configurable through LTLDataset to control evaluation batch sizes.
         """
         
-        dataset_formulas = kernel.sample_dataset_formulas_kernel(k=k, p_leaf=p_leaf, max_depth=max_depth, force_tree=True)
+        dataset_formulas = kernel.sample_dataset_formulas_kernel(k=k, p_leaf_range=p_leaf_range, max_depth=max_depth, force_tree=False)
         self._reset_storage()
         self.metadata = {
             "source": "kernel",
             "k": k,
-            "p_leaf": p_leaf,
+            "p_leaf_range": p_leaf_range,
             "max_depth": max_depth,
             "batch_size": self.satisfaction_batch_size,
             "kernel_T": kernel.T,
@@ -89,24 +89,24 @@ class LTLDataset(Dataset):
     
 
 
-    def construct_dataset_from_kernel_dedupe(self, kernel: LTLKernel, k: int, p_leaf: float, max_depth: int):
+    def construct_dataset_from_kernel_dedupe(self, kernel: LTLKernel, k: int, p_leaf_range: tuple[float,float], max_depth: int):
         """
         Method for constructing the dataset through the kernel, specifies self.formulas and self.embeddings.
         - kernel: the kernel we want to use for sampling formulae and computing their embeddings.
         - k: specifies the number of sampled formulae.
-        - p_leaf: specifies the odds of each node being a leaf. Higher probability reduces average sampled formula complexity (bounded by max_depth).
+        - p_leaf_range: specifies the odds of each node being a leaf. Higher probability reduces average sampled formula complexity (bounded by max_depth).
         - max_depth: specifies the maximum formula complexity.
         - satisfaction_batch_size: configurable through LTLDataset to control evaluation batch sizes.
         """
         
-        dataset_formulas = kernel.sample_dataset_formulas_kernel(k=k, p_leaf=p_leaf, max_depth=max_depth, force_tree=True)
+        dataset_formulas = kernel.sample_dataset_formulas_kernel(k=k, p_leaf_range=p_leaf_range, max_depth=max_depth, force_tree=False)
         unique_formulas = list(dict.fromkeys(dataset_formulas))
         self._reset_storage()
         self.metadata = {
             "source": "kernel_dedupe",
             "requested_k": k,
             "actual_k": len(unique_formulas),
-            "p_leaf": p_leaf,
+            "p_leaf_range": p_leaf_range,
             "max_depth": max_depth,
             "batch_size": self.satisfaction_batch_size,
             "kernel_T": kernel.T,
@@ -159,7 +159,7 @@ class LTLDataset(Dataset):
     def construct_disjoint_datasets(
         kernel: LTLKernel,
         k: int,
-        p_leaf: float,
+        p_leaf_range: tuple[float,float],
         max_depth: int,
         eval_ratio: float = 0.05,
         store_formula_str_train: bool = False,
@@ -168,36 +168,35 @@ class LTLDataset(Dataset):
         store_satisfaction_eval: bool = True,
         satisfaction_batch_size: int = 512,
         satisfaction_time_index: int = 0,
+        dedupe_eval: bool = True,
     ) -> tuple[LTLDataset, LTLDataset]:
         """
-        Construct disjoint train and eval datasets from a single sample of formulas.
+        Sample k formulas and split into disjoint train/eval datasets using stratified sampling.
         
-        This method samples k formulas, groups duplicates together, and then randomly
-        moves entire groups to the eval set until the eval set contains at least
-        `eval_ratio` fraction of all sampled formulas. This ensures that:
-        1. Train and eval sets have no overlapping formulas
-        2. All copies of a formula end up in the same split
+        Stratification ensures each depth level contributes proportionally to eval,
+        preventing any single complexity level from being over-represented or depleted.
         
         Args:
-            kernel: The kernel to use for sampling and computing embeddings.
-                    The kernel's RNG is used for both sampling and splitting.
+            kernel: The kernel for sampling and computing embeddings.
             k: Total number of formulas to sample.
-            p_leaf: Probability of a node being a leaf during sampling.
-            max_depth: Maximum tree depth for sampled formulas.
-            eval_ratio: Target fraction of formulas for evaluation (default 0.05 = 5%).
+            p_leaf_range: Probability of leaf nodes during sampling.
+            max_depth: Maximum formula depth during sampling.
+            eval_ratio: Target fraction of formulas for eval (applied per depth stratum).
             store_formula_str_train: Whether to store formula strings in train dataset.
             store_formula_str_eval: Whether to store formula strings in eval dataset.
-            store_satisfaction_train: Whether to store satisfaction tensors in train dataset.
-            store_satisfaction_eval: Whether to store satisfaction tensors in eval dataset.
-            satisfaction_batch_size: Batch size for computing satisfactions.
+            store_satisfaction_train: Whether to store satisfactions in train dataset.
+            store_satisfaction_eval: Whether to store satisfactions in eval dataset.
+            satisfaction_batch_size: Batch size for satisfaction computation.
             satisfaction_time_index: Time index for satisfaction computation.
+            dedupe_eval: If True, eval dataset contains only unique formulas.
         
         Returns:
-            A tuple (train_dataset, eval_dataset) with disjoint formulas.
+            Tuple of (train_dataset, eval_dataset).
         """
         # Sample all formulas (uses kernel's RNG)
+        print(f"Sampling {k} formulas with p_leaf_range={p_leaf_range}, max_depth={max_depth}...")
         all_formulas = kernel.sample_dataset_formulas_kernel(
-            k=k, p_leaf=p_leaf, max_depth=max_depth, force_tree=True
+            k=k, p_leaf_range=p_leaf_range, max_depth=max_depth, force_tree=False
         )
         
         # Group formulas by their canonical string representation
@@ -209,30 +208,46 @@ class LTLDataset(Dataset):
         unique_formula_strs = list(formula_groups.keys())
         num_unique = len(unique_formula_strs)
         
-        # Shuffle the unique formulas for random splitting using kernel's RNG
-        perm = torch.randperm(num_unique, generator=kernel.rng, device=kernel.device)
-        unique_formula_strs = [unique_formula_strs[i] for i in perm.tolist()]
+        # Group unique formulas by depth for stratified sampling
+        depth_groups: dict[int, list[str]] = defaultdict(list)
+        for formula_str in unique_formula_strs:
+            phi = all_formulas[formula_groups[formula_str][0]]
+            depth = phi.depth()
+            depth_groups[depth].append(formula_str)
         
-        # Select groups for eval until we reach the target ratio
-        target_eval_count = int(k * eval_ratio)
-        eval_indices: set[int] = set()
+        # Stratified selection: take eval_ratio from each depth group
         eval_formula_strs: set[str] = set()
         
-        for formula_str in unique_formula_strs:
-            if len(eval_indices) >= target_eval_count:
-                break
-            group_indices = formula_groups[formula_str]
-            eval_indices.update(group_indices)
-            eval_formula_strs.add(formula_str)
+        for depth in sorted(depth_groups.keys()):
+            formulas_at_depth = depth_groups[depth]
+            n_at_depth = len(formulas_at_depth)
+            
+            # Shuffle formulas at this depth using kernel's RNG
+            perm = torch.randperm(n_at_depth, generator=kernel.rng, device='cpu') #TODO find out if this generator+'cpu' combo is an issue.
+            shuffled = [formulas_at_depth[i] for i in perm.tolist()]
+            
+            # Take eval_ratio fraction, but at least 1 if there are any formulas
+            n_eval_at_depth = max(1, int(n_at_depth * eval_ratio)) if n_at_depth > 0 else 0
+            
+            # Don't take more than half from any depth level to preserve training signal
+            n_eval_at_depth = min(n_eval_at_depth, n_at_depth // 2)
+            
+            eval_formula_strs.update(shuffled[:n_eval_at_depth])
+            
+            print(f"  Depth {depth}: {n_at_depth} unique formulas, {n_eval_at_depth} -> eval")
         
-        # Remaining indices go to train
+        # Build index lists
+        eval_indices: set[int] = set()
+        for formula_str in eval_formula_strs:
+            eval_indices.update(formula_groups[formula_str])
+        
         train_indices = [i for i in range(k) if i not in eval_indices]
         eval_indices_list = sorted(eval_indices)
         
-        print(f"Disjoint split: {len(train_indices)} train, {len(eval_indices_list)} eval "
+        print(f"Stratified disjoint split: {len(train_indices)} train, {len(eval_indices_list)} eval "
               f"({len(eval_indices_list) / k * 100:.1f}% eval)")
-        print(f"Unique formulas: {len(unique_formula_strs)} total, "
-              f"{len(eval_formula_strs)} in eval, {len(unique_formula_strs) - len(eval_formula_strs)} in train")
+        print(f"Unique formulas: {num_unique} total, "
+              f"{len(eval_formula_strs)} in eval, {num_unique - len(eval_formula_strs)} in train")
         
         # Create train dataset
         train_dataset = LTLDataset(
@@ -252,11 +267,13 @@ class LTLDataset(Dataset):
             "unique_formulas_total": num_unique,
             "unique_formulas_train": num_unique - len(eval_formula_strs),
             "unique_formulas_eval": len(eval_formula_strs),
-            "p_leaf": p_leaf,
+            "p_leaf_range": p_leaf_range,
             "max_depth": max_depth,
             "kernel_T": kernel.T,
             "kernel_AP": kernel.AP,
             "kernel_seed": kernel.seed,
+            "stratified_by_depth": True,
+            "dedupe_eval": dedupe_eval,
         }
         
         # Create eval dataset
@@ -277,23 +294,27 @@ class LTLDataset(Dataset):
             "unique_formulas_total": num_unique,
             "unique_formulas_train": num_unique - len(eval_formula_strs),
             "unique_formulas_eval": len(eval_formula_strs),
-            "p_leaf": p_leaf,
+            "p_leaf_range": p_leaf_range,
             "max_depth": max_depth,
             "kernel_T": kernel.T,
             "kernel_AP": kernel.AP,
             "kernel_seed": kernel.seed,
+            "stratified_by_depth": True,
+            "dedupe_eval": dedupe_eval,
         }
         
         # Cache embeddings and satisfactions for unique formulas to avoid recomputation
-        # since we may have duplicates
         embedding_cache: dict[str, torch.Tensor] = {}
         satisfaction_cache: dict[str, torch.Tensor] = {}
+        
+        unique_train_formula_strs: set[str] = set()
         
         # Populate train dataset
         print("Building train dataset...")
         for idx in train_indices:
             phi = all_formulas[idx]
             phi_str = str(phi)
+            unique_train_formula_strs.add(phi_str)
             
             if phi_str not in embedding_cache:
                 phi_sats = kernel._evaluate_formula_on_traces(
@@ -309,11 +330,22 @@ class LTLDataset(Dataset):
             sats_to_store = satisfaction_cache.get(phi_str) if store_satisfaction_train else None
             train_dataset._append_entry(phi, emb, sats_to_store)
         
+        # Clear caches - splits are disjoint, no reuse possible
+        embedding_cache.clear()
+        satisfaction_cache.clear()
+        
         # Populate eval dataset
         print("Building eval dataset...")
+        seen_in_eval: set[str] = set()
         for idx in eval_indices_list:
             phi = all_formulas[idx]
             phi_str = str(phi)
+            
+            # Skip duplicates in eval if dedupe_eval is enabled
+            if dedupe_eval:
+                if phi_str in seen_in_eval:
+                    continue
+                seen_in_eval.add(phi_str)
             
             if phi_str not in embedding_cache:
                 phi_sats = kernel._evaluate_formula_on_traces(
@@ -328,6 +360,68 @@ class LTLDataset(Dataset):
             emb = embedding_cache[phi_str]
             sats_to_store = satisfaction_cache.get(phi_str) if store_satisfaction_eval else None
             eval_dataset._append_entry(phi, emb, sats_to_store)
+        
+        # Clear caches
+        embedding_cache.clear()
+        satisfaction_cache.clear()
+
+        # Update eval metadata with actual count after deduplication
+        if dedupe_eval:
+            eval_dataset.metadata["eval_count_after_dedupe"] = len(eval_dataset)
+
+        # Top up train_dataset with additional formulae until desired quantity is reached
+        while len(train_dataset) < int(math.ceil(k - eval_ratio * k)):
+            top_up_batch = kernel.sample_dataset_formulas_kernel(
+                k=10240, 
+                p_leaf_range=p_leaf_range,
+                max_depth=max_depth,
+                force_tree=False
+                )
+
+            top_up_formula_groups: dict[str, list[int]] = defaultdict(list)
+            for idx, phi in enumerate(top_up_batch):
+                top_up_formula_groups[str(phi)].append(idx)
+            
+            top_up_unique_formula_strs = list(top_up_formula_groups.keys())
+            
+            formula_strs_not_in_train = [phi for phi in top_up_unique_formula_strs if phi not in unique_train_formula_strs]
+
+            top_up_new_indeces: set[int] = set()
+            for formula_str in formula_strs_not_in_train:
+                top_up_new_indices.update(top_up_formula_groups[formula_str])
+
+            print("Topping up train dataset...")
+            for idx in top_up_new_indeces:
+                phi = top_up_batch[idx]
+                phi_str = str(phi)
+                unique_train_formula_strs.add(phi_str)
+
+                if phi_str not in embedding_cache:
+                phi_sats = kernel._evaluate_formula_on_traces(
+                    formula=phi,
+                    batch_size=satisfaction_batch_size,
+                    time_index=satisfaction_time_index,
+                )
+                embedding_cache[phi_str] = kernel.compute_embedding_from_satisfaction(phi_sats, move_to_cpu=True)
+                if store_satisfaction_train:
+                    satisfaction_cache[phi_str] = phi_sats.clone().to('cpu')
+            
+                emb = embedding_cache[phi_str]
+                sats_to_store = satisfaction_cache.get(phi_str) if store_satisfaction_train else None
+                train_dataset._append_entry(phi, emb, sats_to_store)
+
+            # Clear caches
+            embedding_cache.clear()
+            satisfaction_cache.clear()
+
+            if len(train_dataset) > int(math.ceil(k - eval_ratio * k)):
+                num_over = len(train_datset) - int(math.ceil(k - eval_ratio * k))
+                list_rand_delete_idx = torch.randint(0, (len(train_dataset)-1), (num_over,), generator=kernel.rng, device = 'cpu') 
+                for idx in list_rand_delete_idx:
+                    train_dataset._delitem(idx)
+            elif len(train_datset) = int(math.ceil(k - eval_ratio * k)):
+                break
+
         
         return train_dataset, eval_dataset
 
@@ -351,6 +445,17 @@ class LTLDataset(Dataset):
             item["satisfaction"] = self.satisfactions[idx]
 
         return item
+
+    
+    
+    def _delitem(self,idx):
+        del self.formulas[idx]
+        del self.embedding[idx]
+
+        if self.store_formula_str and self.formula_strs is not None:
+            del self.formula_strs[idx]
+        if self.store_satisfaction and self.satisfactions is not None:
+            del self.satisfactions[idx]
 
 
     # ----------- Persistence -----------
