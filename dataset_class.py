@@ -373,7 +373,7 @@ class LTLDataset(Dataset):
         # Top up train_dataset with additional formulae until desired quantity is reached
         while len(train_dataset) < int(ceil(k - eval_ratio * k)):
             top_up_batch = kernel.sample_dataset_formulas_kernel(
-                k=10240, 
+                k=k, 
                 p_leaf_range=p_leaf_range,
                 max_depth=max_depth,
                 force_tree=False
@@ -385,7 +385,9 @@ class LTLDataset(Dataset):
             
             top_up_unique_formula_strs = list(top_up_formula_groups.keys())
             
-            formula_strs_not_in_train = [phi for phi in top_up_unique_formula_strs if phi not in unique_train_formula_strs]
+            formula_strs_not_in_train = [phi for phi in top_up_unique_formula_strs 
+                                         if phi not in unique_train_formula_strs 
+                                         and phi not in seen_in_eval]
 
             top_up_new_indeces: set[int] = set()
             for formula_str in formula_strs_not_in_train:
@@ -411,9 +413,6 @@ class LTLDataset(Dataset):
                 sats_to_store = satisfaction_cache.get(phi_str) if store_satisfaction_train else None
                 train_dataset._append_entry(phi, emb, sats_to_store)
 
-            # Clear caches
-            embedding_cache.clear()
-            satisfaction_cache.clear()
 
             if len(train_dataset) > int(ceil(k - eval_ratio * k)):
                 num_over = len(train_dataset) - int(ceil(k - eval_ratio * k))
@@ -422,7 +421,10 @@ class LTLDataset(Dataset):
                     train_dataset._delitem(idx)
             elif len(train_dataset) == int(ceil(k - eval_ratio * k)):
                 break
-
+        
+        # Clear caches
+        embedding_cache.clear()
+        satisfaction_cache.clear()
         
         return train_dataset, eval_dataset
 

@@ -46,9 +46,9 @@ DATASETS_BASE="$PROJECT_DIR/artifacts/datasets"
 
 STAGES=(
     "stage0:50000:1:0.3 0.6:0.05"
-    "stage1:100000:2:0.2 0.5:0.025"
-    "stage2:200000:3:0.1 0.5:0.025"
 )
+#    "stage1:100000:2:0.2 0.5:0.025"
+#    "stage2:200000:3:0.1 0.5:0.025"
 #    "stage3:400000:4:0.01 0.5:0.025"
 #    "stage4:800000:5:0.01 0.4:0.025"
 
@@ -56,12 +56,12 @@ STAGES=(
 TRAIN_DEDUPE=""
 TRAIN_STORE_FORMULA_STR=""
 TRAIN_STORE_SATISFACTION=""  # Add --train-store-satisfaction if needed
-TRAIN_SATISFACTION_BATCH_SIZE=40960
+TRAIN_SATISFACTION_BATCH_SIZE=81920
 TRAIN_SATISFACTION_TIME_INDEX=0
 EVAL_DEDUPE="--eval-dedupe"
 EVAL_STORE_FORMULA_STR="--eval-store-formula-str"
 EVAL_STORE_SATISFACTION="--eval-store-satisfaction"  # Add --eval-store-satisfaction if needed
-EVAL_SATISFACTION_BATCH_SIZE=40960
+EVAL_SATISFACTION_BATCH_SIZE=81920
 EVAL_SATISFACTION_TIME_INDEX=0
 
 
@@ -145,7 +145,7 @@ for stage_def in "${STAGES[@]}"; do
     
     # Build command
     CMD=(
-        python scripts/prepare_datasets.py
+        python -u scripts/prepare_datasets.py
         --kernel-dir "$KERNEL_DIR"
         --disjoint-split
         --eval-ratio "$EVAL_RATIO"
