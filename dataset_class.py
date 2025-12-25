@@ -220,6 +220,8 @@ class LTLDataset(Dataset):
         eval_formula_strs: set[str] = set()
         
         for depth in sorted(depth_groups.keys()):
+            if depth == 0:
+                continue
             formulas_at_depth = depth_groups[depth]
             n_at_depth = len(formulas_at_depth)
             
@@ -378,6 +380,7 @@ class LTLDataset(Dataset):
                 max_depth=max_depth,
                 force_tree=False
                 )
+            print(len(unique_train_formula_strs))
 
             top_up_formula_groups: dict[str, list[int]] = defaultdict(list)
             for idx, phi in enumerate(top_up_batch):
