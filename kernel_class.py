@@ -328,6 +328,13 @@ class LTLKernel:
 
         return sample
 
+    def num_formulas(self, max_depth):
+        G = [self.AP]  # G(0)
+        for d in range(1, max_depth + 1):
+            unary = 4 * G[d-1]
+            binary = 4 * sum(G[k] * G[d-1] for k in range(d))
+            G.append(unary + binary)
+        return sum(G)
 
 
     # ----------- Persistence -----------

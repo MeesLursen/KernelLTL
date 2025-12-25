@@ -372,6 +372,7 @@ class LTLDataset(Dataset):
         if dedupe_eval:
             eval_dataset.metadata["eval_count_after_dedupe"] = len(eval_dataset)
 
+        max_formula = kernel.num_formulas(max_depth=max_depth)
         # Top up train_dataset with additional formulae until desired quantity is reached
         while len(train_dataset) < int(ceil(k - eval_ratio * k)):
             top_up_batch = kernel.sample_dataset_formulas_kernel(
@@ -380,7 +381,11 @@ class LTLDataset(Dataset):
                 max_depth=max_depth,
                 force_tree=False
                 )
+            
             print(len(unique_train_formula_strs))
+
+            if len(unique_train_formula_strs) == max_formula:
+                break
 
             top_up_formula_groups: dict[str, list[int]] = defaultdict(list)
             for idx, phi in enumerate(top_up_batch):
