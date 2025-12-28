@@ -3,10 +3,10 @@
 #SBATCH --output=logs/kernelltl_curriculum_%j.out
 #SBATCH --error=logs/kernelltl_curriculum_%j.err
 #SBATCH --time=72:00:00
-#SBATCH --partition=gpu_a100
+#SBATCH --partition=gpu_h100
 #SBATCH --gpus=4
-#SBATCH --cpus-per-task=72
-#SBATCH --mem=256G
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=720G
 
 # ============================================================================
 # Snellius Multi-Stage Curriculum Training Script for KernelLTL
@@ -34,12 +34,12 @@ VENV_DIR="$PROJECT_DIR/venv"
 KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
 TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 
-# Base output directory (stages will be saved as runs/stage1, runs/stage2, etc.)
-BASE_OUTPUT_DIR="$PROJECT_DIR/runs"
+# Base output directory (stages will be saved as models/stage1, models/stage2, etc.)
+BASE_OUTPUT_DIR="$PROJECT_DIR/artifacts/models"
 
 # Training defaults (can be overridden per stage)
-DEFAULT_LEARNING_RATE=3e-4
-DEFAULT_BATCH_SIZE=32
+DEFAULT_LEARNING_RATE=5e-4
+DEFAULT_BATCH_SIZE=64
 DEFAULT_WARMUP_STEPS=500
 
 # Mixed precision
@@ -50,18 +50,15 @@ MIXED_PRECISION="--bf16"
 # ============================================================================
 # Define your curriculum stages here
 # Format: "STAGE_NAME|TRAIN_DIR|EVAL_DIR|EPOCHS|LEARNING_RATE|BATCH_SIZE"
-# 
-# Example progression:
-#   Stage 1: Simple formulas (depth 2)
-#   Stage 2: Medium complexity (depth 3)
-#   Stage 3: Complex formulas (depth 4)
+
 # ============================================================================
 
 STAGE_CONFIGS=(
-    "stage1|$PROJECT_DIR/datasets/md2/train|$PROJECT_DIR/datasets/md2/eval|20|3e-4|32"
-    "stage2|$PROJECT_DIR/datasets/md3/train|$PROJECT_DIR/datasets/md3/eval|30|1e-4|32"
-    "stage3|$PROJECT_DIR/datasets/md4/train|$PROJECT_DIR/datasets/md4/eval|50|5e-5|16"
+    "stage0:$PROJECT_DIR/datasets/stage0/train:$PROJECT_DIR/datasets/stage0/eval:25:5e-4:64"
+
 )
+    # "stage1:$PROJECT_DIR/datasets/stage1/train:$PROJECT_DIR/datasets/stage1/eval:50:5e-4:64"
+    # "stage2:$PROJECT_DIR/datasets/stage2/train:$PROJECT_DIR/datasets/stage2/eval:100:5e-4:64"
 
 # ============================================================================
 # ENVIRONMENT SETUP
@@ -109,7 +106,7 @@ PREV_TRAINING_ARGS_DIR=""
 
 for i in "${!STAGE_CONFIGS[@]}"; do
     # Parse stage configuration
-    IFS='|' read -r STAGE_NAME TRAIN_DIR EVAL_DIR EPOCHS LR BATCH_SIZE <<< "${STAGE_CONFIGS[$i]}"
+    IFS=':' read -r STAGE_NAME TRAIN_DIR EVAL_DIR EPOCHS LR BATCH_SIZE <<< "${STAGE_CONFIGS[$i]}"
     
     # Use defaults if not specified
     LR=${LR:-$DEFAULT_LEARNING_RATE}
@@ -120,7 +117,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     
     echo ""
     echo "=============================================="
-    echo "Starting $STAGE_NAME (Stage $((i+1)) of ${#STAGE_CONFIGS[@]})"
+    echo "Starting $STAGE_NAME (Stage $((i)) of ${#STAGE_CONFIGS[@]})"
     echo "  Train dataset: $TRAIN_DIR"
     echo "  Eval dataset: $EVAL_DIR"
     echo "  Epochs: $EPOCHS"
@@ -144,12 +141,12 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--per-device-train-batch-size" "$BATCH_SIZE"
         "--per-device-eval-batch-size" "$BATCH_SIZE"
         "--warmup-steps" "$DEFAULT_WARMUP_STEPS"
-        "--logging-steps" "100"
-        "--eval-steps" "1000"
-        "--save-steps" "1000"
+        "--logging-steps" "0.02"
+        "--eval-steps" "0.02"
+        "--save-steps" "0.2"
         "--dataloader-num-workers" "$((SLURM_CPUS_PER_TASK / NUM_GPUS))"
         "--dataloader-pin-memory"
-        "--report-to" "tensorboard"
+        "--report-to" "all"
         $MIXED_PRECISION
     )
     
