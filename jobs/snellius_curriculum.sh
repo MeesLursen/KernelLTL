@@ -2,7 +2,7 @@
 #SBATCH --job-name=kernelltl-curriculum
 #SBATCH --output=logs/kernelltl_curriculum_%j.out
 #SBATCH --error=logs/kernelltl_curriculum_%j.err
-#SBATCH --time=72:00:00
+#SBATCH --time=12:00:00
 #SBATCH --partition=gpu_h100
 #SBATCH --gpus=4
 #SBATCH --cpus-per-task=64
@@ -44,6 +44,9 @@ DEFAULT_WARMUP_STEPS=500
 
 # Mixed precision
 MIXED_PRECISION="--bf16"
+
+# Evaluation Batch Size
+EVAL_BATCH_SIZE="81920"
 
 # ============================================================================
 # STAGE CONFIGURATION
@@ -148,6 +151,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--dataloader-pin-memory"
         "--report-to" "all"
         $MIXED_PRECISION
+        "--semantic-eval-batch-size" "$EVAL_BATCH_SIZE"
     )
     
     # Load previous stage model (if not first stage)
