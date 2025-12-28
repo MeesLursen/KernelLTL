@@ -57,11 +57,11 @@ EVAL_BATCH_SIZE="81920"
 # ============================================================================
 
 STAGE_CONFIGS=(
-    "stage0:$PROJECT_DIR/datasets/stage0/train:$PROJECT_DIR/datasets/stage0/eval:25:5e-4:64"
+    "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/datasets/stage0/eval:25:5e-4:64"
 
 )
-    # "stage1:$PROJECT_DIR/datasets/stage1/train:$PROJECT_DIR/datasets/stage1/eval:50:5e-4:64"
-    # "stage2:$PROJECT_DIR/datasets/stage2/train:$PROJECT_DIR/datasets/stage2/eval:100:5e-4:64"
+    # "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/datasets/stage1/eval:50:5e-4:64"
+    # "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/datasets/stage2/eval:100:5e-4:64"
 
 # ============================================================================
 # ENVIRONMENT SETUP
