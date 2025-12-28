@@ -144,8 +144,8 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     mkdir -p $SCRATCH_TRAIN_DIR
     mkdir -p $SCRATCH_EVAL_DIR
 
-    cp -r "$TRAIN_DIR/" "$SCRATCH_TRAIN_DIR/"
-    cp -r "$EVAL_DIR/" "$SCRATCH_EVAL_DIR/"
+    cp -r "$TRAIN_DIR/." "$SCRATCH_TRAIN_DIR/"
+    cp -r "$EVAL_DIR/." "$SCRATCH_EVAL_DIR/"
 
     echo "Contents of $SCRATCH_TRAIN_DIR:"
     ls -l "$SCRATCH_TRAIN_DIR"
