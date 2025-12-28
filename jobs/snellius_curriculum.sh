@@ -57,11 +57,11 @@ EVAL_BATCH_SIZE="81920"
 # ============================================================================
 
 STAGE_CONFIGS=(
-    "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/datasets/stage0/eval:25:5e-4:64"
+    "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts//datasets/stage0/eval:25:5e-4:64"
 
 )
-    # "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/datasets/stage1/eval:50:5e-4:64"
-    # "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/datasets/stage2/eval:100:5e-4:64"
+    # "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:50:5e-4:64"
+    # "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts//datasets/stage2/eval:100:5e-4:64"
 
 # ============================================================================
 # ENVIRONMENT SETUP
@@ -130,13 +130,29 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     
     mkdir -p "$STAGE_OUTPUT_DIR"
     mkdir -p "$STAGE_MODEL_SAVE_DIR"
-    
+
+    SCRATCH_TRAIN_DIR="/scratch-shared/$USER/KernelLTL/datasets/$STAGE_NAME/train"
+    SCRATCH_EVAL_DIR="/scratch-shared/$USER/KernelLTL/datasets/$STAGE_NAME/eval"
+
+    echo ""
+    echo "=============================================="
+    echo "Copying train+eval datasets from home to scratch..."
+    echo "  From: $TRAIN_DIR" and "$EVAL_DIR"
+    echo "  To:   $SCRATCH_TRAIN_DIR" and "$SCRATCH_EVAL_DIR"
+    echo "=============================================="
+
+    mkdir -p $SCRATCH_TRAIN_DIR
+    mkdir -p $SCRATCH_EVAL_DIR
+
+    cp -r "$TRAIN_DIR/" "$SCRATCH_TRAIN_DIR/"
+    cp -r "$EVAL_DIR/" "$SCRATCH_EVAL_DIR/"
+
     # Build command arguments
     CMD_ARGS=(
         "--kernel-dir" "$KERNEL_DIR"
         "--tokenizer-dir" "$TOKENIZER_DIR"
-        "--train-dataset-dir" "$TRAIN_DIR"
-        "--eval-dataset-dir" "$EVAL_DIR"
+        "--train-dataset-dir" "$SCRATCH_TRAIN_DIR"
+        "--eval-dataset-dir" "$SCRATCH_EVAL_DIR"
         "--output-dir" "$STAGE_OUTPUT_DIR"
         "--model-save-dir" "$STAGE_MODEL_SAVE_DIR"
         "--num-train-epochs" "$EPOCHS"
@@ -144,9 +160,9 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--per-device-train-batch-size" "$BATCH_SIZE"
         "--per-device-eval-batch-size" "$BATCH_SIZE"
         "--warmup-steps" "$DEFAULT_WARMUP_STEPS"
-        "--logging-steps" "0.02"
-        "--eval-steps" "0.02"
-        "--save-steps" "0.2"
+        "--logging-steps" 0.02
+        "--eval-steps" 0.02
+        "--save-steps" 0.2
         "--dataloader-num-workers" "$((SLURM_CPUS_PER_TASK / NUM_GPUS))"
         "--dataloader-pin-memory"
         "--report-to" "all"
