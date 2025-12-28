@@ -57,11 +57,14 @@ EVAL_BATCH_SIZE="81920"
 # ============================================================================
 
 STAGE_CONFIGS=(
-    "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts//datasets/stage0/eval:25:5e-4:64"
-
+    "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:25:5e-4:64"
+    "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:50:5e-4:64"
+    "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts//datasets/stage2/eval:100:5e-4:64"
+    "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:200:5e-4:64"
+    "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:400:5e-4:64"    
 )
-    # "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:50:5e-4:64"
-    # "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts//datasets/stage2/eval:100:5e-4:64"
+
+
 
 # ============================================================================
 # ENVIRONMENT SETUP
@@ -147,9 +150,6 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     cp -r "$TRAIN_DIR/." "$SCRATCH_TRAIN_DIR/"
     cp -r "$EVAL_DIR/." "$SCRATCH_EVAL_DIR/"
 
-    echo "Contents of $SCRATCH_TRAIN_DIR:"
-    ls -l "$SCRATCH_TRAIN_DIR"
-
     # Build command arguments
     CMD_ARGS=(
         "--kernel-dir" "$KERNEL_DIR"
@@ -168,7 +168,6 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--save-steps" 0.2
         "--dataloader-num-workers" "$((SLURM_CPUS_PER_TASK / NUM_GPUS))"
         "--dataloader-pin-memory"
-        "--report-to" "all"
         $MIXED_PRECISION
         "--semantic-eval-batch-size" "$EVAL_BATCH_SIZE"
     )
