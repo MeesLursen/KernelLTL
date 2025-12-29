@@ -123,7 +123,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     
     echo ""
     echo "=============================================="
-    echo "Starting $STAGE_NAME (Stage $((i)) of ${#STAGE_CONFIGS[@]})"
+    echo "Starting $STAGE_NAME (Run $((i+1)) of ${#STAGE_CONFIGS[@]})"
     echo "  Train dataset: $TRAIN_DIR"
     echo "  Eval dataset: $EVAL_DIR"
     echo "  Epochs: $EPOCHS"
