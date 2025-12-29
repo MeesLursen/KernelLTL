@@ -191,10 +191,10 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     
     if [ "$NUM_GPUS" -gt 1 ]; then
         torchrun --nproc_per_node="$NUM_GPUS" \
-            scripts/curriculum_train.py \
+            scripts/curriculum_train_reinforce.py \
             "${CMD_ARGS[@]}"
     else
-        python scripts/curriculum_train.py \
+        python scripts/curriculum_train_reinforce.py \
             "${CMD_ARGS[@]}"
     fi
     
