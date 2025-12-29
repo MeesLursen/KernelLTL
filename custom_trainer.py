@@ -271,11 +271,11 @@ class HybridTrainer(Trainer):
                 try:
                     generated_formula = str_to_formula(generated_str)
                     generated_sats = self.kernel._evaluate_formula_on_traces(generated_formula, 10240, 0)
-                    generated_vec = self.kernel.compute_embedding_from_satisfaction(generated_formula)
+                    generated_vec = self.kernel.compute_embedding_from_satisfaction(generated_sats)
                     generated_vec = generated_vec.to(device=device, dtype=torch.float32, non_blocking=True)
                     target_vec = target_vec.to(device=device, dtype=torch.float32, non_blocking=True)
                     diff = generated_vec - target_vec
-                    nmse = diff.pow(2).sum() / (target_vec.pow(2).sum() + self._nmse_eps)
+                    nmse = diff.pow(2).sum() / (target_vec.pow(2).sum() + self._nmse_eps) #TODO: probably redo this with full sats vecs instead.
                     reward = 1.0 - nmse
                     valid_count += 1
                     generated_embeds.append(generated_vec.detach().cpu())
