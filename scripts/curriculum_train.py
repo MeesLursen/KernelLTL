@@ -143,12 +143,12 @@ def _load_training_args(args: argparse.Namespace) -> TrainingArguments:
             "save_strategy": "steps",
             "save_steps": 0.2,
             "save_safetensors": False,
-            "load_best_model_at_end": False,
+            "load_best_model_at_end": True,
             "metric_for_best_model": "eval_loss",
             "remove_unused_columns": False,
             "dataloader_num_workers": 4,
             "dataloader_pin_memory": True,
-            "report_to": "all",
+            "report_to": ["all"],
             "ddp_find_unused_parameters": False,
         }
         print('Built training_args from scratch.')
@@ -267,6 +267,14 @@ def main() -> None:
 
     train_result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
     print(train_result)
+
+    log_dir = training_args.logging_dir
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, "trainer_log_history.log")
+
+    with open(log_path, "w") as f:
+        for entry in trainer.state.log_history:
+            f.write(json.dumps(entry) + "\n")
 
     save_dir = args.model_save_dir or os.path.join(args.output_dir, "final_model")
     trainer.save_model(save_dir)
