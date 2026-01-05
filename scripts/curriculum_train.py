@@ -74,6 +74,10 @@ def parse_args() -> argparse.Namespace:
     train_group.add_argument("--logging-steps", type=float, default=None)
     train_group.add_argument("--eval-steps", type=float, default=None)
     train_group.add_argument("--save-steps", type=float, default=None)
+    train_group.add_argument(
+        "--debug", nargs="*", choices=["underflow_overflow"], default=None,
+        help="Enable HF debug utilities (e.g., underflow/overflow checks)."
+    )
     train_group.add_argument("--gradient-accumulation-steps", type=_positive_int, default=None)
     train_group.add_argument("--dataloader-num-workers", type=int, default=None)
     train_group.add_argument("--dataloader-pin-memory", action="store_true")

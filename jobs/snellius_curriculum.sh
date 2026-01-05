@@ -58,8 +58,8 @@ EVAL_BATCH_SIZE="81920"
 
 STAGE_CONFIGS=(
     "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:50:5e-4:64"
-    "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:100:5e-4:64"
-    "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts//datasets/stage2/eval:200:5e-4:64"
+    "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:100:1e-4:64"
+    "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts//datasets/stage2/eval:200:5e-5:64"
 )   
     # "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:300:5e-4:64"
     # "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:400:5e-4:64" 
@@ -108,6 +108,7 @@ echo "Number of GPUs: $NUM_GPUS"
 
 PREV_MODEL_DIR=""
 PREV_TRAINING_ARGS_DIR=""
+DEBUG_OPTION="underflow_overflow"
 
 for i in "${!STAGE_CONFIGS[@]}"; do
     # Parse stage configuration
@@ -171,6 +172,12 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--semantic-eval-batch-size" "$EVAL_BATCH_SIZE"
     )
     
+    # Load previous stage model (if not first stage)
+    if [ -n "$DEBUG_OPTION" ]; then
+        echo "  Running with debug option: $DEBUG_OPTION"
+        CMD_ARGS+=("--model-load-dir" "$DEBUG_OPTION")
+    fi
+
     # Load previous stage model (if not first stage)
     if [ -n "$PREV_MODEL_DIR" ] && [ -d "$PREV_MODEL_DIR" ]; then
         echo "  Loading model from previous stage: $PREV_MODEL_DIR"

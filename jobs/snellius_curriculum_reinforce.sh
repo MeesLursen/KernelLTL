@@ -35,7 +35,7 @@ KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
 TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 
 # Base output directory (stages will be saved as models/stage1, models/stage2, etc.)
-BASE_OUTPUT_DIR="$PROJECT_DIR/artifacts/models"
+BASE_OUTPUT_DIR="$PROJECT_DIR/artifacts/models/reinforce"
 
 # Training defaults (can be overridden per stage)
 DEFAULT_LEARNING_RATE=5e-4
@@ -109,6 +109,7 @@ echo "Number of GPUs: $NUM_GPUS"
 
 PREV_MODEL_DIR=""
 PREV_TRAINING_ARGS_DIR=""
+DEBUG_OPTION="underflow_overflow"
 
 for i in "${!STAGE_CONFIGS[@]}"; do
     # Parse stage configuration
@@ -175,7 +176,13 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--reinforce-reward-clip" "$RL_CLIP"
         "--inspect"
     )
-    
+
+    # Load previous stage model (if not first stage)
+    if [ -n "$DEBUG_OPTION" ]; then
+        echo "  Running with debug option: $DEBUG_OPTION"
+        CMD_ARGS+=("--model-load-dir" "$DEBUG_OPTION")
+    fi
+
     # Load previous stage model (if not first stage)
     if [ -n "$PREV_MODEL_DIR" ] && [ -d "$PREV_MODEL_DIR" ]; then
         echo "  Loading model from previous stage: $PREV_MODEL_DIR"
@@ -186,7 +193,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     if [ -n "$PREV_TRAINING_ARGS_DIR" ] && [ -d "$PREV_TRAINING_ARGS_DIR" ]; then
         CMD_ARGS+=("--training-args-load-dir" "$PREV_TRAINING_ARGS_DIR")
     fi
-    
+
     # Run training
     STAGE_START=$(date +%s)
     
