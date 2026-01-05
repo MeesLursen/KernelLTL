@@ -35,7 +35,7 @@ KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
 TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 
 # Base output directory (stages will be saved as models/stage1, models/stage2, etc.)
-BASE_OUTPUT_DIR="$PROJECT_DIR/artifacts/models/reinforce"
+BASE_OUTPUT_DIR="$PROJECT_DIR/artifacts/models/RE"
 
 # Training defaults (can be overridden per stage)
 DEFAULT_LEARNING_RATE=5e-4
