@@ -172,10 +172,10 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--semantic-eval-batch-size" "$EVAL_BATCH_SIZE"
     )
     
-    # Load previous stage model (if not first stage)
+    # Set debugging options
     if [ -n "$DEBUG_OPTION" ]; then
         echo "  Running with debug option: $DEBUG_OPTION"
-        CMD_ARGS+=("--model-load-dir" "$DEBUG_OPTION")
+        CMD_ARGS+=("--debug" "$DEBUG_OPTION")
     fi
 
     # Load previous stage model (if not first stage)
