@@ -153,7 +153,7 @@ def _load_training_args(args: argparse.Namespace) -> TrainingArguments:
             "eval_strategy": "steps",
             "eval_steps": 0.02,
             "save_strategy": "steps",
-            "save_steps": 0.2,
+            "save_steps": 0.1,
             "save_safetensors": False,
             "load_best_model_at_end": True,
             "metric_for_best_model": "eval_loss",
