@@ -142,6 +142,8 @@ for stage_def in "${STAGES[@]}"; do
     echo "  - Eval ratio: $EVAL_RATIO"
     echo "  - Train output: $TRAIN_OUT"
     echo "  - Eval output: $EVAL_OUT"
+    echo "  - Train base: $PREV_TRAIN_OUT"
+    echo "  - Eval base: $PREV_EVAL_OUT"
     echo "=============================================="
     
     # Create output directories
