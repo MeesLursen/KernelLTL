@@ -31,19 +31,12 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument("--kernel-dir", required=True, help="Directory containing a previously saved kernel")
+    parser.add_argument("--base-train-dir", help="Path to an existing train dataset to append to (keeps previously sampled formulas out of this stage)")
+    parser.add_argument("--base-eval-dir", help="Path to an existing eval dataset to append to (keeps previously sampled formulas out of this stage)")
     
     # Disjoint split mode
-    parser.add_argument(
-        "--disjoint-split",
-        action="store_true",
-        help="Use disjoint splitting: sample once and split into train/eval with no formula overlap (uses kernel's RNG for reproducibility)"
-    )
-    parser.add_argument(
-        "--eval-ratio",
-        type=_ratio,
-        default=0.05,
-        help="Target fraction of formulas for evaluation when using --disjoint-split (default: 0.05 = 5%%)"
-    )
+    parser.add_argument("--disjoint-split", action="store_true", help="Use disjoint splitting: sample once and split into train/eval with no formula overlap (uses kernel's RNG for reproducibility)"    )
+    parser.add_argument( "--eval-ratio", type=_ratio, default=0.05, help="Target fraction of formulas for evaluation when using --disjoint-split (default: 0.05 = 5%%)")
 
     # Train dataset options
     train = parser.add_argument_group("Training dataset")
@@ -51,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     train.add_argument("--train-k", type=_positive_int, required=True, help="Number of formulas to sample for training (or total when using --disjoint-split)")
     train.add_argument("--train-p-leaf-range", nargs=2, type=float, help="Probability that a sampled node becomes a leaf")
     train.add_argument("--train-max-depth", type=_positive_int, help="Maximum tree depth for training formulas")
+    train.add_argument("--train-min-depth", type=int, default=None, help="Minimum formula depth to keep for this stage (used together with --train-max-depth)")
     train.add_argument("--train-dedupe", action="store_true", help="Deduplicate formulas before computing embeddings")
     train.add_argument("--train-store-formula-str", action="store_true", help="Persist canonical formula strings in the dataset")
     train.add_argument("--train-store-satisfaction", action="store_true", help="Persist satisfaction tensors in the dataset")
@@ -129,6 +123,13 @@ def main() -> None:
         )
 
     if args.disjoint_split:
+        # Load base datasets if provided so we can enforce cross-stage disjointness
+        base_train_ds = LTLDataset.load(args.base_train_dir) if args.base_train_dir else None
+        base_eval_ds = LTLDataset.load(args.base_eval_dir) if args.base_eval_dir else None
+        base_train_formulas = set(str(f) for f in base_train_ds.formulas) if base_train_ds else set()
+        base_eval_formulas = set(str(f) for f in base_eval_ds.formulas) if base_eval_ds else set()
+        exclude_formula_strs = base_train_formulas | base_eval_formulas
+
         # Use disjoint splitting mode
         if not args.eval_out:
             raise ValueError("--eval-out is required when using --disjoint-split")
@@ -145,6 +146,7 @@ def main() -> None:
             k=args.train_k,
             p_leaf_range=train_p_leaf_range,
             max_depth=args.train_max_depth,
+            min_depth=args.train_min_depth,
             eval_ratio=args.eval_ratio,
             store_formula_str_train=args.train_store_formula_str,
             store_formula_str_eval=args.eval_store_formula_str,
@@ -153,11 +155,20 @@ def main() -> None:
             satisfaction_batch_size=args.train_satisfaction_batch_size,
             satisfaction_time_index=args.train_satisfaction_time_index,
             dedupe_eval=args.eval_dedupe,
+            exclude_formula_strs=exclude_formula_strs,
         )
-        
+
+        # Append to base datasets if provided
+        if base_train_ds:
+            base_train_ds._append_dataset(train_dataset)
+            train_dataset = base_train_ds
+        if base_eval_ds:
+            base_eval_ds._append_dataset( eval_dataset)
+            eval_dataset = base_eval_ds
+
         train_dataset.save(args.train_out)
         print(f"Saved training dataset to {args.train_out}")
-        
+
         eval_dataset.save(args.eval_out)
         print(f"Saved evaluation dataset to {args.eval_out}")
     else:

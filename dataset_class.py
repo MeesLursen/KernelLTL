@@ -29,11 +29,13 @@ class LTLDataset(Dataset):
         self._reset_storage()
 
 
+
     def _reset_storage(self):
         self.formulas: list[Formula] = []
         self.embeddings: list[torch.Tensor] = []
         self.formula_strs: list[str] | None = [] if self.store_formula_str else None
         self.satisfactions: list[torch.Tensor] | None = [] if self.store_satisfaction else None
+
 
 
     def _append_entry(self,
@@ -52,6 +54,20 @@ class LTLDataset(Dataset):
             if self.satisfactions is None:
                 self.satisfactions = []
             self.satisfactions.append(satisfaction.to(dtype=torch.bool, device='cpu'))
+
+
+
+    def _append_dataset(self: LTLDataset, other: LTLDataset) -> None:
+        """Append entries from other into self (in-place)."""
+        if self.store_formula_str != other.store_formula_str:
+            raise ValueError("store_formula_str mismatch between base and other datasets")
+        if self.store_satisfaction != other.store_satisfaction:
+            raise ValueError("store_satisfaction mismatch between base and other datasets")
+        for idx in range(len(other)):
+            sats = None
+            if self.store_satisfaction and other.satisfactions is not None:
+                sats = other.satisfactions[idx]
+            self._append_entry(other.formulas[idx], other.embeddings[idx], sats)
 
 
 
@@ -156,12 +172,14 @@ class LTLDataset(Dataset):
             self._append_entry(phi, emb, sats_to_store)
 
 
+
     @staticmethod
     def construct_disjoint_datasets(
         kernel: LTLKernel,
         k: int,
         p_leaf_range: tuple[float,float],
         max_depth: int,
+        min_depth: int | None = None,
         eval_ratio: float = 0.05,
         store_formula_str_train: bool = False,
         store_formula_str_eval: bool = True,
@@ -170,6 +188,7 @@ class LTLDataset(Dataset):
         satisfaction_batch_size: int = 10240,
         satisfaction_time_index: int = 0,
         dedupe_eval: bool = True,
+        exclude_formula_strs: set[str] | None = None,
     ) -> tuple[LTLDataset, LTLDataset]:
         """
         Sample k formulas and split into disjoint train/eval datasets using stratified sampling.
@@ -199,7 +218,16 @@ class LTLDataset(Dataset):
         all_formulas = kernel.sample_dataset_formulas_kernel(
             k=k, p_leaf_range=p_leaf_range, max_depth=max_depth, force_tree=False
         )
+
+        if exclude_formula_strs:
+            all_formulas = [phi for phi in all_formulas if str(phi) not in exclude_formula_strs]
+
+        if min_depth is not None:
+            all_formulas = [phi for phi in all_formulas if phi.depth() >= min_depth]
         
+        if not all_formulas:
+            raise ValueError("No formulas available after applying depth/exclusion filters. Consider reducing constraints or sampling more.")
+
         # Group formulas by their canonical string representation
         # Maps formula_str -> list of indices in all_formulas
         formula_groups: dict[str, list[int]] = defaultdict(list)
@@ -309,15 +337,12 @@ class LTLDataset(Dataset):
         # Cache embeddings and satisfactions for unique formulas to avoid recomputation
         embedding_cache: dict[str, torch.Tensor] = {}
         satisfaction_cache: dict[str, torch.Tensor] = {}
-        
-        unique_train_formula_strs: set[str] = set()
-        
+                
         # Populate train dataset
         print("Building train dataset...")
         for idx in train_indices:
             phi = all_formulas[idx]
             phi_str = str(phi)
-            unique_train_formula_strs.add(phi_str)
             
             if phi_str not in embedding_cache:
                 phi_sats = kernel._evaluate_formula_on_traces(
@@ -372,67 +397,6 @@ class LTLDataset(Dataset):
         if dedupe_eval:
             eval_dataset.metadata["eval_count_after_dedupe"] = len(eval_dataset)
 
-        max_formula = kernel.num_formulas(max_depth=max_depth)
-        # Top up train_dataset with additional formulae until desired quantity is reached
-        while len(train_dataset) < int(ceil(k - eval_ratio * k)):
-            top_up_batch = kernel.sample_dataset_formulas_kernel(
-                k=k, 
-                p_leaf_range=p_leaf_range,
-                max_depth=max_depth,
-                force_tree=False
-                )
-            
-            print(len(unique_train_formula_strs))
-
-            if len(unique_train_formula_strs) == max_formula:
-                break
-
-            top_up_formula_groups: dict[str, list[int]] = defaultdict(list)
-            for idx, phi in enumerate(top_up_batch):
-                top_up_formula_groups[str(phi)].append(idx)
-            
-            top_up_unique_formula_strs = list(top_up_formula_groups.keys())
-            
-            formula_strs_not_in_train = [phi for phi in top_up_unique_formula_strs 
-                                         if phi not in unique_train_formula_strs 
-                                         and phi not in seen_in_eval]
-
-            top_up_new_indeces: set[int] = set()
-            for formula_str in formula_strs_not_in_train:
-                top_up_new_indeces.update(top_up_formula_groups[formula_str])
-
-            print("Topping up train dataset...")
-            for idx in top_up_new_indeces:
-                phi = top_up_batch[idx]
-                phi_str = str(phi)
-                unique_train_formula_strs.add(phi_str)
-
-                if phi_str not in embedding_cache:
-                    phi_sats = kernel._evaluate_formula_on_traces(
-                        formula=phi,
-                        batch_size=satisfaction_batch_size,
-                        time_index=satisfaction_time_index,
-                    )
-                    embedding_cache[phi_str] = kernel.compute_embedding_from_satisfaction(phi_sats, move_to_cpu=True)
-                    if store_satisfaction_train:
-                        satisfaction_cache[phi_str] = phi_sats.clone().to('cpu')
-            
-                emb = embedding_cache[phi_str]
-                sats_to_store = satisfaction_cache.get(phi_str) if store_satisfaction_train else None
-                train_dataset._append_entry(phi, emb, sats_to_store)
-
-
-            if len(train_dataset) > int(ceil(k - eval_ratio * k)):
-                num_over = len(train_dataset) - int(ceil(k - eval_ratio * k))
-                list_rand_delete_idx = torch.randint(0, (len(train_dataset)-1), (num_over,), generator=kernel.rng, device = kernel.device).tolist()
-                for idx in list_rand_delete_idx:
-                    train_dataset._delitem(idx)
-            elif len(train_dataset) == int(ceil(k - eval_ratio * k)):
-                break
-        
-        # Clear caches
-        embedding_cache.clear()
-        satisfaction_cache.clear()
         
         return train_dataset, eval_dataset
 
