@@ -2,7 +2,7 @@
 #SBATCH --job-name=kernelltl_dataset_prep
 #SBATCH --output=logs/kernelltl_dataset_prep_%j.out
 #SBATCH --error=logs/kernelltl_dataset_prep_%j.err
-#SBATCH --time=12:00:00
+#SBATCH --time=5:00:00
 #SBATCH --partition=gpu_h100
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=16
