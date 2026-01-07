@@ -158,12 +158,16 @@ def main() -> None:
             exclude_formula_strs=exclude_formula_strs,
         )
 
-        # Append to base datasets if provided
+        # Append new stage into cumulative base datasets (if provided)
         if base_train_ds:
             base_train_ds._append_dataset(train_dataset)
+            base_train_ds.metadata["train_count"] = len(base_train_ds)
+            base_train_ds.metadata["p_leaf_range"] += train_dataset.metadata["p_leaf_range"]
             train_dataset = base_train_ds
         if base_eval_ds:
-            base_eval_ds._append_dataset( eval_dataset)
+            base_eval_ds._append_dataset(eval_dataset)
+            base_eval_ds.metadata["eval_count"] = len(base_eval_ds)
+            base_eval_ds.metadata["p_leaf_range"] += eval_dataset.metadata["p_leaf_range"]
             eval_dataset = base_eval_ds
 
         train_dataset.save(args.train_out)

@@ -24,7 +24,10 @@ class LTLDataset(Dataset):
         self.store_satisfaction = store_satisfaction
         self.satisfaction_batch_size = satisfaction_batch_size
         self.satisfaction_time_index = satisfaction_time_index
-        self.metadata: dict[str, Any] = {}
+        self.metadata: dict[str, Any] = {"store_formula_str": self.store_formula_str,
+                                         "store_satisfaction": self.store_satisfaction,
+                                         "satisfaction_time_index": self.satisfaction_time_index,
+                                         }
 
         self._reset_storage()
 
@@ -35,6 +38,10 @@ class LTLDataset(Dataset):
         self.embeddings: list[torch.Tensor] = []
         self.formula_strs: list[str] | None = [] if self.store_formula_str else None
         self.satisfactions: list[torch.Tensor] | None = [] if self.store_satisfaction else None
+        self.metadata: dict[str, any] = {"store_formula_str": self.store_formula_str,
+                                         "store_satisfaction": self.store_satisfaction,
+                                         "satisfaction_time_index": self.satisfaction_time_index,
+                                         }
 
 
 
@@ -88,7 +95,6 @@ class LTLDataset(Dataset):
             "k": k,
             "p_leaf_range": p_leaf_range,
             "max_depth": max_depth,
-            "batch_size": self.satisfaction_batch_size,
             "kernel_T": kernel.T,
             "kernel_AP": kernel.AP,
             "kernel_seed": kernel.seed,
@@ -119,17 +125,16 @@ class LTLDataset(Dataset):
         dataset_formulas = kernel.sample_dataset_formulas_kernel(k=k, p_leaf_range=p_leaf_range, max_depth=max_depth, force_tree=False)
         unique_formulas = list(dict.fromkeys(dataset_formulas))
         self._reset_storage()
-        self.metadata = {
+        self.metadata.update({
             "source": "kernel_dedupe",
             "requested_k": k,
             "actual_k": len(unique_formulas),
             "p_leaf_range": p_leaf_range,
             "max_depth": max_depth,
-            "batch_size": self.satisfaction_batch_size,
             "kernel_T": kernel.T,
             "kernel_AP": kernel.AP,
             "kernel_seed": kernel.seed,
-        }
+        })
 
         print(f'The deduplicated dataset contains {len(unique_formulas)} many formulae.')
         
@@ -272,11 +277,12 @@ class LTLDataset(Dataset):
         for formula_str in eval_formula_strs:
             eval_indices.update(formula_groups[formula_str])
         
-        train_indices = [i for i in range(k) if i not in eval_indices]
+        n_available = len(all_formulas)
+        train_indices = [i for i in range(n_available) if i not in eval_indices]
         eval_indices_list = sorted(eval_indices)
         
         print(f"Stratified disjoint split: {len(train_indices)} train, {len(eval_indices_list)} eval "
-              f"({len(eval_indices_list) / k * 100:.1f}% eval)")
+          f"({len(eval_indices_list) / n_available * 100:.1f}% eval)")
         print(f"Unique formulas: {num_unique} total, "
               f"{len(eval_formula_strs)} in eval, {num_unique - len(eval_formula_strs)} in train")
         
@@ -288,25 +294,7 @@ class LTLDataset(Dataset):
             satisfaction_time_index=satisfaction_time_index,
         )
         train_dataset._reset_storage()
-        train_dataset.metadata = {
-            "source": "disjoint_split_train",
-            "total_sampled_k": k,
-            "train_count": len(train_indices),
-            "eval_count": len(eval_indices_list),
-            "eval_ratio_target": eval_ratio,
-            "eval_ratio_actual": len(eval_indices_list) / k,
-            "unique_formulas_total": num_unique,
-            "unique_formulas_train": num_unique - len(eval_formula_strs),
-            "unique_formulas_eval": len(eval_formula_strs),
-            "p_leaf_range": p_leaf_range,
-            "max_depth": max_depth,
-            "kernel_T": kernel.T,
-            "kernel_AP": kernel.AP,
-            "kernel_seed": kernel.seed,
-            "stratified_by_depth": True,
-            "dedupe_eval": dedupe_eval,
-        }
-        
+                
         # Create eval dataset
         eval_dataset = LTLDataset(
             store_formula_str=store_formula_str_eval,
@@ -315,24 +303,6 @@ class LTLDataset(Dataset):
             satisfaction_time_index=satisfaction_time_index,
         )
         eval_dataset._reset_storage()
-        eval_dataset.metadata = {
-            "source": "disjoint_split_eval",
-            "total_sampled_k": k,
-            "train_count": len(train_indices),
-            "eval_count": len(eval_indices_list),
-            "eval_ratio_target": eval_ratio,
-            "eval_ratio_actual": len(eval_indices_list) / k,
-            "unique_formulas_total": num_unique,
-            "unique_formulas_train": num_unique - len(eval_formula_strs),
-            "unique_formulas_eval": len(eval_formula_strs),
-            "p_leaf_range": p_leaf_range,
-            "max_depth": max_depth,
-            "kernel_T": kernel.T,
-            "kernel_AP": kernel.AP,
-            "kernel_seed": kernel.seed,
-            "stratified_by_depth": True,
-            "dedupe_eval": dedupe_eval,
-        }
         
         # Cache embeddings and satisfactions for unique formulas to avoid recomputation
         embedding_cache: dict[str, torch.Tensor] = {}
@@ -358,6 +328,17 @@ class LTLDataset(Dataset):
             sats_to_store = satisfaction_cache.get(phi_str) if store_satisfaction_train else None
             train_dataset._append_entry(phi, emb, sats_to_store)
         
+        train_dataset.metadata.update({
+            "source": "disjoint_split_train",
+            "total_sampled_k": k,
+            "train_count": len(train_dataset),
+            "p_leaf_range": [p_leaf_range],
+            "max_depth": max_depth,
+            "kernel_T": kernel.T,
+            "kernel_AP": kernel.AP,
+            "kernel_seed": kernel.seed
+        })
+
         # Clear caches - splits are disjoint, no reuse possible
         embedding_cache.clear()
         satisfaction_cache.clear()
@@ -389,15 +370,23 @@ class LTLDataset(Dataset):
             sats_to_store = satisfaction_cache.get(phi_str) if store_satisfaction_eval else None
             eval_dataset._append_entry(phi, emb, sats_to_store)
         
+        
+        eval_dataset.metadata.update({
+            "source": "disjoint_split_eval",
+            "total_sampled_k": k,
+            "eval_count": len(eval_dataset),
+            "p_leaf_range": [p_leaf_range],
+            "max_depth": max_depth,
+            "kernel_T": kernel.T,
+            "kernel_AP": kernel.AP,
+            "kernel_seed": kernel.seed,
+            "dedupe_eval": dedupe_eval,
+        })
+
         # Clear caches
         embedding_cache.clear()
         satisfaction_cache.clear()
-
-        # Update eval metadata with actual count after deduplication
-        if dedupe_eval:
-            eval_dataset.metadata["eval_count_after_dedupe"] = len(eval_dataset)
-
-        
+       
         return train_dataset, eval_dataset
 
 
