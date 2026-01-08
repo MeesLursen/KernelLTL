@@ -38,7 +38,7 @@ TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 BASE_OUTPUT_DIR="$PROJECT_DIR/artifacts/models/CE"
 
 # Scratch (fast) storage
-SCRATCH_BASE="/scratch-shared/$USER/KernelLTL"
+SCRATCH_BASE="/scratch-local/$USER/KernelLTL"
 SCRATCH_OUTPUT_BASE="$SCRATCH_BASE/models/CE"
 
 # Training defaults (can be overridden per stage)
@@ -143,8 +143,8 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     mkdir -p "$STAGE_MODEL_SAVE_DIR"
     mkdir -p "$STAGE_HOME_OUTPUT_DIR"
 
-    SCRATCH_TRAIN_DIR="/scratch-shared/$USER/KernelLTL/datasets/$STAGE_NAME/train"
-    SCRATCH_EVAL_DIR="/scratch-shared/$USER/KernelLTL/datasets/$STAGE_NAME/eval"
+    SCRATCH_TRAIN_DIR="/scratch-local/$USER/KernelLTL/datasets/$STAGE_NAME/train"
+    SCRATCH_EVAL_DIR="/scratch-local/$USER/KernelLTL/datasets/$STAGE_NAME/eval"
 
     echo ""
     echo "=============================================="
@@ -231,6 +231,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     PREV_TRAINING_ARGS_DIR="$STAGE_MODEL_SAVE_DIR"
 done
 
+echo "Cleaning scratch-local"
 rm -rf "$SCRATCH_BASE"
 
 echo ""
