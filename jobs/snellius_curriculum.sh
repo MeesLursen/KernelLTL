@@ -34,8 +34,12 @@ VENV_DIR="$PROJECT_DIR/venv"
 KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
 TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 
-# Base output directory (stages will be saved as models/stage1, models/stage2, etc.)
+# Home output directory (for persisted copies)
 BASE_OUTPUT_DIR="$PROJECT_DIR/artifacts/models/CE"
+
+# Scratch (fast) storage
+SCRATCH_BASE="/scratch-shared/$USER/KernelLTL"
+SCRATCH_OUTPUT_BASE="$SCRATCH_BASE/models/CE"
 
 # Training defaults (can be overridden per stage)
 DEFAULT_LEARNING_RATE=5e-4
@@ -59,7 +63,7 @@ EVAL_BATCH_SIZE="81920"
 STAGE_CONFIGS=(
     "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:10:1e-4:64"
     "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:50:5e-5:64"
-    "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts//datasets/stage2/eval:100:1e-5:64"
+    "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts/datasets/stage2/eval:100:1e-5:64"
 )   
     # "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:100:5e-4:64"
     # "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:400:5e-4:64" 
@@ -117,9 +121,13 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     # Use defaults if not specified
     LR=${LR:-$DEFAULT_LEARNING_RATE}
     BATCH_SIZE=${BATCH_SIZE:-$DEFAULT_BATCH_SIZE}
+    STEP_INTERVAL=$(echo "scale=6; 1/$EPOCHS" | bc -l)
     
-    STAGE_OUTPUT_DIR="$BASE_OUTPUT_DIR/$STAGE_NAME"
+    STAGE_OUTPUT_DIR="$SCRATCH_OUTPUT_BASE/$STAGE_NAME"
     STAGE_MODEL_SAVE_DIR="$STAGE_OUTPUT_DIR/final_model"
+
+    STAGE_HOME_OUTPUT_DIR="$BASE_OUTPUT_DIR/$STAGE_NAME"
+    STAGE_HOME_MODEL_SAVE_DIR="$STAGE_HOME_OUTPUT_DIR/final_model"
     
     echo ""
     echo "=============================================="
@@ -133,6 +141,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     
     mkdir -p "$STAGE_OUTPUT_DIR"
     mkdir -p "$STAGE_MODEL_SAVE_DIR"
+    mkdir -p "$STAGE_HOME_OUTPUT_DIR"
 
     SCRATCH_TRAIN_DIR="/scratch-shared/$USER/KernelLTL/datasets/$STAGE_NAME/train"
     SCRATCH_EVAL_DIR="/scratch-shared/$USER/KernelLTL/datasets/$STAGE_NAME/eval"
@@ -163,9 +172,9 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--per-device-train-batch-size" "$BATCH_SIZE"
         "--per-device-eval-batch-size" "$BATCH_SIZE"
         "--warmup-steps" "$DEFAULT_WARMUP_STEPS"
-        "--logging-steps" 0.02
-        "--eval-steps" 0.02
-        "--save-steps" 0.2
+        "--logging-steps" "$STEP_INTERVAL"
+        "--eval-steps" "$STEP_INTERVAL"
+        "--save-steps" "$STEP_INTERVAL"
         "--dataloader-num-workers" "$((SLURM_CPUS_PER_TASK / NUM_GPUS))"
         "--dataloader-pin-memory"
         $MIXED_PRECISION
@@ -206,10 +215,23 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     
     echo "$STAGE_NAME completed in $((STAGE_DURATION / 3600))h $(((STAGE_DURATION % 3600) / 60))m $((STAGE_DURATION % 60))s"
     
-    # Set paths for next stage
+    # Copy logs and final model back to home for persistence
+    echo "Copying logs and final model to home storage..."
+    mkdir -p "$STAGE_HOME_OUTPUT_DIR/logs"
+    if [ -d "$STAGE_OUTPUT_DIR/logs" ]; then
+        rsync -a --delete "$STAGE_OUTPUT_DIR/logs/" "$STAGE_HOME_OUTPUT_DIR/logs/"
+    fi
+    mkdir -p "$STAGE_HOME_MODEL_SAVE_DIR"
+    if [ -d "$STAGE_MODEL_SAVE_DIR" ]; then
+        rsync -a --delete "$STAGE_MODEL_SAVE_DIR/" "$STAGE_HOME_MODEL_SAVE_DIR/"
+    fi
+
+    # Set paths for next stage (use scratch paths for speed)
     PREV_MODEL_DIR="$STAGE_MODEL_SAVE_DIR"
     PREV_TRAINING_ARGS_DIR="$STAGE_MODEL_SAVE_DIR"
 done
+
+rm -rf "$SCRATCH_BASE"
 
 echo ""
 echo "=============================================="
