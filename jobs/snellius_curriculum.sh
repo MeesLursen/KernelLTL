@@ -110,9 +110,9 @@ echo "Number of GPUs: $NUM_GPUS"
 # ============================================================================
 # RUN CURRICULUM STAGES
 # ============================================================================
-PREV_MODEL_HOME_DIR="$HOME_OUTPUT_DIR/stage2"
-PREV_MODEL_DIR="$SCRATCH_OUTPUT_BASE/stage2"
-PREV_TRAINING_ARGS_DIR="$SCRATCH_OUTPUT_BASE/stage2"
+PREV_MODEL_HOME_DIR="$HOME_OUTPUT_DIR/stage2/final_model"
+PREV_MODEL_DIR="$SCRATCH_OUTPUT_BASE/stage2/final_model"
+PREV_TRAINING_ARGS_DIR="$SCRATCH_OUTPUT_BASE/stage2/final_model"
 
 # Copy previous model dir from home to scratch-local
 echo "Copying previous model from home to scratch..."
