@@ -115,7 +115,7 @@ PREV_MODEL_DIR="$SCRATCH_OUTPUT_BASE/stage2/final_model"
 PREV_TRAINING_ARGS_DIR="$SCRATCH_OUTPUT_BASE/stage2/final_model"
 
 # Copy previous model dir from home to scratch-local
-echo "Copying previous model from home to scratch..."
+echo "Copying previous model from $PREV_MODEL_HOME_DIR to $PREV_MODEL_DIR..."
 mkdir -p "$PREV_MODEL_DIR"
 if [ -d "$PREV_MODEL_DIR" ]; then
     rsync -a --delete "$PREV_MODEL_HOME_DIR/" "$PREV_MODEL_DIR/"
