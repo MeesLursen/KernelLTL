@@ -35,7 +35,7 @@ KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
 TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 
 # Home output directory (for persisted copies)
-BASE_OUTPUT_DIR="$PROJECT_DIR/artifacts/models/CE"
+HOME_OUTPUT_DIR="$PROJECT_DIR/artifacts/models/CE"
 
 # Scratch (fast) storage
 SCRATCH_BASE="/scratch-local/$USER/KernelLTL"
@@ -61,12 +61,13 @@ EVAL_BATCH_SIZE="81920"
 # ============================================================================
 
 STAGE_CONFIGS=(
-    "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:10:1e-4:64"
-    "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:50:5e-5:64"
-    "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts/datasets/stage2/eval:100:1e-5:64"
+    "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:100:1e-5:64"
+    "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:100:1e-5:64" 
 )   
-    # "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:100:5e-4:64"
-    # "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:400:5e-4:64" 
+    # "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:10:1e-4:64"
+    # "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:50:5e-5:64"
+    # "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts/datasets/stage2/eval:100:1e-5:64"
+
 
 
 # ============================================================================
@@ -109,9 +110,17 @@ echo "Number of GPUs: $NUM_GPUS"
 # ============================================================================
 # RUN CURRICULUM STAGES
 # ============================================================================
+PREV_MODEL_HOME_DIR="$HOME_OUTPUT_DIR/stage2"
+PREV_MODEL_DIR="$SCRATCH_OUTPUT_BASE/stage2"
+PREV_TRAINING_ARGS_DIR="$SCRATCH_OUTPUT_BASE/stage2"
 
-PREV_MODEL_DIR=""
-PREV_TRAINING_ARGS_DIR=""
+# Copy previous model dir from home to scratch-local
+echo "Copying previous model from home to scratch..."
+mkdir -p "$PREV_MODEL_DIR"
+if [ -d "$PREV_MODEL_DIR" ]; then
+    rsync -a --delete "$PREV_MODEL_HOME_DIR/" "$PREV_MODEL_DIR/"
+fi
+
 DEBUG_OPTION="underflow_overflow"
 
 for i in "${!STAGE_CONFIGS[@]}"; do
@@ -126,7 +135,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     STAGE_OUTPUT_DIR="$SCRATCH_OUTPUT_BASE/$STAGE_NAME"
     STAGE_MODEL_SAVE_DIR="$STAGE_OUTPUT_DIR/final_model"
 
-    STAGE_HOME_OUTPUT_DIR="$BASE_OUTPUT_DIR/$STAGE_NAME"
+    STAGE_HOME_OUTPUT_DIR="$HOME_OUTPUT_DIR/$STAGE_NAME"
     STAGE_HOME_MODEL_SAVE_DIR="$STAGE_HOME_OUTPUT_DIR/final_model"
     
     echo ""
