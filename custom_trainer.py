@@ -20,6 +20,7 @@ class HybridTrainer(Trainer):
         reinforce_weight: float = 0.1,
         baseline_momentum: float = 0.9,
         reward_clip: float | None = 1.0,
+        entropy_coef: float = 0.01,
         rng: torch.Generator | None = None,
         inspect: bool = False,
         inspect_sample_count: int = 5,
@@ -34,11 +35,12 @@ class HybridTrainer(Trainer):
         self.reinforce_weight = reinforce_weight
         self.baseline_momentum = baseline_momentum
         self.reward_clip = reward_clip
+        self.entropy_coef = entropy_coef
         self.rng = rng
         self._reward_baseline: float | None = None
         self._nmse_eps: float = 1e-8
         self._last_reward_mean: float | None = None
-        self._last_reward_std: float | None = None
+        self._last_reward_var: float | None = None
         self._last_valid_ratio: float | None = None
         self.inspect = inspect
         self.inspect_sample_count = max(1, inspect_sample_count)
@@ -125,8 +127,8 @@ class HybridTrainer(Trainer):
                 log_payload["loss_reinforce"] = 'None'
             if self._last_reward_mean is not None:
                 log_payload["reward_mean"] = self._last_reward_mean
-            if self._last_reward_std is not None:
-                log_payload["reward_std"] = self._last_reward_std
+            if self._last_reward_var is not None:
+                log_payload["reward_var"] = self._last_reward_var
             if self._last_valid_ratio is not None:
                 log_payload["valid_ratio"] = self._last_valid_ratio
             grad_metrics = None
@@ -262,8 +264,9 @@ class HybridTrainer(Trainer):
 
         reward_values: list[torch.Tensor] = []
         valid_count = 0
-        generated_embeds: list[torch.Tensor | None] = []
-        target_embeds_cpu: list[torch.Tensor] = []
+        if should_inspect:
+            generated_embeds: list[torch.Tensor | None] = []
+            target_embeds_cpu: list[torch.Tensor] = []
 
         with torch.no_grad():
             for generated_str, target_emb in zip(generated_strings, semantic_embeddings):
@@ -278,21 +281,23 @@ class HybridTrainer(Trainer):
                     nmse = diff.pow(2).sum() / (target_vec.pow(2).sum() + self._nmse_eps) #TODO: probably redo this with full sats vecs instead.
                     reward = 1.0 - nmse
                     valid_count += 1
-                    generated_embeds.append(generated_vec.detach().cpu())
-                    target_embeds_cpu.append(target_vec.detach().cpu())
+                    if should_inspect:
+                        generated_embeds.append(generated_vec.detach().cpu())
+                        target_embeds_cpu.append(target_vec.detach().cpu())
                 except Exception:
                     reward = torch.tensor(-1.0, device=device)
-                    generated_embeds.append(None)
-                    target_embeds_cpu.append(target_vec.detach().cpu())
+                    if should_inspect:
+                        generated_embeds.append(None)
+                        target_embeds_cpu.append(target_vec.detach().cpu())
                 if self.reward_clip is not None:
                     reward = torch.clamp(reward, min=-self.reward_clip, max=self.reward_clip)
                 reward_values.append(reward)
 
         reward_tensor = torch.stack(reward_values).to(device=device, dtype=seq_log_prob.dtype)
         reward_mean = reward_tensor.mean().item()
-        reward_std = reward_tensor.std(unbiased=False).item() if reward_tensor.numel() > 1 else 0.0
+        reward_var = reward_tensor.var(unbiased=False).item() if reward_tensor.numel() > 1 else 1.0
         self._last_reward_mean = reward_mean
-        self._last_reward_std = reward_std
+        self._last_reward_var = reward_var
         self._last_valid_ratio = float(valid_count / len(reward_values)) if reward_values else 0.0
 
         logging_steps = getattr(self.args, "logging_steps", None)
@@ -326,15 +331,33 @@ class HybridTrainer(Trainer):
 
         if self._reward_baseline is None:
             self._reward_baseline = reward_mean
+            self._reward_sq_mean = (reward_tensor ** 2).mean().item()
         else:
             self._reward_baseline = (
                 self.baseline_momentum * self._reward_baseline
                 + (1.0 - self.baseline_momentum) * reward_mean
             )
+            self._reward_sq_mean = (
+                self.baseline_momentum * self._reward_sq_mean
+                + (1.0 - self.baseline_momentum) * (reward_tensor ** 2).mean().item()
+            )
+
+        self._reward_variance = max(self._reward_sq_mean - self._reward_baseline ** 2, 1e-8)
+        
+        # Normalize advantage (reduces variance significantly)
         baseline = torch.tensor(self._reward_baseline, device=device, dtype=reward_tensor.dtype)
-        advantage = (reward_tensor - baseline).detach()
+        std = torch.tensor(max(self._reward_variance ** 0.5, 1e-4), device=device)
+        advantage = ((reward_tensor - baseline) / std).detach()
 
         reinforce_loss = -(advantage * seq_log_prob).mean()
+    
+        # Compute entropy from the policy distribution
+        # if self.entropy_coef > 0:
+        #     probs = torch.softmax(score_tensor, dim=-1)
+        #     entropy = -(probs * torch.log(probs + 1e-10)).sum(dim=-1)  # (B, T)Now,
+        #     entropy = (entropy * gen_mask).sum(dim=-1) / lengths  # Average per sequence
+        #     entropy_bonus = entropy.mean()
+        #     reinforce_loss = reinforce_loss - self.entropy_coef * entropy_bonus
         if torch.isnan(reinforce_loss):
             print("[HybridTrainer] reinforce_loss is NaN")
             print("  reward_tensor:", reward_tensor)
