@@ -174,7 +174,6 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--reinforce-weight" "$RL_WEIGHT"
         "--reinforce-baseline-momentum" "$BL_MOMENTUM"
         "--reinforce-reward-clip" "$RL_CLIP"
-        "--inspect"
     )
 
     # Set debugging options
