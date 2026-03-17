@@ -9,7 +9,7 @@ from dataset_class import LTLDataset
 from model_class import LTLModel
 from config_class import LTLConfig
 from training_utils import SemanticEvaluationCallback
-from custom_trainer import HybridTrainer
+from reinforce_trainer_rb import REINFORCETrainerRB
 
 def main():
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -126,7 +126,7 @@ def main():
     )
     
     # Create trainer
-    trainer = HybridTrainer(
+    trainer = REINFORCETrainerRB(
         model=model,
         args=training_args,
         data_collator=lambda batch : tokenizer.collate_batch(batch=batch, max_len=model.config.n_positions),
@@ -139,8 +139,6 @@ def main():
         reinforce_weight=reinforce_weight,
         baseline_momentum=reinforce_baseline_momentum,
         reward_clip=reinforce_reward_clip,
-        rng=kernel.rng,
-        inspect=True
     )
     
 
