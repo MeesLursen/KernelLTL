@@ -399,7 +399,8 @@ class LTLDataset(Dataset):
     def __getitem__(self, idx):
         item = {
             "formula": self.formulas[idx],
-            "embedding": self.embeddings[idx]
+            "embedding": self.embeddings[idx],
+            "formula_id": idx,
         }
 
         if self.store_formula_str and self.formula_strs is not None:
@@ -504,3 +505,80 @@ class LTLDataset(Dataset):
 
         dataset.metadata = metadata.get("extra_metadata", {})
         return dataset
+
+
+    @staticmethod
+    def add_satisfactions_to_saved_dataset(
+        dirpath: str,
+        kernel: LTLKernel,
+        satisfaction_batch_size: int | None = None,
+        satisfaction_time_index: int | None = None,
+    ) -> None:
+        """
+        Compute satisfactions from formulas in a saved dataset directory and write
+        them to `satisfactions.pt` in that same directory.
+
+        Also updates `metadata.json` so the dataset is marked as having
+        satisfactions.
+
+        Args:
+            dirpath: Path to a saved LTLDataset directory.
+            kernel: Kernel used to evaluate formula satisfactions on traces.
+            satisfaction_batch_size: Optional override for evaluation batch size.
+                If None, uses value from metadata.json (or 512 as fallback).
+            satisfaction_time_index: Optional override for evaluation time index.
+                If None, uses value from metadata.json (or 0 as fallback).
+        """
+        metadata_path = os.path.join(dirpath, "metadata.json")
+        formulas_path = os.path.join(dirpath, "formulas.jsonl")
+        satisfactions_path = os.path.join(dirpath, "satisfactions.pt")
+
+        if not os.path.exists(metadata_path):
+            raise FileNotFoundError(f"Dataset metadata not found in {dirpath}")
+        if not os.path.exists(formulas_path):
+            raise FileNotFoundError(f"Dataset formulas not found in {dirpath}")
+
+        with open(metadata_path, "r", encoding="utf-8") as fp:
+            metadata = json.load(fp)
+
+        batch_size = (
+            satisfaction_batch_size
+            if satisfaction_batch_size is not None
+            else metadata.get("satisfaction_batch_size", 512)
+        )
+        time_index = (
+            satisfaction_time_index
+            if satisfaction_time_index is not None
+            else metadata.get("satisfaction_time_index", 0)
+        )
+
+        formulas: list[Formula] = []
+        with open(formulas_path, "r", encoding="utf-8") as fp:
+            for line in fp:
+                text = line.strip()
+                if text:
+                    formulas.append(str_to_formula(text))
+
+        satisfactions: list[torch.Tensor] = []
+        for phi in formulas:
+            phi_sats = kernel._evaluate_formula_on_traces(
+                formula=phi,
+                batch_size=batch_size,
+                time_index=time_index,
+            )
+            satisfactions.append(phi_sats.to(dtype=torch.bool, device="cpu"))
+
+        if satisfactions:
+            sats_tensor = torch.stack(satisfactions, dim=0).to(dtype=torch.bool, device="cpu")
+        else:
+            sats_tensor = torch.empty((0,), dtype=torch.bool)
+
+        torch.save(sats_tensor, satisfactions_path)
+
+        metadata["store_satisfaction"] = True
+        metadata["has_satisfactions"] = True
+        metadata["satisfaction_batch_size"] = batch_size
+        metadata["satisfaction_time_index"] = time_index
+
+        with open(metadata_path, "w", encoding="utf-8") as fp:
+            json.dump(metadata, fp, indent=2)
