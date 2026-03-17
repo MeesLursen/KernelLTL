@@ -31,6 +31,11 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument("--kernel-dir", required=True, help="Directory containing a previously saved kernel")
+    parser.add_argument(
+        "--add-satisfactions",
+        action="store_true",
+        help="Compute and persist satisfactions.pt for existing datasets at --train-out and/or --eval-out",
+    )
     parser.add_argument("--base-train-dir", help="Path to an existing train dataset to append to (keeps previously sampled formulas out of this stage)")
     parser.add_argument("--base-eval-dir", help="Path to an existing eval dataset to append to (keeps previously sampled formulas out of this stage)")
     
@@ -40,8 +45,8 @@ def parse_args() -> argparse.Namespace:
 
     # Train dataset options
     train = parser.add_argument_group("Training dataset")
-    train.add_argument("--train-out", required=True, help="Output directory for the training dataset")
-    train.add_argument("--train-k", type=_positive_int, required=True, help="Number of formulas to sample for training (or total when using --disjoint-split)")
+    train.add_argument("--train-out", help="Output directory for the training dataset")
+    train.add_argument("--train-k", type=_positive_int, help="Number of formulas to sample for training (or total when using --disjoint-split)")
     train.add_argument("--train-p-leaf-range", nargs=2, type=float, help="Probability that a sampled node becomes a leaf")
     train.add_argument("--train-max-depth", type=_positive_int, help="Maximum tree depth for training formulas")
     train.add_argument("--train-min-depth", type=int, default=None, help="Minimum formula depth to keep for this stage (used together with --train-max-depth)")
@@ -112,6 +117,38 @@ def _build_dataset(
 def main() -> None:
     args = parse_args()
     kernel = LTLKernel.load(args.kernel_dir)
+
+    if args.add_satisfactions:
+        if not args.train_out and not args.eval_out:
+            raise ValueError("Provide at least one of --train-out or --eval-out when using --add-satisfactions.")
+
+        if args.train_out:
+            print(f"\nAdding satisfactions to training dataset at {args.train_out}...")
+            LTLDataset.add_satisfactions_to_saved_dataset(
+                dirpath=args.train_out,
+                kernel=kernel,
+                satisfaction_batch_size=args.train_satisfaction_batch_size,
+                satisfaction_time_index=args.train_satisfaction_time_index,
+            )
+            print(f"Updated training dataset at {args.train_out}")
+
+        if args.eval_out:
+            print(f"\nAdding satisfactions to evaluation dataset at {args.eval_out}...")
+            LTLDataset.add_satisfactions_to_saved_dataset(
+                dirpath=args.eval_out,
+                kernel=kernel,
+                satisfaction_batch_size=args.eval_satisfaction_batch_size,
+                satisfaction_time_index=args.eval_satisfaction_time_index,
+            )
+            print(f"Updated evaluation dataset at {args.eval_out}")
+
+        return
+
+    if not args.train_out:
+        raise ValueError("--train-out is required unless --add-satisfactions is used with --eval-out only.")
+    if args.train_k is None:
+        raise ValueError("--train-k is required unless --add-satisfactions is used.")
+
     train_p_leaf_range = tuple(args.train_p_leaf_range)
     if args.eval_p_leaf_range is not None:
         eval_p_leaf_range = tuple(args.eval_p_leaf_range)
