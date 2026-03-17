@@ -7,7 +7,7 @@ from formula_class import eval_traces_batch, Formula, Atom, And, Next, Not
 from formula_utils import sample_traces, sample_traces_correlated, sample_formulas, str_to_formula
 
 class LTLKernel:
-    def __init__(self, T: int, AP: int, seed: int | None = None):
+    def __init__(self, T: int, AP: int, device: str | None = None, seed: int | None = None):
         """
         Kernel for LTL formulas based on sampled traces.
 
@@ -19,11 +19,16 @@ class LTLKernel:
         self.AP: int                                = AP
         self.seed: int | None                       = seed
 
-        self.device: str = ('cuda'
-                            if torch.cuda.is_available()
-                            else 'mps'
-                            if torch.backends.mps.is_available()
-                            else 'cpu')
+        if device is not None:
+            resolved_device = str(torch.device(device))
+        else:
+            resolved_device = ('cuda'
+                               if torch.cuda.is_available()
+                               else 'mps'
+                               if torch.backends.mps.is_available()
+                               else 'cpu')
+
+        self.device: str = resolved_device
         
         self.rng: torch.Generator = (torch.Generator(device=self.device).manual_seed(self.seed)
                                      if self.seed is not None
@@ -33,10 +38,31 @@ class LTLKernel:
         self.traces: torch.Tensor | None            = None          # (N, AP, T), bool, Tensor
         self.m: int | None                          = None          # number of anchor formula
         self.F: torch.Tensor | None                 = None          # feature matrix (m, N), ±1, Tensor
-        self.F_robustness: torch.Tensor | None      = None          # robustness feature matrix (m, N), Tensor
-        self.K: torch.Tensor | None                 = None          # kernel matrix (m, m), Tensor
-        self.K0: torch.Tensor | None                = None          # cosine kernel matrix (m, m), Tensor
-        self.trace_atom_distances: torch.Tensor | None = None       # (AP, N, N) atom-wise Hamming distances
+
+
+    def set_device(self, device: str | torch.device, non_blocking: bool = True) -> None:
+        """Move kernel tensors and RNG to the specified device when needed."""
+        target_device = torch.device(device)
+        target_device_str = str(target_device)
+
+        rng_state = self.rng.get_state().cpu() if self.rng is not None else None
+
+        if self.traces is not None and self.traces.device != target_device:
+            self.traces = self.traces.to(device=target_device, non_blocking=non_blocking)
+
+        if self.F is not None and self.F.device != target_device:
+            self.F = self.F.to(device=target_device, non_blocking=non_blocking)
+
+        if self.device != target_device_str:
+            self.device = target_device_str
+
+        if rng_state is not None:
+            self.rng = torch.Generator(device=self.device)
+            self.rng.set_state(rng_state)
+        elif self.rng is None:
+            self.rng = torch.Generator(device=self.device)
+            if self.seed is not None:
+                self.rng.manual_seed(self.seed)
 
 
 
@@ -387,13 +413,14 @@ class LTLKernel:
 
         with open(metadata_path, "r", encoding="utf-8") as fp:
             metadata = json.load(fp)
+            
 
-        kernel = cls(T=int(metadata["T"]), AP=int(metadata["AP"]), seed=metadata.get("seed"))
+        if device is not None and device != metadata["device"]:
+            resolved_device = device
+        else:
+            resolved_device = metadata["device"]
 
-        # Override device if requested
-        if device is not None and device != kernel.device:
-            kernel.device = device
-            kernel.rng = torch.Generator(device=device)
+        kernel = cls(T=int(metadata["T"]), AP=int(metadata["AP"]), device=resolved_device, seed=metadata.get("seed"))
 
         # Anchor formulas
         anchor_path = os.path.join(dirpath, "anchor_formulas.jsonl")
