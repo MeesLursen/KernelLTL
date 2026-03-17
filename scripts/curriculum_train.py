@@ -13,7 +13,7 @@ import os
 from typing import Any, Dict, Optional
 
 import torch
-from transformers import Trainer, TrainingArguments
+from transformers import EarlyStoppingCallback, Trainer, TrainingArguments
 from transformers.trainer import TRAINING_ARGS_NAME
 
 from config_class import LTLConfig
@@ -82,6 +82,10 @@ def parse_args() -> argparse.Namespace:
     train_group.add_argument("--fp16", action="store_true", help="Enable FP16 mixed precision if supported")
     train_group.add_argument("--bf16", action="store_true", help="Enable BF16 mixed precision if supported")
     train_group.add_argument("--report-to", nargs="*", default=None, help="Backends to report metrics to (e.g. tensorboard)")
+    train_group.add_argument("--metric-for-best-model", type=str, default="eval_semantic_distance", help="Metric used for best model selection, e.g. eval_loss or eval_semantic_distance")
+    train_group.add_argument("--greater-is-better", choices=["true", "false"], default="false", help="Whether larger metric values are better for best model selection")
+    train_group.add_argument("--early-stopping-patience", type=int, default=None, help="Number of evaluation calls with no significant improvement before stopping")
+    train_group.add_argument("--early-stopping-threshold", type=float, default=None, help="Minimum metric improvement required to reset early stopping patience")
     train_group.set_defaults(dataloader_pin_memory=True)
 
     # Semantic evaluation callback controls
@@ -174,6 +178,10 @@ def _load_training_args(args: argparse.Namespace) -> TrainingArguments:
 
     if args.report_to is not None:
         base_kwargs["report_to"] = args.report_to
+    if args.metric_for_best_model is not None:
+        base_kwargs["metric_for_best_model"] = args.metric_for_best_model
+    if args.greater_is_better is not None:
+        base_kwargs["greater_is_better"] = args.greater_is_better.lower() == "true"
     if args.fp16:
         base_kwargs["fp16"] = True
     if args.bf16:
@@ -253,6 +261,17 @@ def main() -> None:
                 eval_dataset=eval_dataset,
                 kernel_eval_batch_size=args.semantic_eval_batch_size,
                 kernel_time_index=args.semantic_time_index,
+            )
+        )
+    if args.early_stopping_patience is not None:
+        if args.early_stopping_patience <= 0:
+            raise ValueError("--early-stopping-patience must be > 0")
+        callbacks.append(
+            EarlyStoppingCallback(
+                early_stopping_patience=args.early_stopping_patience,
+                early_stopping_threshold=(
+                    args.early_stopping_threshold if args.early_stopping_threshold is not None else 0.0
+                ),
             )
         )
 

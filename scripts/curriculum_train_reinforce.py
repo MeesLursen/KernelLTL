@@ -13,11 +13,11 @@ import os
 from typing import Any, Dict, Optional
 
 import torch
-from transformers import TrainingArguments
+from transformers import EarlyStoppingCallback, TrainingArguments
 from transformers.trainer import TRAINING_ARGS_NAME
 
 from config_class import LTLConfig
-from custom_trainer import HybridTrainer
+from reinforce_trainer_rb import REINFORCETrainerRB
 from dataset_class import LTLDataset
 from kernel_class import LTLKernel
 from model_class import LTLModel
@@ -86,6 +86,10 @@ def parse_args() -> argparse.Namespace:
     train_group.add_argument("--fp16", action="store_true", help="Enable FP16 mixed precision if supported")
     train_group.add_argument("--bf16", action="store_true", help="Enable BF16 mixed precision if supported")
     train_group.add_argument("--report-to", nargs="*", default=None, help="Backends to report metrics to (e.g. tensorboard)")
+    train_group.add_argument("--metric-for-best-model", type=str, default="eval_semantic_distance", help="Metric used for best model selection, e.g. eval_loss or eval_semantic_distance")
+    train_group.add_argument("--greater-is-better", choices=["true", "false"], default="false", help="Whether larger metric values are better for best model selection")
+    train_group.add_argument("--early-stopping-patience", type=int, default=None, help="Number of evaluation calls with no significant improvement before stopping")
+    train_group.add_argument("--early-stopping-threshold", type=float, default=None, help="Minimum metric improvement required to reset early stopping patience")
     train_group.set_defaults(dataloader_pin_memory=True)
 
     # Semantic evaluation callback controls
@@ -99,7 +103,6 @@ def parse_args() -> argparse.Namespace:
     callback_group.add_argument("--reinforce-weight", type=float, default=0.3)
     callback_group.add_argument("--reinforce-baseline-momentum", type=float, default=0.9)
     callback_group.add_argument("--reinforce-reward-clip", type=float, default=1.0)
-    callback_group.add_argument("--inspect", action="store_true")
 
     return parser.parse_args()
 
@@ -185,6 +188,10 @@ def _load_training_args(args: argparse.Namespace) -> TrainingArguments:
 
     if args.report_to is not None:
         base_kwargs["report_to"] = args.report_to
+    if args.metric_for_best_model is not None:
+        base_kwargs["metric_for_best_model"] = args.metric_for_best_model
+    if args.greater_is_better is not None:
+        base_kwargs["greater_is_better"] = args.greater_is_better.lower() == "true"
     if args.fp16:
         base_kwargs["fp16"] = True
     if args.bf16:
@@ -266,8 +273,19 @@ def main() -> None:
                 kernel_time_index=args.semantic_time_index,
             )
         )
+    if args.early_stopping_patience is not None:
+        if args.early_stopping_patience <= 0:
+            raise ValueError("--early-stopping-patience must be > 0")
+        callbacks.append(
+            EarlyStoppingCallback(
+                early_stopping_patience=args.early_stopping_patience,
+                early_stopping_threshold=(
+                    args.early_stopping_threshold if args.early_stopping_threshold is not None else 0.0
+                ),
+            )
+        )
 
-    trainer = HybridTrainer(
+    trainer = REINFORCETrainerRB(
         model=model,
         args=training_args,
         data_collator=lambda batch: tokenizer.collate_batch(batch, model.config.n_positions),
@@ -280,8 +298,6 @@ def main() -> None:
         reinforce_weight=args.reinforce_weight,
         baseline_momentum=args.reinforce_baseline_momentum,
         reward_clip=args.reinforce_reward_clip,
-        rng=kernel.rng,
-        inspect=args.inspect,
     )
 
     train_result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
