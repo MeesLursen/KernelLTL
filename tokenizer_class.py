@@ -204,49 +204,55 @@ class LTLTokenizer:
                       max_len: int,
                       include_metadata: bool = False):
 
-        input_embeddings = []
-        labels = []
-        formulas: list[Formula] = []
-        formula_strs: list[str] = []
-        satisfactions: list[torch.Tensor] = []
+        semantic_embeddings_ls = []
+        input_ids_ls = []
+        formulas_ls: list[Formula] = []
+        formula_strs_ls: list[str] = []
+        satisfactions_ls: list[torch.Tensor] = []
+        formula_ids_list: list[int] = []
 
         for sample in batch:
             formula: Formula = sample["formula"]
             emb: torch.Tensor = sample["embedding"]
+            idx: int = sample["formula_id"]
 
-            text = sample.get("formula_str")
-            if text is None:
-                text = str(formula)
+            formula_str = sample.get("formula_str")
+            if formula_str is None:
+                formula_str = str(formula)
 
-            ids = torch.tensor(self.encode(text, max_length=max_len), dtype=torch.long)
-            labels.append(ids)
-            input_embeddings.append(emb)
-            formulas.append(formula)
-            formula_strs.append(text)
+            ids = torch.tensor(self.encode(formula_str, max_length=max_len), dtype=torch.long)
+            input_ids_ls.append(ids)
+            semantic_embeddings_ls.append(emb)
+            formulas_ls.append(formula)
+            formula_strs_ls.append(formula_str)
+            formula_ids_list.append(idx)
 
             if include_metadata and "satisfaction" in sample:
-                satisfactions.append(sample["satisfaction"])
+                satisfactions_ls.append(sample["satisfaction"])
 
-        labels = pad_sequence(labels, batch_first=True, padding_value=self.pad_token_id)  # (B, L)
-        attention_mask = (labels != self.pad_token_id).long()
+        input_ids = pad_sequence(input_ids_ls, batch_first=True, padding_value=self.pad_token_id)  # (B, L)
+        attention_mask = (input_ids != self.pad_token_id).long()
 
-        loss_labels = labels.clone()
+        loss_labels = input_ids.clone()
         loss_labels[loss_labels == self.pad_token_id] = -100
 
-        encoder_embs = torch.stack(input_embeddings, dim=0).to(dtype=torch.float32)  # (B, m)
+        semantic_embs = torch.stack(semantic_embeddings_ls, dim=0).to(dtype=torch.float32)  # (B, m)
+
+        formula_ids = torch.tensor(formula_ids_list, dtype=torch.long)
 
         batch_dict: dict[str, torch.Tensor | list[str] | list[Formula]] = {
             "labels": loss_labels,
-            "input_ids": labels,
+            "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "semantic_embeddings": encoder_embs
+            "semantic_embeddings": semantic_embs,
+            "formula_ids": formula_ids,
         }
 
         if include_metadata:
-            batch_dict["target_formulas"] = formulas
-            batch_dict["target_formula_strs"] = formula_strs
-            if len(satisfactions) != len(batch):
+            batch_dict["target_formulas"] = formulas_ls
+            batch_dict["target_formula_strs"] = formula_strs_ls
+            if len(satisfactions_ls) != len(batch):
                 raise ValueError("include_metadata=True but some samples lack 'satisfaction'")
-            batch_dict["target_satisfaction"] = torch.stack(satisfactions, dim=0)
+            batch_dict["target_satisfaction"] = torch.stack(satisfactions_ls, dim=0)
 
         return batch_dict
