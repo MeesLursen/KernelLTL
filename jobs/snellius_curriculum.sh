@@ -2,7 +2,7 @@
 #SBATCH --job-name=kernelltl-curriculum
 #SBATCH --output=logs/kernelltl_curriculum_%j.out
 #SBATCH --error=logs/kernelltl_curriculum_%j.err
-#SBATCH --time=18:00:00
+#SBATCH --time=16:00:00
 #SBATCH --partition=gpu_h100
 #SBATCH --gpus=4
 #SBATCH --cpus-per-task=64
@@ -61,13 +61,12 @@ EVAL_BATCH_SIZE="81920"
 # ============================================================================
 
 STAGE_CONFIGS=(
-    "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:100:1e-5:64"
-    "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:100:1e-5:64" 
+    "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:75:1e-5:64" 
 )   
     # "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:10:1e-4:64"
     # "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:50:5e-5:64"
     # "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts/datasets/stage2/eval:100:1e-5:64"
-
+    # "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:100:1e-5:64"
 
 
 # ============================================================================
@@ -110,9 +109,9 @@ echo "Number of GPUs: $NUM_GPUS"
 # ============================================================================
 # RUN CURRICULUM STAGES
 # ============================================================================
-PREV_MODEL_HOME_DIR="$HOME_OUTPUT_DIR/stage2/final_model"
-PREV_MODEL_DIR="$SCRATCH_OUTPUT_BASE/stage2/final_model"
-PREV_TRAINING_ARGS_DIR="$SCRATCH_OUTPUT_BASE/stage2/final_model"
+PREV_MODEL_HOME_DIR="$HOME_OUTPUT_DIR/stage3/final_model"
+PREV_MODEL_DIR="$SCRATCH_OUTPUT_BASE/stage3/final_model"
+PREV_TRAINING_ARGS_DIR="$SCRATCH_OUTPUT_BASE/stage3/final_model"
 
 # Copy previous model dir from home to scratch-local
 echo "Copying previous model from $PREV_MODEL_HOME_DIR to $PREV_MODEL_DIR..."
