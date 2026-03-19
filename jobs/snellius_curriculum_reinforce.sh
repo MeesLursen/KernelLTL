@@ -4,6 +4,7 @@
 #SBATCH --error=logs/kernelltl_curriculum_reinforce_%j.err
 #SBATCH --time=18:00:00
 #SBATCH --partition=gpu_h100
+#SBATCH --constraint=scratch-node
 #SBATCH --gpus=4
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=720G
@@ -48,22 +49,38 @@ MIXED_PRECISION="--bf16"
 # Evaluation Batch Size
 EVAL_BATCH_SIZE="81920"
 
+# RL trainer mode: gae or rb
+DEFAULT_RL_TRAINER="gae"
+
+# Shared RL controls
+DEFAULT_RL_CLIP="1.0"
+
+# RB-specific controls
+DEFAULT_RB_BASELINE_MOMENTUM="0.9"
+
+# GAE-specific controls
+DEFAULT_GAE_GAMMA="0.99"
+DEFAULT_GAE_LAMBDA="0.95"
+DEFAULT_CRITIC_LOSS_COEF="0.5"
+DEFAULT_CRITIC_HIDDEN_DIM="256"
+DEFAULT_CRITIC_WEIGHT_DECAY="0.0"
+
 # ============================================================================
 # STAGE CONFIGURATION
 # ============================================================================
 # Define your curriculum stages here
-# Format: "STAGE_NAME|TRAIN_DIR|EVAL_DIR|EPOCHS|LEARNING_RATE|BATCH_SIZE"
+# Format: "STAGE_NAME|TRAIN_DIR|EVAL_DIR|EPOCHS|LEARNING_RATE|BATCH_SIZE|WARMUP|RL_TRAINER"
 
 # ============================================================================
 
 STAGE_CONFIGS=(
-    "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:50:5e-4:64:1000:1.0:0.9:1.0"
-    "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:100:5e-4:64:1500:1.0:0.9:1.0"
+    "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:50:5e-4:64:1000:gae"
+    "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:100:5e-4:64:1500:gae"
    
 )   
-    # "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts//datasets/stage2/eval:200:5e-4:64:500:1.0:0.9:1.0"
-    # "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:300:5e-4:64:500:1.0:0.9:1.0"
-    # "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:400:5e-4:64:500:1.0:0.9:1.0" 
+    # "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts//datasets/stage2/eval:200:5e-4:64:500:gae"
+    # "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:300:5e-4:64:500:gae"
+    # "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:400:5e-4:64:500:gae" 
 
 
 # ============================================================================
@@ -103,6 +120,23 @@ export PYTHONPATH="$PROJECT_DIR:$PYTHONPATH"
 NUM_GPUS=$(nvidia-smi -L | wc -l)
 echo "Number of GPUs: $NUM_GPUS"
 
+if [ -z "$TMPDIR" ]; then
+    echo "TMPDIR is not set. scratch-node is required for this job."
+    exit 1
+fi
+
+case "$TMPDIR" in
+    /scratch-node/*)
+        ;;
+    *)
+        echo "TMPDIR is not on /scratch-node ($TMPDIR). This job requires node-local scratch."
+        exit 1
+        ;;
+esac
+
+SCRATCH_ROOT="$TMPDIR/KernelLTL"
+mkdir -p "$SCRATCH_ROOT"
+
 # ============================================================================
 # RUN CURRICULUM STAGES
 # ============================================================================
@@ -113,12 +147,14 @@ DEBUG_OPTION="underflow_overflow"
 
 for i in "${!STAGE_CONFIGS[@]}"; do
     # Parse stage configuration
-    IFS=':' read -r STAGE_NAME TRAIN_DIR EVAL_DIR EPOCHS LR BATCH_SIZE WARMUP RL_WEIGHT BL_MOMENTUM RL_CLIP <<< "${STAGE_CONFIGS[$i]}"
+    IFS=':' read -r STAGE_NAME TRAIN_DIR EVAL_DIR EPOCHS LR BATCH_SIZE WARMUP STAGE_RL_TRAINER <<< "${STAGE_CONFIGS[$i]}"
     
     # Use defaults if not specified
     LR=${LR:-$DEFAULT_LEARNING_RATE}
     BATCH_SIZE=${BATCH_SIZE:-$DEFAULT_BATCH_SIZE}
-    
+    WARMUP=${WARMUP:-$DEFAULT_WARMUP_STEPS}
+    STAGE_RL_TRAINER=${STAGE_RL_TRAINER:-$DEFAULT_RL_TRAINER}
+
     STAGE_OUTPUT_DIR="$BASE_OUTPUT_DIR/$STAGE_NAME"
     STAGE_MODEL_SAVE_DIR="$STAGE_OUTPUT_DIR/final_model"
     
@@ -130,13 +166,14 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     echo "  Epochs: $EPOCHS"
     echo "  Learning rate: $LR"
     echo "  Batch size: $BATCH_SIZE"
+    echo "  RL trainer: $STAGE_RL_TRAINER"
     echo "=============================================="
     
     mkdir -p "$STAGE_OUTPUT_DIR"
     mkdir -p "$STAGE_MODEL_SAVE_DIR"
 
-    SCRATCH_TRAIN_DIR="/scratch-shared/$USER/KernelLTL/datasets/$STAGE_NAME/train"
-    SCRATCH_EVAL_DIR="/scratch-shared/$USER/KernelLTL/datasets/$STAGE_NAME/eval"
+    SCRATCH_TRAIN_DIR="$SCRATCH_ROOT/datasets/$STAGE_NAME/train"
+    SCRATCH_EVAL_DIR="$SCRATCH_ROOT/datasets/$STAGE_NAME/eval"
 
     echo ""
     echo "=============================================="
@@ -145,8 +182,8 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     echo "  To:   $SCRATCH_TRAIN_DIR" and "$SCRATCH_EVAL_DIR"
     echo "=============================================="
 
-    mkdir -p $SCRATCH_TRAIN_DIR
-    mkdir -p $SCRATCH_EVAL_DIR
+    mkdir -p "$SCRATCH_TRAIN_DIR"
+    mkdir -p "$SCRATCH_EVAL_DIR"
 
     cp -r "$TRAIN_DIR/." "$SCRATCH_TRAIN_DIR/"
     cp -r "$EVAL_DIR/." "$SCRATCH_EVAL_DIR/"
@@ -163,7 +200,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--learning-rate" "$LR"
         "--per-device-train-batch-size" "$BATCH_SIZE"
         "--per-device-eval-batch-size" "$BATCH_SIZE"
-        "--warmup-steps" "$DEFAULT_WARMUP_STEPS"
+        "--warmup-steps" "$WARMUP"
         "--logging-steps" 0.02
         "--eval-steps" 0.02
         "--save-steps" 0.2
@@ -171,10 +208,24 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--dataloader-pin-memory"
         $MIXED_PRECISION
         "--semantic-eval-batch-size" "$EVAL_BATCH_SIZE"
-        "--reinforce-weight" "$RL_WEIGHT"
-        "--reinforce-baseline-momentum" "$BL_MOMENTUM"
-        "--reinforce-reward-clip" "$RL_CLIP"
+        "--rl-trainer" "$STAGE_RL_TRAINER"
+        "--reinforce-reward-clip" "$DEFAULT_RL_CLIP"
     )
+
+    if [ "$STAGE_RL_TRAINER" = "rb" ]; then
+        CMD_ARGS+=("--reinforce-baseline-momentum" "$DEFAULT_RB_BASELINE_MOMENTUM")
+    elif [ "$STAGE_RL_TRAINER" = "gae" ]; then
+        CMD_ARGS+=(
+            "--gae-gamma" "$DEFAULT_GAE_GAMMA"
+            "--gae-lambda" "$DEFAULT_GAE_LAMBDA"
+            "--critic-loss-coef" "$DEFAULT_CRITIC_LOSS_COEF"
+            "--critic-hidden-dim" "$DEFAULT_CRITIC_HIDDEN_DIM"
+            "--critic-weight-decay" "$DEFAULT_CRITIC_WEIGHT_DECAY"
+        )
+    else
+        echo "Unknown RL trainer '$STAGE_RL_TRAINER' for $STAGE_NAME. Expected 'rb' or 'gae'."
+        exit 1
+    fi
 
     # Set debugging options
     if [ -n "$DEBUG_OPTION" ]; then
