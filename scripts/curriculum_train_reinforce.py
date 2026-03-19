@@ -10,14 +10,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import torch
 from transformers import EarlyStoppingCallback, TrainingArguments
 from transformers.trainer import TRAINING_ARGS_NAME
 
 from config_class import LTLConfig
-from reinforce_trainer_rb import REINFORCETrainerRB
+from reinforce_trainer import REINFORCETrainerRB, REINFORCETrainerGAE
 from dataset_class import LTLDataset
 from kernel_class import LTLKernel
 from model_class import LTLModel
@@ -98,11 +98,22 @@ def parse_args() -> argparse.Namespace:
     callback_group.add_argument("--semantic-eval-batch-size", type=_positive_int, default=10240)
     callback_group.add_argument("--semantic-time-index", type=int, default=0)
 
-    # RL Trainera controls
-    callback_group = parser.add_argument_group("RL Trainer controls")
-    callback_group.add_argument("--reinforce-weight", type=float, default=0.3)
-    callback_group.add_argument("--reinforce-baseline-momentum", type=float, default=0.9)
-    callback_group.add_argument("--reinforce-reward-clip", type=float, default=1.0)
+    # RL trainer controls
+    rl_group = parser.add_argument_group("RL trainer controls")
+    rl_group.add_argument(
+        "--rl-trainer",
+        choices=["rb", "gae"],
+        default="gae",
+        help="RL trainer variant: rb=running baseline REINFORCE, gae=actor-critic with GAE",
+    )
+    rl_group.add_argument("--reinforce-baseline-momentum", type=float, default=0.9)
+    rl_group.add_argument("--reinforce-reward-clip", type=float, default=1.0)
+    rl_group.add_argument("--gae-gamma", type=float, default=0.99)
+    rl_group.add_argument("--gae-lambda", type=float, default=0.95)
+    rl_group.add_argument("--critic-loss-coef", type=float, default=0.5)
+    rl_group.add_argument("--critic-lr", type=float, default=None)
+    rl_group.add_argument("--critic-hidden-dim", type=_positive_int, default=256)
+    rl_group.add_argument("--critic-weight-decay", type=float, default=0.0)
 
     return parser.parse_args()
 
@@ -125,6 +136,15 @@ def _load_dataset(path: str) -> LTLDataset:
 
 def _load_tokenizer(path: str) -> LTLTokenizer:
     return LTLTokenizer.from_pretrained(path)
+
+
+def _resolve_satisfactions_path(args: argparse.Namespace) -> str:
+    default_path = os.path.join(args.train_dataset_dir, "satisfactions.pt")
+    if not os.path.exists(default_path):
+        raise FileNotFoundError(
+            f"Could not find satisfactions.pt in train dataset directory: {default_path}"
+        )
+    return default_path
 
 
 def _load_training_args(args: argparse.Namespace) -> TrainingArguments:
@@ -256,6 +276,7 @@ def main() -> None:
 
     training_args = _load_training_args(args)
     model = _build_model(args, kernel, tokenizer)
+    satisfactions_path = _resolve_satisfactions_path(args)
 
     max_length_hint = getattr(model.config, "n_positions", None)
     if isinstance(max_length_hint, int) and max_length_hint > 0:
@@ -285,21 +306,43 @@ def main() -> None:
             )
         )
 
-    trainer = REINFORCETrainerRB(
-        model=model,
-        args=training_args,
-        data_collator=lambda batch: tokenizer.collate_batch(batch, model.config.n_positions),
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        callbacks=callbacks,
-        processing_class=tokenizer,
-        kernel=kernel,
-        tokenizer=tokenizer,
-        reinforce_weight=args.reinforce_weight,
-        baseline_momentum=args.reinforce_baseline_momentum,
-        reward_clip=args.reinforce_reward_clip,
-    )
 
+    trainer_common_kwargs = {
+        "model": model,
+        "args": training_args,
+        "data_collator": lambda batch: tokenizer.collate_batch(batch, model.config.n_positions),
+        "train_dataset": train_dataset,
+        "eval_dataset": eval_dataset,
+        "callbacks": callbacks,
+        "processing_class": tokenizer,
+        "kernel": kernel,
+        "tokenizer": tokenizer,
+        "reward_clip": args.reinforce_reward_clip,
+        "eval_batch_size": args.semantic_eval_batch_size,
+        "satisfactions_path": satisfactions_path,
+    }
+
+    if args.rl_trainer == "rb":
+        print("Using REINFORCETrainerRB")
+        trainer = REINFORCETrainerRB(
+            **trainer_common_kwargs,
+            baseline_momentum=args.reinforce_baseline_momentum,
+        )
+    else:
+        print("Using REINFORCETrainerGAE")
+        trainer = REINFORCETrainerGAE(
+            **trainer_common_kwargs,
+            gae_gamma=args.gae_gamma,
+            gae_lambda=args.gae_lambda,
+            critic_loss_coef=args.critic_loss_coef,
+            critic_lr=args.critic_lr,
+            critic_hidden_dim=args.critic_hidden_dim,
+            critic_weight_decay=args.critic_weight_decay,
+        )
+
+    if args.model_load_dir is not None and hasattr(trainer, "load_trainer_state"):
+        trainer.load_trainer_state(args.model_load_dir, load_optimizer=False, strict_critic=True)
+    
     train_result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
     print(train_result)
 
