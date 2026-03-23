@@ -148,7 +148,7 @@ for stage_def in "${STAGES[@]}"; do
     SCRATCH_STAGE_BASE="$SCRATCH_BASE/$STAGE_NAME"
     SCRATCH_TRAIN_OUT="$SCRATCH_STAGE_BASE/train"
     SCRATCH_EVAL_OUT="$SCRATCH_STAGE_BASE/eval"
-    if [ -n "$PREV_STAGE_NAME"]; then
+    if [ -n "$PREV_STAGE_NAME" ]; then
         PREV_TRAIN_OUT="$DATASETS_BASE/$PREV_STAGE_NAME/train"
         PREV_EVAL_OUT="$DATASETS_BASE/$PREV_STAGE_NAME/eval"
         SCRATCH_PREV_STAGE_BASE="$SCRATCH_BASE/$PREV_STAGE_NAME"
@@ -170,7 +170,7 @@ for stage_def in "${STAGES[@]}"; do
     echo "  - Eval ratio: $EVAL_RATIO"
     echo "  - Train output: $TRAIN_OUT"
     echo "  - Eval output: $EVAL_OUT"
-    if [ -n "$PREV_STAGE_NAME"]; then
+    if [ -n "$PREV_STAGE_NAME" ]; then
         echo "  - Train base: $PREV_TRAIN_OUT"
         echo "  - Eval base: $PREV_EVAL_OUT"
     fi
@@ -202,12 +202,12 @@ for stage_def in "${STAGES[@]}"; do
         fi
 
         if [ -n "$PREV_STAGE_NAME" ]; then
-            if [ "$ADD_TRAIN_SATISFACTIONS" = "1" ] && [ -d "$PREV_TRAIN_OUT" ] && [! -d "$SCRATCH_PREV_TRAIN_OUT"]; then
+            if [ "$ADD_TRAIN_SATISFACTIONS" = "1" ] && [ -d "$PREV_TRAIN_OUT" ] && [! -d "$SCRATCH_PREV_TRAIN_OUT" ]; then
                 echo "Copying previous train dataset to scratch-local: $PREV_TRAIN_OUT -> $SCRATCH_PREV_TRAIN_OUT"
                 mkdir -p "$SCRATCH_PREV_TRAIN_OUT"
                 rsync -a --delete "$PREV_TRAIN_OUT/" "$SCRATCH_PREV_TRAIN_OUT/"
             fi
-            if [ "$ADD_EVAL_SATISFACTIONS" = "1" ] && [ -d "$PREV_EVAL_OUT" ] && [! -d "$SCRATCH_PREV_EVAL_OUT"]; then
+            if [ "$ADD_EVAL_SATISFACTIONS" = "1" ] && [ -d "$PREV_EVAL_OUT" ] && [! -d "$SCRATCH_PREV_EVAL_OUT" ]; then
                 echo "Copying previous eval dataset to scratch-local: $PREV_EVAL_OUT -> $SCRATCH_PREV_EVAL_OUT"
                 mkdir -p "$SCRATCH_PREV_EVAL_OUT"
                 rsync -a --delete "$PREV_EVAL_OUT/" "$SCRATCH_PREV_EVAL_OUT/"
