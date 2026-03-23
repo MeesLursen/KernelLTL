@@ -35,9 +35,9 @@ class LTLDataset(Dataset):
 
     def _reset_storage(self):
         self.formulas: list[Formula] = []
-        self.embeddings: list[torch.Tensor] = []
+        self.embeddings: torch.Tensor | None = None
         self.formula_strs: list[str] | None = [] if self.store_formula_str else None
-        self.satisfactions: list[torch.Tensor] | None = [] if self.store_satisfaction else None
+        self.satisfactions: torch.Tensor | None = None
         self.metadata: dict[str, any] = {"store_formula_str": self.store_formula_str,
                                          "store_satisfaction": self.store_satisfaction,
                                          "satisfaction_time_index": self.satisfaction_time_index,
@@ -50,7 +50,11 @@ class LTLDataset(Dataset):
                       embedding: torch.Tensor,
                       satisfaction: torch.Tensor | None):
         self.formulas.append(formula)
-        self.embeddings.append(embedding.to(dtype=torch.float32, device='cpu'))
+        emb = embedding.to(dtype=torch.float32, device='cpu').unsqueeze(0)
+        if self.embeddings is None:
+            self.embeddings = emb
+        else:
+            self.embeddings = torch.cat([self.embeddings, emb], dim=0)
 
         if self.store_formula_str and self.formula_strs is not None:
             self.formula_strs.append(str(formula))
@@ -58,9 +62,11 @@ class LTLDataset(Dataset):
         if self.store_satisfaction:
             if satisfaction is None:
                 raise ValueError("Satisfaction vector is required when store_satisfaction=True")
+            sats = satisfaction.to(dtype=torch.bool, device='cpu').unsqueeze(0)
             if self.satisfactions is None:
-                self.satisfactions = []
-            self.satisfactions.append(satisfaction.to(dtype=torch.bool, device='cpu'))
+                self.satisfactions = sats
+            else:
+                self.satisfactions = torch.cat([self.satisfactions, sats], dim=0)
 
 
 
@@ -399,7 +405,7 @@ class LTLDataset(Dataset):
     def __getitem__(self, idx):
         item = {
             "formula": self.formulas[idx],
-            "embedding": self.embeddings[idx],
+            "embedding": self.embeddings[idx] if self.embeddings is not None else None,
             "formula_id": idx,
         }
 
@@ -413,14 +419,14 @@ class LTLDataset(Dataset):
 
     
     
-    def _delitem(self,idx):
+    def _delitem(self, idx):
         del self.formulas[idx]
-        del self.embedding[idx]
-
+        if self.embeddings is not None:
+            self.embeddings = torch.cat([self.embeddings[:idx], self.embeddings[idx+1:]], dim=0)
         if self.store_formula_str and self.formula_strs is not None:
             del self.formula_strs[idx]
         if self.store_satisfaction and self.satisfactions is not None:
-            del self.satisfactions[idx]
+            self.satisfactions = torch.cat([self.satisfactions[:idx], self.satisfactions[idx+1:]], dim=0)
 
 
     # ----------- Persistence -----------
@@ -428,7 +434,7 @@ class LTLDataset(Dataset):
         os.makedirs(dirpath, exist_ok=True)
 
         num_examples = len(self.formulas)
-        embedding_dim = self.embeddings[0].numel() if self.embeddings else 0
+        embedding_dim = self.embeddings.shape[1] if self.embeddings is not None and self.embeddings.ndim > 1 else 0
 
         metadata: dict[str, Any] = {
             "store_formula_str": self.store_formula_str,
@@ -437,7 +443,7 @@ class LTLDataset(Dataset):
             "satisfaction_time_index": self.satisfaction_time_index,
             "size": num_examples,
             "embedding_dim": embedding_dim,
-            "has_satisfactions": self.store_satisfaction and self.satisfactions is not None and len(self.satisfactions) == num_examples,
+            "has_satisfactions": self.store_satisfaction and self.satisfactions is not None and self.satisfactions.shape[0] == num_examples,
             "extra_metadata": self.metadata,
         }
 
@@ -450,14 +456,14 @@ class LTLDataset(Dataset):
             for formula in self.formulas:
                 fp.write(str(formula) + "\n")
 
-        if num_examples > 0:
-            embeddings_tensor = torch.stack(self.embeddings, dim=0).to(dtype=torch.float32, device="cpu")
+        if self.embeddings is not None and num_examples > 0:
+            embeddings_tensor = self.embeddings.to(dtype=torch.float32, device="cpu")
         else:
             embeddings_tensor = torch.empty((0, embedding_dim), dtype=torch.float32)
         torch.save(embeddings_tensor, embeddings_path)
 
         if metadata["has_satisfactions"] and self.satisfactions is not None:
-            sats_tensor = torch.stack(self.satisfactions, dim=0).to(dtype=torch.bool, device="cpu")
+            sats_tensor = self.satisfactions.to(dtype=torch.bool, device="cpu")
             torch.save(sats_tensor, satisfactions_path)
 
         with open(metadata_path, "w", encoding="utf-8") as fp:
@@ -493,15 +499,18 @@ class LTLDataset(Dataset):
                         formulas.append(str_to_formula(text))
         dataset.formulas = formulas
 
-        embeddings_tensor = torch.load(embeddings_path, map_location="cpu")
-        dataset.embeddings = [embeddings_tensor[i].clone().detach() for i in range(embeddings_tensor.size(0))]
+        if os.path.exists(embeddings_path):
+            dataset.embeddings = torch.load(embeddings_path, map_location="cpu")
+        else:
+            dataset.embeddings = None
 
         if dataset.store_formula_str and dataset.formula_strs is not None:
             dataset.formula_strs = [str(f) for f in formulas]
 
         if metadata.get("has_satisfactions") and os.path.exists(satisfactions_path):
-            sats_tensor = torch.load(satisfactions_path, map_location="cpu")
-            dataset.satisfactions = [sats_tensor[i].clone().detach() for i in range(sats_tensor.size(0))]
+            dataset.satisfactions = torch.load(satisfactions_path, map_location="cpu")
+        else:
+            dataset.satisfactions = None
 
         dataset.metadata = metadata.get("extra_metadata", {})
         return dataset
