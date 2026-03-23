@@ -574,13 +574,13 @@ class LTLDataset(Dataset):
                 if text:
                     formulas.append(str_to_formula(text))
 
-        prev_sats = None
         prev_len = 0
         if prev_dirpath is not None:
-            prev_sats_path = os.path.join(prev_dirpath, "satisfactions.pt")
-            if os.path.exists(prev_sats_path):
-                prev_sats = torch.load(prev_sats_path, map_location="cpu")
-                prev_len = prev_sats.shape[0]
+            prev_metadata_path = os.path.join(prev_dirpath, "metadata.json")
+            if os.path.exists(prev_metadata_path):
+                with open(metadata_path, "r", encoding="utf-8") as fp:
+                    prev_metadata = json.load(fp)
+                prev_len = prev_metadata.get("size", 0)
                 if prev_len == 0:
                     raise ArithmeticError(f"The loaded satisfactions are not of length {prev_len}. Please inspect the datasets manually.")
             else:
@@ -633,6 +633,13 @@ class LTLDataset(Dataset):
                 new_sats_tensor = torch.empty((0,), dtype=torch.bool)
                 print("No new sats added. This is an indicator something is wrong.")
             # Concatenate previous and new satisfactions in order
+            prev_sats = None
+            if prev_dirpath is not None:
+                prev_sats_path = os.path.join(prev_dirpath, "satisfactions.pt")
+                if os.path.exists(prev_sats_path):
+                    prev_sats = torch.load(prev_sats_path, map_location="cpu")
+                else:
+                    raise FileNotFoundError(f"Previous satisfactions.pt not found in {prev_dirpath}")
             if prev_sats is not None:
                 sats_tensor = torch.cat([prev_sats, new_sats_tensor], dim=0)
             else:
