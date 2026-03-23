@@ -36,6 +36,12 @@ KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
 DATASETS_BASE="$PROJECT_DIR/artifacts/datasets"
 SCRATCH_BASE="/scratch-local/$USER/KernelLTL/datasets"
 
+if [ -d "$SCRATCH_BASE" ]; then
+    rm -rf "$SCRATCH_BASE"
+    echo "Detected SCRATCH_BASE directory already on /scratch-local. Removing it for posterity's sake."
+fi
+
+
 # Job mode:
 # - "build": sample formulas and create/update stage datasets
 # - "add_satisfactions": compute satisfactions for existing stage datasets only
