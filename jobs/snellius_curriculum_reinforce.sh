@@ -35,8 +35,10 @@ VENV_DIR="$PROJECT_DIR/venv"
 KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
 TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 
-# Base output directory (stages will be saved as models/stage1, models/stage2, etc.)
-BASE_OUTPUT_DIR="$PROJECT_DIR/artifacts/models/RE"
+# Shared model root with independent RE/CE branches
+BASE_MODELS_ROOT="$PROJECT_DIR/artifacts/models"
+BASE_RE_OUTPUT_DIR="$BASE_MODELS_ROOT/RE"
+BASE_CE_OUTPUT_DIR="$BASE_MODELS_ROOT/CE"
 
 # Training defaults (can be overridden per stage)
 DEFAULT_LEARNING_RATE=5e-4
@@ -59,8 +61,8 @@ DEFAULT_RL_CLIP="1.0"
 DEFAULT_RB_BASELINE_MOMENTUM="0.9"
 
 # GAE-specific controls
-DEFAULT_GAE_GAMMA="0.99"
-DEFAULT_GAE_LAMBDA="0.95"
+DEFAULT_GAE_GAMMA="1.0"
+DEFAULT_GAE_LAMBDA="0.0"
 DEFAULT_CRITIC_LOSS_COEF="0.5"
 DEFAULT_CRITIC_HIDDEN_DIM="256"
 DEFAULT_CRITIC_WEIGHT_DECAY="0.0"
@@ -136,6 +138,8 @@ esac
 
 SCRATCH_ROOT="$TMPDIR/KernelLTL"
 mkdir -p "$SCRATCH_ROOT"
+SCRATCH_RE_OUTPUT_ROOT="$SCRATCH_ROOT/models/RE"
+mkdir -p "$SCRATCH_RE_OUTPUT_ROOT"
 
 # ============================================================================
 # RUN CURRICULUM STAGES
@@ -155,8 +159,11 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     WARMUP=${WARMUP:-$DEFAULT_WARMUP_STEPS}
     STAGE_RL_TRAINER=${STAGE_RL_TRAINER:-$DEFAULT_RL_TRAINER}
 
-    STAGE_OUTPUT_DIR="$BASE_OUTPUT_DIR/$STAGE_NAME"
+    STAGE_OUTPUT_DIR="$BASE_RE_OUTPUT_DIR/$STAGE_NAME"
     STAGE_MODEL_SAVE_DIR="$STAGE_OUTPUT_DIR/final_model"
+    SCRATCH_STAGE_OUTPUT_DIR="$SCRATCH_RE_OUTPUT_ROOT/$STAGE_NAME"
+    SCRATCH_STAGE_MODEL_SAVE_DIR="$SCRATCH_STAGE_OUTPUT_DIR/final_model"
+    CE_REFERENCE_MODEL_DIR="$BASE_CE_OUTPUT_DIR/$STAGE_NAME/final_model"
     
     echo ""
     echo "=============================================="
@@ -167,10 +174,26 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     echo "  Learning rate: $LR"
     echo "  Batch size: $BATCH_SIZE"
     echo "  RL trainer: $STAGE_RL_TRAINER"
+    echo "  CE reference model: $CE_REFERENCE_MODEL_DIR"
+    echo "  RE output (scratch): $SCRATCH_STAGE_OUTPUT_DIR"
+    echo "  RE output (project): $STAGE_OUTPUT_DIR"
     echo "=============================================="
     
     mkdir -p "$STAGE_OUTPUT_DIR"
     mkdir -p "$STAGE_MODEL_SAVE_DIR"
+    mkdir -p "$SCRATCH_STAGE_OUTPUT_DIR"
+    mkdir -p "$SCRATCH_STAGE_MODEL_SAVE_DIR"
+
+    if [ -d "$STAGE_OUTPUT_DIR" ]; then
+        echo "Syncing existing stage output from project to scratch (resume support)..."
+        rsync -a "$STAGE_OUTPUT_DIR/" "$SCRATCH_STAGE_OUTPUT_DIR/"
+    fi
+
+    if [ ! -d "$CE_REFERENCE_MODEL_DIR" ]; then
+        echo "Missing CE reference model directory for $STAGE_NAME: $CE_REFERENCE_MODEL_DIR"
+        echo "Expected CE and RE to share root '$BASE_MODELS_ROOT' but use different subdirectories (CE vs RE)."
+        exit 1
+    fi
 
     SCRATCH_TRAIN_DIR="$SCRATCH_ROOT/datasets/$STAGE_NAME/train"
     SCRATCH_EVAL_DIR="$SCRATCH_ROOT/datasets/$STAGE_NAME/eval"
@@ -194,8 +217,8 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--tokenizer-dir" "$TOKENIZER_DIR"
         "--train-dataset-dir" "$SCRATCH_TRAIN_DIR"
         "--eval-dataset-dir" "$SCRATCH_EVAL_DIR"
-        "--output-dir" "$STAGE_OUTPUT_DIR"
-        "--model-save-dir" "$STAGE_MODEL_SAVE_DIR"
+        "--output-dir" "$SCRATCH_STAGE_OUTPUT_DIR"
+        "--model-save-dir" "$SCRATCH_STAGE_MODEL_SAVE_DIR"
         "--num-train-epochs" "$EPOCHS"
         "--learning-rate" "$LR"
         "--per-device-train-batch-size" "$BATCH_SIZE"
@@ -210,6 +233,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--semantic-eval-batch-size" "$EVAL_BATCH_SIZE"
         "--rl-trainer" "$STAGE_RL_TRAINER"
         "--reinforce-reward-clip" "$DEFAULT_RL_CLIP"
+        "--ce-reference-model-dir" "$CE_REFERENCE_MODEL_DIR"
     )
 
     if [ "$STAGE_RL_TRAINER" = "rb" ]; then
@@ -258,17 +282,21 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     
     STAGE_END=$(date +%s)
     STAGE_DURATION=$((STAGE_END - STAGE_START))
+
+    echo "Syncing stage outputs from scratch to project..."
+    mkdir -p "$STAGE_OUTPUT_DIR"
+    rsync -a --delete "$SCRATCH_STAGE_OUTPUT_DIR/" "$STAGE_OUTPUT_DIR/"
     
     echo "$STAGE_NAME completed in $((STAGE_DURATION / 3600))h $(((STAGE_DURATION % 3600) / 60))m $((STAGE_DURATION % 60))s"
     
     # Set paths for next stage
-    PREV_MODEL_DIR="$STAGE_MODEL_SAVE_DIR"
-    PREV_TRAINING_ARGS_DIR="$STAGE_MODEL_SAVE_DIR"
+    PREV_MODEL_DIR="$SCRATCH_STAGE_MODEL_SAVE_DIR"
+    PREV_TRAINING_ARGS_DIR="$SCRATCH_STAGE_MODEL_SAVE_DIR"
 done
 
 echo ""
 echo "=============================================="
 echo "All curriculum stages completed!"
 echo "End time: $(date)"
-echo "Final model: $PREV_MODEL_DIR"
+echo "Final model (project): $STAGE_MODEL_SAVE_DIR"
 echo "=============================================="
