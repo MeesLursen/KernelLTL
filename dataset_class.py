@@ -581,6 +581,8 @@ class LTLDataset(Dataset):
             if os.path.exists(prev_sats_path):
                 prev_sats = torch.load(prev_sats_path, map_location="cpu")
                 prev_len = prev_sats.shape[0]
+                if prev_len == 0:
+                    raise ArithmeticError(f"The loaded satisfactions are not of length {prev_len}. Please inspect the datasets manually.")
             else:
                 raise FileNotFoundError(f"Previous satisfactions.pt not found in {prev_dirpath}")
 

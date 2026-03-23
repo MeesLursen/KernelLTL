@@ -172,7 +172,7 @@ for stage_def in "${STAGES[@]}"; do
     echo "  - Eval output: $EVAL_OUT"
     if [ -n "$PREV_STAGE_NAME"]; then
         echo "  - Train base: $PREV_TRAIN_OUT"
-        echo "  - Eval base: $PREV_EVAL_OUT"/eval
+        echo "  - Eval base: $PREV_EVAL_OUT"
     fi
     echo "=============================================="
     
@@ -220,13 +220,13 @@ for stage_def in "${STAGES[@]}"; do
         CMD=(torchrun "${TORCHRUN_ARGS[@]}" scripts/prepare_datasets.py --kernel-dir "$KERNEL_DIR" --add-satisfactions)
         if [ "$ADD_TRAIN_SATISFACTIONS" = "1" ]; then
             CMD+=(--train-out "$SCRATCH_TRAIN_OUT" --train-satisfaction-batch-size "$TRAIN_SATISFACTION_BATCH_SIZE" --train-satisfaction-time-index "$TRAIN_SATISFACTION_TIME_INDEX")
-            if [ -n "$SCRATCH_PREV_TRAIN_OUT" ]; then
+            if [ -d "$SCRATCH_PREV_TRAIN_OUT" ]; then
                 CMD+=(--base-train-dir "$SCRATCH_PREV_TRAIN_OUT")
             fi
         fi
         if [ "$ADD_EVAL_SATISFACTIONS" = "1" ]; then
             CMD+=(--eval-out "$SCRATCH_EVAL_OUT" --eval-satisfaction-batch-size "$EVAL_SATISFACTION_BATCH_SIZE" --eval-satisfaction-time-index "$EVAL_SATISFACTION_TIME_INDEX")
-            if [ -n "$SCRATCH_PREV_EVAL_OUT" ]; then
+            if [ -d "$SCRATCH_PREV_EVAL_OUT" ]; then
                 CMD+=(--base-eval-dir "$SCRATCH_PREV_EVAL_OUT")
             fi
         fi
