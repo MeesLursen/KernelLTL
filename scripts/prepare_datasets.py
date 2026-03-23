@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import argparse
 import os
+import torch
 from typing import Callable
 
 from dataset_class import LTLDataset
 from kernel_class import LTLKernel
+
+
 
 
 def _positive_int(value: str) -> int:
@@ -116,10 +119,15 @@ def _build_dataset(
 
 def main() -> None:
     args = parse_args()
+
+    # Respect DDP local rank if applicable
+    local_rank = int(os.environ.get("LOCAL_RANK", -1))
+    if local_rank != -1 and torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+
     kernel = LTLKernel.load(args.kernel_dir)
 
     if args.add_satisfactions:
-        import os
         rank = int(os.environ.get("RANK", 0))
         world_size = int(os.environ.get("WORLD_SIZE", 1))
         # Try to import torch.distributed and set up barrier if available
