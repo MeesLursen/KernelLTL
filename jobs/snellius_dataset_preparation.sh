@@ -61,22 +61,22 @@ ADD_EVAL_SATISFACTIONS=0
 # - eval_ratio: fraction for evaluation set (using disjoint split)
 
 STAGES=(
-    "stage2:200000:3:3:0.1 0.5:0.025"
     "stage3:400000:4:4:0.01 0.5:0.025"
     "stage4:800000:5:5:0.01 0.4:0.025"
 )
 #    "stage1:100000:2:2:0.2 0.5:0.025"
+#    "stage2:200000:3:3:0.1 0.5:0.025"
 
 # Common options
 TRAIN_DEDUPE=""
 TRAIN_STORE_FORMULA_STR=""
 TRAIN_STORE_SATISFACTION=""  # Add --train-store-satisfaction if needed
-TRAIN_SATISFACTION_BATCH_SIZE=81920
+TRAIN_SATISFACTION_BATCH_SIZE=163840
 TRAIN_SATISFACTION_TIME_INDEX=0
 EVAL_DEDUPE="--eval-dedupe"
 EVAL_STORE_FORMULA_STR="--eval-store-formula-str"
 EVAL_STORE_SATISFACTION="--eval-store-satisfaction"  # Add --eval-store-satisfaction if needed
-EVAL_SATISFACTION_BATCH_SIZE=81920
+EVAL_SATISFACTION_BATCH_SIZE=163840
 EVAL_SATISFACTION_TIME_INDEX=0
 
 
@@ -143,7 +143,7 @@ echo "=============================================="
 # Track previous stage output for incremental satisfaction computation
 # These are updated at the end of each stage
 # Start with empty for the first stage
-PREV_STAGE_NAME="stage1"
+PREV_STAGE_NAME="stage2"
 
 for stage_def in "${STAGES[@]}"; do
     # Parse stage definition
@@ -208,12 +208,12 @@ for stage_def in "${STAGES[@]}"; do
         fi
 
         if [ -n "$PREV_STAGE_NAME" ]; then
-            if [ "$ADD_TRAIN_SATISFACTIONS" = "1" ] && [ -d "$PREV_TRAIN_OUT" ] && [! -d "$SCRATCH_PREV_TRAIN_OUT" ]; then
+            if [ "$ADD_TRAIN_SATISFACTIONS" = "1" ] && [ -d "$PREV_TRAIN_OUT" ] && [ ! -d "$SCRATCH_PREV_TRAIN_OUT" ]; then
                 echo "Copying previous train dataset to scratch-local: $PREV_TRAIN_OUT -> $SCRATCH_PREV_TRAIN_OUT"
                 mkdir -p "$SCRATCH_PREV_TRAIN_OUT"
                 rsync -a --delete "$PREV_TRAIN_OUT/" "$SCRATCH_PREV_TRAIN_OUT/"
             fi
-            if [ "$ADD_EVAL_SATISFACTIONS" = "1" ] && [ -d "$PREV_EVAL_OUT" ] && [! -d "$SCRATCH_PREV_EVAL_OUT" ]; then
+            if [ "$ADD_EVAL_SATISFACTIONS" = "1" ] && [ -d "$PREV_EVAL_OUT" ] && [ ! -d "$SCRATCH_PREV_EVAL_OUT" ]; then
                 echo "Copying previous eval dataset to scratch-local: $PREV_EVAL_OUT -> $SCRATCH_PREV_EVAL_OUT"
                 mkdir -p "$SCRATCH_PREV_EVAL_OUT"
                 rsync -a --delete "$PREV_EVAL_OUT/" "$SCRATCH_PREV_EVAL_OUT/"
