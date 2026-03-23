@@ -34,6 +34,7 @@ KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
 
 # Base output directory for datasets
 DATASETS_BASE="$PROJECT_DIR/artifacts/datasets"
+SCRATCH_BASE="/scratch-local/$USER/KernelLTL/datasets"
 
 # Job mode:
 # - "build": sample formulas and create/update stage datasets
@@ -133,8 +134,10 @@ else
 fi
 echo "=============================================="
 
-PREV_TRAIN_OUT=""
-PREV_EVAL_OUT=""
+# Track previous stage output for incremental satisfaction computation
+# These are updated at the end of each stage
+# Start with empty for the first stage
+PREV_STAGE_NAME="stage1"
 
 for stage_def in "${STAGES[@]}"; do
     # Parse stage definition
@@ -142,10 +145,17 @@ for stage_def in "${STAGES[@]}"; do
     
     TRAIN_OUT="$DATASETS_BASE/$STAGE_NAME/train"
     EVAL_OUT="$DATASETS_BASE/$STAGE_NAME/eval"
-    SCRATCH_STAGE_BASE="/scratch-local/$USER/KernelLTL/datasets/$STAGE_NAME"
+    SCRATCH_STAGE_BASE="$SCRATCH_BASE/$STAGE_NAME"
     SCRATCH_TRAIN_OUT="$SCRATCH_STAGE_BASE/train"
     SCRATCH_EVAL_OUT="$SCRATCH_STAGE_BASE/eval"
-    
+    if [ -n "$PREV_STAGE_NAME"]; then
+        PREV_TRAIN_OUT="$DATASETS_BASE/$PREV_STAGE_NAME/train"
+        PREV_EVAL_OUT="$DATASETS_BASE/$PREV_STAGE_NAME/eval"
+        SCRATCH_PREV_STAGE_BASE="$SCRATCH_BASE/$PREV_STAGE_NAME"
+        SCRATCH_PREV_TRAIN_OUT="$SCRATCH_PREV_STAGE_BASE/train"
+        SCRATCH_PREV_EVAL_OUT="$SCRATCH_PREV_STAGE_BASE/eval"
+    fi
+
     echo ""
     echo "=============================================="
     if [ "$JOB_MODE" = "add_satisfactions" ]; then
@@ -160,8 +170,10 @@ for stage_def in "${STAGES[@]}"; do
     echo "  - Eval ratio: $EVAL_RATIO"
     echo "  - Train output: $TRAIN_OUT"
     echo "  - Eval output: $EVAL_OUT"
-    echo "  - Train base: $PREV_TRAIN_OUT"
-    echo "  - Eval base: $PREV_EVAL_OUT"
+    if [ -n "$PREV_STAGE_NAME"]; then
+        echo "  - Train base: $PREV_TRAIN_OUT"
+        echo "  - Eval base: $PREV_EVAL_OUT"/eval
+    fi
     echo "=============================================="
     
     if [ "$JOB_MODE" = "add_satisfactions" ]; then
@@ -189,22 +201,44 @@ for stage_def in "${STAGES[@]}"; do
             rsync -a --delete "$EVAL_OUT/" "$SCRATCH_EVAL_OUT/"
         fi
 
+        if [ -n "$PREV_STAGE_NAME" ]; then
+            if [ "$ADD_TRAIN_SATISFACTIONS" = "1" ] && [ -d "$PREV_TRAIN_OUT" ] && [! -d "$SCRATCH_PREV_TRAIN_OUT"]; then
+                echo "Copying previous train dataset to scratch-local: $PREV_TRAIN_OUT -> $SCRATCH_PREV_TRAIN_OUT"
+                mkdir -p "$SCRATCH_PREV_TRAIN_OUT"
+                rsync -a --delete "$PREV_TRAIN_OUT/" "$SCRATCH_PREV_TRAIN_OUT/"
+            fi
+            if [ "$ADD_EVAL_SATISFACTIONS" = "1" ] && [ -d "$PREV_EVAL_OUT" ] && [! -d "$SCRATCH_PREV_EVAL_OUT"]; then
+                echo "Copying previous eval dataset to scratch-local: $PREV_EVAL_OUT -> $SCRATCH_PREV_EVAL_OUT"
+                mkdir -p "$SCRATCH_PREV_EVAL_OUT"
+                rsync -a --delete "$PREV_EVAL_OUT/" "$SCRATCH_PREV_EVAL_OUT/"
+            fi
+        fi
+
         # Always use torchrun with 4 processes (GPUs)
+
         TORCHRUN_ARGS=(--nproc_per_node=4)
         CMD=(torchrun "${TORCHRUN_ARGS[@]}" scripts/prepare_datasets.py --kernel-dir "$KERNEL_DIR" --add-satisfactions)
         if [ "$ADD_TRAIN_SATISFACTIONS" = "1" ]; then
             CMD+=(--train-out "$SCRATCH_TRAIN_OUT" --train-satisfaction-batch-size "$TRAIN_SATISFACTION_BATCH_SIZE" --train-satisfaction-time-index "$TRAIN_SATISFACTION_TIME_INDEX")
+            if [ -n "$SCRATCH_PREV_TRAIN_OUT" ]; then
+                CMD+=(--base-train-dir "$SCRATCH_PREV_TRAIN_OUT")
+            fi
         fi
         if [ "$ADD_EVAL_SATISFACTIONS" = "1" ]; then
             CMD+=(--eval-out "$SCRATCH_EVAL_OUT" --eval-satisfaction-batch-size "$EVAL_SATISFACTION_BATCH_SIZE" --eval-satisfaction-time-index "$EVAL_SATISFACTION_TIME_INDEX")
+            if [ -n "$SCRATCH_PREV_EVAL_OUT" ]; then
+                CMD+=(--base-eval-dir "$SCRATCH_PREV_EVAL_OUT")
+            fi
         fi
         if [ "$ADD_TRAIN_SATISFACTIONS" != "1" ] && [ "$ADD_EVAL_SATISFACTIONS" != "1" ]; then
-            echo "Warning: Both ADD_TRAIN_SATISFACTIONS and ADD_EVAL_SATISFACTIONS are 0; nothing to do for this stage."
+            echo "Warning: Both ADD_TRAIN_SATISFACTIONS and ADD_EVAL_SATISFACTIONS are 0; nothing to do."
             continue
         fi
 
         echo "Running: ${CMD[*]}"
         "${CMD[@]}"
+
+        PREV_STAGE_NAME="$STAGE_NAME"
 
         # Copy results back to main storage
         if [ "$ADD_TRAIN_SATISFACTIONS" = "1" ]; then
@@ -215,9 +249,7 @@ for stage_def in "${STAGES[@]}"; do
             echo "Copying updated eval dataset back to main storage: $SCRATCH_EVAL_OUT -> $EVAL_OUT"
             rsync -a --delete "$SCRATCH_EVAL_OUT/" "$EVAL_OUT/"
         fi
-
-        # Clean up scratch-local for this stage
-        rm -rf "$SCRATCH_STAGE_BASE"
+        
         echo "$STAGE_NAME dataset satisfactions update complete!"
         continue
     else
@@ -245,16 +277,18 @@ for stage_def in "${STAGES[@]}"; do
             $EVAL_DEDUPE
 
         )
-    fi
     
-    echo "Running: ${CMD[*]}"
-    "${CMD[@]}"
-    
-    PREV_TRAIN_OUT="$TRAIN_OUT"
-    PREV_EVAL_OUT="$EVAL_OUT"
+        echo "Running: ${CMD[*]}"
+        "${CMD[@]}"
+        
+        PREV_STAGE_NAME="$STAGE_NAME"
 
-    echo "$STAGE_NAME dataset generation complete!"
+        echo "$STAGE_NAME dataset generation complete!"
+    fi
 done
+
+# Clean up scratch-local 
+rm -rf "$SCRATCH_BASE"
 
 # ============================================================================
 # SUMMARY

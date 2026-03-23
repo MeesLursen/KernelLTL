@@ -149,6 +149,7 @@ def main() -> None:
                 rank=rank,
                 world_size=world_size,
                 barrier_fn=barrier_fn,
+                prev_dirpath=args.base_train_dir,
             )
             if rank == 0:
                 print(f"Updated training dataset at {args.train_out}")
@@ -164,6 +165,7 @@ def main() -> None:
                 rank=rank,
                 world_size=world_size,
                 barrier_fn=barrier_fn,
+                prev_dirpath=args.base_eval_dir,
             )
             if rank == 0:
                 print(f"Updated evaluation dataset at {args.eval_out}")

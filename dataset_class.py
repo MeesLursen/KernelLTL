@@ -525,6 +525,7 @@ class LTLDataset(Dataset):
         rank: int = 0,
         world_size: int = 1,
         barrier_fn=None,
+        prev_dirpath: str | None = None,
     ) -> None:
         """
         Compute satisfactions from formulas in a saved dataset directory and write
@@ -540,6 +541,7 @@ class LTLDataset(Dataset):
             rank: DDP rank (default 0 for single process).
             world_size: DDP world size (default 1 for single process).
             barrier_fn: Optional callable for DDP barrier (e.g., torch.distributed.barrier).
+            prev_dirpath: Path to the previous stage LTLDataset directory.
         """
         metadata_path = os.path.join(dirpath, "metadata.json")
         formulas_path = os.path.join(dirpath, "formulas.jsonl")
@@ -564,6 +566,7 @@ class LTLDataset(Dataset):
             else metadata.get("satisfaction_time_index", 0)
         )
 
+
         formulas: list[Formula] = []
         with open(formulas_path, "r", encoding="utf-8") as fp:
             for line in fp:
@@ -571,12 +574,24 @@ class LTLDataset(Dataset):
                 if text:
                     formulas.append(str_to_formula(text))
 
-        # Split work by rank
+        prev_sats = None
+        prev_len = 0
+        if prev_dirpath is not None:
+            prev_sats_path = os.path.join(prev_dirpath, "satisfactions.pt")
+            if os.path.exists(prev_sats_path):
+                prev_sats = torch.load(prev_sats_path, map_location="cpu")
+                prev_len = prev_sats.shape[0]
+            else:
+                raise FileNotFoundError(f"Previous satisfactions.pt not found in {prev_dirpath}")
+
+        # Only compute new satisfactions for formulas after prev_len
         total = len(formulas)
-        chunk_size = (total + world_size - 1) // world_size
-        start = rank * chunk_size
-        end = min(start + chunk_size, total)
-        formulas_chunk = formulas[start:end]
+        new_start = prev_len
+        new_total = total - prev_len
+        chunk_size = (new_total + world_size - 1) // world_size
+        start = new_start + rank * chunk_size
+        end = min(new_start + (rank + 1) * chunk_size, total)
+        formulas_chunk = formulas[start:end] if start < end else []
 
         satisfactions: list[torch.Tensor] = []
         for phi in formulas_chunk:
@@ -608,9 +623,18 @@ class LTLDataset(Dataset):
                 wait_path = os.path.join(dirpath, f"satisfactions.part{r}.pt")
                 while not os.path.exists(wait_path):
                     time.sleep(1)
-            # Concatenate all parts
+            # Concatenate all parts for new formulas
             all_parts = [torch.load(os.path.join(dirpath, f"satisfactions.part{r}.pt"), map_location="cpu") for r in range(world_size)]
-            sats_tensor = torch.cat(all_parts, dim=0)
+            if all_parts:
+                new_sats_tensor = torch.cat(all_parts, dim=0)
+            else:
+                new_sats_tensor = torch.empty((0,), dtype=torch.bool)
+                print("No new sats added. This is an indicator something is wrong.")
+            # Concatenate previous and new satisfactions in order
+            if prev_sats is not None:
+                sats_tensor = torch.cat([prev_sats, new_sats_tensor], dim=0)
+            else:
+                sats_tensor = new_sats_tensor
             torch.save(sats_tensor, satisfactions_path)
             # Clean up part files
             for r in range(world_size):
