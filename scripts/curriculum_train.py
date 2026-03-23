@@ -10,10 +10,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import torch
-from transformers import EarlyStoppingCallback, Trainer, TrainingArguments
+from transformers import EarlyStoppingCallback, TrainingArguments
 from transformers.trainer import TRAINING_ARGS_NAME
 
 from config_class import LTLConfig
@@ -21,7 +21,8 @@ from dataset_class import LTLDataset
 from kernel_class import LTLKernel
 from model_class import LTLModel
 from tokenizer_pretrained_class import LTLTokenizer
-from training_utils import SemanticEvaluationCallback
+from training_utils import SemanticEvaluationCallback, UnifiedMetricsLoggerCallback
+from ce_trainer import CETrainer
 
 
 def _positive_int(value: str) -> int:
@@ -56,6 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--training-args-load-dir", help="Directory containing a saved training_args.bin to seed TrainingArguments")
     parser.add_argument("--resume-from-checkpoint", help="Checkpoint directory passed to Trainer.train")
     parser.add_argument("--seed", type=int, default=None, help="Random seed passed to transformers.TrainingArguments")
+    parser.add_argument("--stage-name", type=str, default=None, help="Optional stage identifier used in metric logs")
 
     # Config overrides when starting from scratch
     config_group = parser.add_argument_group("Model config overrides (when not loading a checkpoint)")
@@ -149,7 +151,8 @@ def _load_training_args(args: argparse.Namespace) -> TrainingArguments:
             "save_steps": 0.1,
             "save_safetensors": False,
             "load_best_model_at_end": True,
-            "metric_for_best_model": "eval_loss",
+            "metric_for_best_model": "eval_semantic_distance",
+            "greater_is_better": False,
             "remove_unused_columns": False,
             "dataloader_num_workers": 4,
             "dataloader_pin_memory": True,
@@ -253,16 +256,24 @@ def main() -> None:
 
 
     callbacks = []
+    semantic_callback = None
     if not args.disable_semantic_callback and eval_dataset is not None:
-        callbacks.append(
-            SemanticEvaluationCallback(
-                kernel=kernel,
-                tokenizer=tokenizer,
-                eval_dataset=eval_dataset,
-                kernel_eval_batch_size=args.semantic_eval_batch_size,
-                kernel_time_index=args.semantic_time_index,
-            )
+        semantic_callback = SemanticEvaluationCallback(
+            kernel=kernel,
+            tokenizer=tokenizer,
+            eval_dataset=eval_dataset,
+            kernel_eval_batch_size=args.semantic_eval_batch_size,
+            kernel_time_index=args.semantic_time_index,
         )
+        callbacks.append(semantic_callback)
+    metrics_logger = UnifiedMetricsLoggerCallback(
+        output_dir=args.output_dir,
+        stage_name=args.stage_name,
+        trainer_kind="ce",
+    )
+    if semantic_callback is not None:
+        semantic_callback.attach_metrics_logger(metrics_logger)
+    callbacks.append(metrics_logger)    
     if args.early_stopping_patience is not None:
         if args.early_stopping_patience <= 0:
             raise ValueError("--early-stopping-patience must be > 0")
@@ -275,7 +286,7 @@ def main() -> None:
             )
         )
 
-    trainer = Trainer(
+    trainer = CETrainer(
         model=model,
         args=training_args,
         data_collator=lambda batch: tokenizer.collate_batch(batch, model.config.n_positions),
@@ -284,6 +295,7 @@ def main() -> None:
         callbacks=callbacks,
         processing_class=tokenizer,
     )
+    metrics_logger.attach_trainer(trainer)
 
     train_result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
     print(train_result)
