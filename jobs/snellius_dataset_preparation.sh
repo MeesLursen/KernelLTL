@@ -35,6 +35,15 @@ KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
 # Base output directory for datasets
 DATASETS_BASE="$PROJECT_DIR/artifacts/datasets"
 
+# Job mode:
+# - "build": sample formulas and create/update stage datasets
+# - "add_satisfactions": compute satisfactions for existing stage datasets only
+JOB_MODE="add_satisfactions"
+# In add_satisfactions mode, control which datasets to update:
+# Set to "1" to add satisfactions, "0" to skip
+ADD_TRAIN_SATISFACTIONS=1
+ADD_EVAL_SATISFACTIONS=0
+
 # ============================================================================
 # CURRICULUM STAGE DEFINITIONS
 # ============================================================================
@@ -45,7 +54,6 @@ DATASETS_BASE="$PROJECT_DIR/artifacts/datasets"
 # - eval_ratio: fraction for evaluation set (using disjoint split)
 
 STAGES=(
-    "stage0:50000:1:0:0.3 0.6:0.05"
     "stage1:100000:2:2:0.2 0.5:0.025"
     "stage2:200000:3:3:0.1 0.5:0.025"
     "stage3:400000:4:4:0.01 0.5:0.025"
@@ -119,7 +127,11 @@ export PYTHONPATH="$PROJECT_DIR:$PYTHONPATH"
 # ============================================================================
 
 echo "=============================================="
-echo "Generating curriculum datasets..."
+if [ "$JOB_MODE" = "add_satisfactions" ]; then
+    echo "Adding satisfactions to existing curriculum datasets..."
+else
+    echo "Generating curriculum datasets..."
+fi
 echo "=============================================="
 
 PREV_TRAIN_OUT=""
@@ -134,7 +146,11 @@ for stage_def in "${STAGES[@]}"; do
     
     echo ""
     echo "=============================================="
-    echo "Generating dataset for $STAGE_NAME"
+    if [ "$JOB_MODE" = "add_satisfactions" ]; then
+        echo "Adding satisfactions for $STAGE_NAME"
+    else
+        echo "Generating dataset for $STAGE_NAME"
+    fi
     echo "  - Total samples: $K_SAMPLES"
     echo "  - Max depth: $MAX_DEPTH"
     echo "  - Min depth: $MAX_DEPTH" 
@@ -146,30 +162,55 @@ for stage_def in "${STAGES[@]}"; do
     echo "  - Eval base: $PREV_EVAL_OUT"
     echo "=============================================="
     
-    # Create output directories
-    mkdir -p "$TRAIN_OUT"
-    mkdir -p "$EVAL_OUT"
-    
-    # Build command
-    CMD=(
-        python -u scripts/prepare_datasets.py
-        --kernel-dir "$KERNEL_DIR"
-        --base-train-dir "$PREV_TRAIN_OUT"
-        --base-eval-dir "$PREV_EVAL_OUT"
-        --disjoint-split
-        --eval-ratio "$EVAL_RATIO"
-        --train-out "$TRAIN_OUT"
-        --train-k "$K_SAMPLES"
-        --train-p-leaf-range $P_LEAF_RANGE
-        --train-max-depth "$MAX_DEPTH"
-        $TRAIN_STORE_FORMULA_STR
-        $TRAIN_STORE_SATISFACTION
-        --train-satisfaction-batch-size "$TRAIN_SATISFACTION_BATCH_SIZE"
-        --train-satisfaction-time-index "$TRAIN_SATISFACTION_TIME_INDEX"
-        --eval-out "$EVAL_OUT"
-        $EVAL_DEDUPE
+    if [ "$JOB_MODE" = "add_satisfactions" ]; then
+        # --add-satisfactions requires --kernel-dir and at least one of --train-out/--eval-out.
+        # User can now control which datasets to update.
+        if [ "$ADD_TRAIN_SATISFACTIONS" = "1" ] && [ ! -d "$TRAIN_OUT" ]; then
+            echo "Error: Expected existing train dataset at $TRAIN_OUT for add_satisfactions mode."
+            exit 1
+        fi
+        if [ "$ADD_EVAL_SATISFACTIONS" = "1" ] && [ ! -d "$EVAL_OUT" ]; then
+            echo "Error: Expected existing eval dataset at $EVAL_OUT for add_satisfactions mode."
+            exit 1
+        fi
 
-    )
+        CMD=(python -u scripts/prepare_datasets.py --kernel-dir "$KERNEL_DIR" --add-satisfactions)
+        if [ "$ADD_TRAIN_SATISFACTIONS" = "1" ]; then
+            CMD+=(--train-out "$TRAIN_OUT" --train-satisfaction-batch-size "$TRAIN_SATISFACTION_BATCH_SIZE" --train-satisfaction-time-index "$TRAIN_SATISFACTION_TIME_INDEX")
+        fi
+        if [ "$ADD_EVAL_SATISFACTIONS" = "1" ]; then
+            CMD+=(--eval-out "$EVAL_OUT" --eval-satisfaction-batch-size "$EVAL_SATISFACTION_BATCH_SIZE" --eval-satisfaction-time-index "$EVAL_SATISFACTION_TIME_INDEX")
+        fi
+        if [ "$ADD_TRAIN_SATISFACTIONS" != "1" ] && [ "$ADD_EVAL_SATISFACTIONS" != "1" ]; then
+            echo "Warning: Both ADD_TRAIN_SATISFACTIONS and ADD_EVAL_SATISFACTIONS are 0; nothing to do for this stage."
+            continue
+        fi
+    else
+        # Create output directories
+        mkdir -p "$TRAIN_OUT"
+        mkdir -p "$EVAL_OUT"
+
+        # Build command
+        CMD=(
+            python -u scripts/prepare_datasets.py
+            --kernel-dir "$KERNEL_DIR"
+            --base-train-dir "$PREV_TRAIN_OUT"
+            --base-eval-dir "$PREV_EVAL_OUT"
+            --disjoint-split
+            --eval-ratio "$EVAL_RATIO"
+            --train-out "$TRAIN_OUT"
+            --train-k "$K_SAMPLES"
+            --train-p-leaf-range $P_LEAF_RANGE
+            --train-max-depth "$MAX_DEPTH"
+            $TRAIN_STORE_FORMULA_STR
+            $TRAIN_STORE_SATISFACTION
+            --train-satisfaction-batch-size "$TRAIN_SATISFACTION_BATCH_SIZE"
+            --train-satisfaction-time-index "$TRAIN_SATISFACTION_TIME_INDEX"
+            --eval-out "$EVAL_OUT"
+            $EVAL_DEDUPE
+
+        )
+    fi
     
     echo "Running: ${CMD[*]}"
     "${CMD[@]}"
@@ -186,7 +227,11 @@ done
 
 echo ""
 echo "=============================================="
-echo "All datasets generated successfully!"
+if [ "$JOB_MODE" = "add_satisfactions" ]; then
+    echo "Satisfactions added successfully for all configured stages!"
+else
+    echo "All datasets generated successfully!"
+fi
 echo "End time: $(date)"
 echo "=============================================="
 echo ""
