@@ -594,6 +594,7 @@ class LTLDataset(Dataset):
         else:
             sats_tensor = torch.empty((0,), dtype=torch.bool)
         torch.save(sats_tensor, part_path)
+        print(f'rank {rank} finished and saved tensor.')
 
         # Barrier for all ranks to finish
         if barrier_fn is not None:

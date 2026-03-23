@@ -54,12 +54,11 @@ ADD_EVAL_SATISFACTIONS=0
 # - eval_ratio: fraction for evaluation set (using disjoint split)
 
 STAGES=(
-    "stage1:100000:2:2:0.2 0.5:0.025"
     "stage2:200000:3:3:0.1 0.5:0.025"
     "stage3:400000:4:4:0.01 0.5:0.025"
     "stage4:800000:5:5:0.01 0.4:0.025"
 )
-
+#    "stage1:100000:2:2:0.2 0.5:0.025"
 
 # Common options
 TRAIN_DEDUPE=""
@@ -143,6 +142,9 @@ for stage_def in "${STAGES[@]}"; do
     
     TRAIN_OUT="$DATASETS_BASE/$STAGE_NAME/train"
     EVAL_OUT="$DATASETS_BASE/$STAGE_NAME/eval"
+    SCRATCH_STAGE_BASE="/scratch-local/$USER/KernelLTL/datasets/$STAGE_NAME"
+    SCRATCH_TRAIN_OUT="$SCRATCH_STAGE_BASE/train"
+    SCRATCH_EVAL_OUT="$SCRATCH_STAGE_BASE/eval"
     
     echo ""
     echo "=============================================="
@@ -174,19 +176,50 @@ for stage_def in "${STAGES[@]}"; do
             exit 1
         fi
 
+        # Prepare scratch-local directories
+        mkdir -p "$SCRATCH_STAGE_BASE"
+        if [ "$ADD_TRAIN_SATISFACTIONS" = "1" ]; then
+            echo "Copying train dataset to scratch-local: $TRAIN_OUT -> $SCRATCH_TRAIN_OUT"
+            mkdir -p "$SCRATCH_TRAIN_OUT"
+            rsync -a --delete "$TRAIN_OUT/" "$SCRATCH_TRAIN_OUT/"
+        fi
+        if [ "$ADD_EVAL_SATISFACTIONS" = "1" ]; then
+            echo "Copying eval dataset to scratch-local: $EVAL_OUT -> $SCRATCH_EVAL_OUT"
+            mkdir -p "$SCRATCH_EVAL_OUT"
+            rsync -a --delete "$EVAL_OUT/" "$SCRATCH_EVAL_OUT/"
+        fi
+
         # Always use torchrun with 4 processes (GPUs)
         TORCHRUN_ARGS=(--nproc_per_node=4)
         CMD=(torchrun "${TORCHRUN_ARGS[@]}" scripts/prepare_datasets.py --kernel-dir "$KERNEL_DIR" --add-satisfactions)
         if [ "$ADD_TRAIN_SATISFACTIONS" = "1" ]; then
-            CMD+=(--train-out "$TRAIN_OUT" --train-satisfaction-batch-size "$TRAIN_SATISFACTION_BATCH_SIZE" --train-satisfaction-time-index "$TRAIN_SATISFACTION_TIME_INDEX")
+            CMD+=(--train-out "$SCRATCH_TRAIN_OUT" --train-satisfaction-batch-size "$TRAIN_SATISFACTION_BATCH_SIZE" --train-satisfaction-time-index "$TRAIN_SATISFACTION_TIME_INDEX")
         fi
         if [ "$ADD_EVAL_SATISFACTIONS" = "1" ]; then
-            CMD+=(--eval-out "$EVAL_OUT" --eval-satisfaction-batch-size "$EVAL_SATISFACTION_BATCH_SIZE" --eval-satisfaction-time-index "$EVAL_SATISFACTION_TIME_INDEX")
+            CMD+=(--eval-out "$SCRATCH_EVAL_OUT" --eval-satisfaction-batch-size "$EVAL_SATISFACTION_BATCH_SIZE" --eval-satisfaction-time-index "$EVAL_SATISFACTION_TIME_INDEX")
         fi
         if [ "$ADD_TRAIN_SATISFACTIONS" != "1" ] && [ "$ADD_EVAL_SATISFACTIONS" != "1" ]; then
             echo "Warning: Both ADD_TRAIN_SATISFACTIONS and ADD_EVAL_SATISFACTIONS are 0; nothing to do for this stage."
             continue
         fi
+
+        echo "Running: ${CMD[*]}"
+        "${CMD[@]}"
+
+        # Copy results back to main storage
+        if [ "$ADD_TRAIN_SATISFACTIONS" = "1" ]; then
+            echo "Copying updated train dataset back to main storage: $SCRATCH_TRAIN_OUT -> $TRAIN_OUT"
+            rsync -a --delete "$SCRATCH_TRAIN_OUT/" "$TRAIN_OUT/"
+        fi
+        if [ "$ADD_EVAL_SATISFACTIONS" = "1" ]; then
+            echo "Copying updated eval dataset back to main storage: $SCRATCH_EVAL_OUT -> $EVAL_OUT"
+            rsync -a --delete "$SCRATCH_EVAL_OUT/" "$EVAL_OUT/"
+        fi
+
+        # Clean up scratch-local for this stage
+        rm -rf "$SCRATCH_STAGE_BASE"
+        echo "$STAGE_NAME dataset satisfactions update complete!"
+        continue
     else
         # Create output directories
         mkdir -p "$TRAIN_OUT"
