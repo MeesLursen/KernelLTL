@@ -522,21 +522,24 @@ class LTLDataset(Dataset):
         kernel: LTLKernel,
         satisfaction_batch_size: int | None = None,
         satisfaction_time_index: int | None = None,
+        rank: int = 0,
+        world_size: int = 1,
+        barrier_fn=None,
     ) -> None:
         """
         Compute satisfactions from formulas in a saved dataset directory and write
-        them to `satisfactions.pt` in that same directory.
+        them to `satisfactions.pt` in that same directory. DDP-compatible: splits work by rank.
 
-        Also updates `metadata.json` so the dataset is marked as having
-        satisfactions.
+        Each rank writes its chunk to `satisfactions.part{rank}.pt`. Rank 0 aggregates after all finish.
 
         Args:
             dirpath: Path to a saved LTLDataset directory.
             kernel: Kernel used to evaluate formula satisfactions on traces.
             satisfaction_batch_size: Optional override for evaluation batch size.
-                If None, uses value from metadata.json (or 512 as fallback).
             satisfaction_time_index: Optional override for evaluation time index.
-                If None, uses value from metadata.json (or 0 as fallback).
+            rank: DDP rank (default 0 for single process).
+            world_size: DDP world size (default 1 for single process).
+            barrier_fn: Optional callable for DDP barrier (e.g., torch.distributed.barrier).
         """
         metadata_path = os.path.join(dirpath, "metadata.json")
         formulas_path = os.path.join(dirpath, "formulas.jsonl")
@@ -568,8 +571,15 @@ class LTLDataset(Dataset):
                 if text:
                     formulas.append(str_to_formula(text))
 
+        # Split work by rank
+        total = len(formulas)
+        chunk_size = (total + world_size - 1) // world_size
+        start = rank * chunk_size
+        end = min(start + chunk_size, total)
+        formulas_chunk = formulas[start:end]
+
         satisfactions: list[torch.Tensor] = []
-        for phi in formulas:
+        for phi in formulas_chunk:
             phi_sats = kernel._evaluate_formula_on_traces(
                 formula=phi,
                 batch_size=batch_size,
@@ -577,17 +587,38 @@ class LTLDataset(Dataset):
             )
             satisfactions.append(phi_sats.to(dtype=torch.bool, device="cpu"))
 
+        # Save partial chunk
+        part_path = os.path.join(dirpath, f"satisfactions.part{rank}.pt")
         if satisfactions:
             sats_tensor = torch.stack(satisfactions, dim=0).to(dtype=torch.bool, device="cpu")
         else:
             sats_tensor = torch.empty((0,), dtype=torch.bool)
+        torch.save(sats_tensor, part_path)
 
-        torch.save(sats_tensor, satisfactions_path)
+        # Barrier for all ranks to finish
+        if barrier_fn is not None:
+            barrier_fn()
 
-        metadata["store_satisfaction"] = True
-        metadata["has_satisfactions"] = True
-        metadata["satisfaction_batch_size"] = batch_size
-        metadata["satisfaction_time_index"] = time_index
+        # Only rank 0 aggregates
+        if rank == 0:
+            # Wait for all part files
+            import time
+            for r in range(world_size):
+                wait_path = os.path.join(dirpath, f"satisfactions.part{r}.pt")
+                while not os.path.exists(wait_path):
+                    time.sleep(1)
+            # Concatenate all parts
+            all_parts = [torch.load(os.path.join(dirpath, f"satisfactions.part{r}.pt"), map_location="cpu") for r in range(world_size)]
+            sats_tensor = torch.cat(all_parts, dim=0)
+            torch.save(sats_tensor, satisfactions_path)
+            # Clean up part files
+            for r in range(world_size):
+                os.remove(os.path.join(dirpath, f"satisfactions.part{r}.pt"))
 
-        with open(metadata_path, "w", encoding="utf-8") as fp:
-            json.dump(metadata, fp, indent=2)
+            metadata["store_satisfaction"] = True
+            metadata["has_satisfactions"] = True
+            metadata["satisfaction_batch_size"] = batch_size
+            metadata["satisfaction_time_index"] = time_index
+
+            with open(metadata_path, "w", encoding="utf-8") as fp:
+                json.dump(metadata, fp, indent=2)

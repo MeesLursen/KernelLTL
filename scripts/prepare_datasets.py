@@ -119,28 +119,54 @@ def main() -> None:
     kernel = LTLKernel.load(args.kernel_dir)
 
     if args.add_satisfactions:
+        import os
+        rank = int(os.environ.get("RANK", 0))
+        world_size = int(os.environ.get("WORLD_SIZE", 1))
+        # Try to import torch.distributed and set up barrier if available
+        try:
+            import torch.distributed as dist
+            if dist.is_available() and dist.is_initialized():
+                barrier_fn = dist.barrier
+            else:
+                barrier_fn = None
+        except ImportError:
+            barrier_fn = None
+
         if not args.train_out and not args.eval_out:
-            raise ValueError("Provide at least one of --train-out or --eval-out when using --add-satisfactions.")
+            if rank == 0:
+                raise ValueError("Provide at least one of --train-out or --eval-out when using --add-satisfactions.")
+            else:
+                return
 
         if args.train_out:
-            print(f"\nAdding satisfactions to training dataset at {args.train_out}...")
+            if rank == 0:
+                print(f"\nAdding satisfactions to training dataset at {args.train_out}...")
             LTLDataset.add_satisfactions_to_saved_dataset(
                 dirpath=args.train_out,
                 kernel=kernel,
                 satisfaction_batch_size=args.train_satisfaction_batch_size,
                 satisfaction_time_index=args.train_satisfaction_time_index,
+                rank=rank,
+                world_size=world_size,
+                barrier_fn=barrier_fn,
             )
-            print(f"Updated training dataset at {args.train_out}")
+            if rank == 0:
+                print(f"Updated training dataset at {args.train_out}")
 
         if args.eval_out:
-            print(f"\nAdding satisfactions to evaluation dataset at {args.eval_out}...")
+            if rank == 0:
+                print(f"\nAdding satisfactions to evaluation dataset at {args.eval_out}...")
             LTLDataset.add_satisfactions_to_saved_dataset(
                 dirpath=args.eval_out,
                 kernel=kernel,
                 satisfaction_batch_size=args.eval_satisfaction_batch_size,
                 satisfaction_time_index=args.eval_satisfaction_time_index,
+                rank=rank,
+                world_size=world_size,
+                barrier_fn=barrier_fn,
             )
-            print(f"Updated evaluation dataset at {args.eval_out}")
+            if rank == 0:
+                print(f"Updated evaluation dataset at {args.eval_out}")
 
         return
 

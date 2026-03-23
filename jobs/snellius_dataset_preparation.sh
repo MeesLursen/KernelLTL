@@ -4,9 +4,9 @@
 #SBATCH --error=logs/kernelltl_dataset_prep_%j.err
 #SBATCH --time=5:00:00
 #SBATCH --partition=gpu_h100
-#SBATCH --gpus=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=180G
+#SBATCH --gpus=4
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=720G
 
 # ============================================================================
 # Snellius Job Script for KernelLTL Dataset Preparation
@@ -174,7 +174,9 @@ for stage_def in "${STAGES[@]}"; do
             exit 1
         fi
 
-        CMD=(python -u scripts/prepare_datasets.py --kernel-dir "$KERNEL_DIR" --add-satisfactions)
+        # Always use torchrun with 4 processes (GPUs)
+        TORCHRUN_ARGS=(--nproc_per_node=4)
+        CMD=(torchrun "${TORCHRUN_ARGS[@]}" scripts/prepare_datasets.py --kernel-dir "$KERNEL_DIR" --add-satisfactions)
         if [ "$ADD_TRAIN_SATISFACTIONS" = "1" ]; then
             CMD+=(--train-out "$TRAIN_OUT" --train-satisfaction-batch-size "$TRAIN_SATISFACTION_BATCH_SIZE" --train-satisfaction-time-index "$TRAIN_SATISFACTION_TIME_INDEX")
         fi
