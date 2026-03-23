@@ -1,5 +1,5 @@
 __pycache__/
+.github/
 .ltlkernel/
 test.py
-misc/
 .python-version
