@@ -102,7 +102,6 @@ def parse_args() -> argparse.Namespace:
     callback_group = parser.add_argument_group("Semantic evaluation callback")
     callback_group.add_argument("--disable-semantic-callback", action="store_true")
     callback_group.add_argument("--semantic-eval-batch-size", type=_positive_int, default=10240)
-    callback_group.add_argument("--semantic-time-index", type=int, default=0)
 
     # RL trainer controls
     rl_group = parser.add_argument_group("RL trainer controls")
@@ -294,11 +293,7 @@ def main() -> None:
     semantic_callback = None
     if not args.disable_semantic_callback and eval_dataset is not None:
         semantic_callback = SemanticEvaluationCallback(
-            kernel=kernel,
             tokenizer=tokenizer,
-            eval_dataset=eval_dataset,
-            kernel_eval_batch_size=args.semantic_eval_batch_size,
-            kernel_time_index=args.semantic_time_index,
         )
         callbacks.append(semantic_callback)
     metrics_logger = UnifiedMetricsLoggerCallback(
@@ -333,7 +328,7 @@ def main() -> None:
         "kernel": kernel,
         "tokenizer": tokenizer,
         "reward_clip": args.reinforce_reward_clip,
-        "eval_batch_size": args.semantic_eval_batch_size,
+        "semantic_eval_batch_size": args.semantic_eval_batch_size,
         "satisfactions_path": satisfactions_path,
     }
 
@@ -364,6 +359,7 @@ def main() -> None:
         )
     trainer._ce_reference_model_path = ce_reference_model_dir
     metrics_logger.attach_trainer(trainer)
+    semantic_callback.attach_trainer(trainer)
     
     train_result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
     print(train_result)

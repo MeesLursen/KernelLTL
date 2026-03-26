@@ -17,7 +17,7 @@ class REINFORCETrainerRB(Trainer):
             tokenizer: LTLTokenizer,
             baseline_momentum: float = 0.9,
             reward_clip: float | None = 1.0,
-            eval_batch_size: int = 10240,
+            semantic_eval_batch_size: int = 10240,
             satisfactions_path: str | None = None,
             **kwargs,
         ) -> None:
@@ -26,10 +26,11 @@ class REINFORCETrainerRB(Trainer):
                 kwargs["tokenizer"] = tokenizer
             super().__init__(*args, **kwargs)
             self.kernel = kernel
+            self.trainer_kind = 'rb'
             self.formula_tokenizer = tokenizer
             self.baseline_momentum = baseline_momentum
             self.reward_clip = reward_clip
-            self.eval_batch_size = eval_batch_size
+            self.semantic_eval_batch_size = semantic_eval_batch_size
             self.satisfactions_path = satisfactions_path
             self._reward_baseline: torch.Tensor | None = None
             self._reward_sq_mean: torch.Tensor | None = None
@@ -238,7 +239,7 @@ class REINFORCETrainerRB(Trainer):
             for i, generated_str in enumerate(generated_strings):
                 try:
                     generated_formula = str_to_formula(generated_str)
-                    generated_sats = self.kernel._evaluate_formula_on_traces(generated_formula, self.eval_batch_size, 0)
+                    generated_sats = self.kernel._evaluate_formula_on_traces(generated_formula, self.semantic_eval_batch_size)
                     target_sats = target_satisfactions[i]
                     if generated_sats.numel() != target_sats.numel():
                         raise ValueError("Satisfaction length mismatch")
@@ -388,7 +389,7 @@ class REINFORCETrainerGAE(Trainer):
             kernel: LTLKernel,
             tokenizer: LTLTokenizer,
             reward_clip: float | None = 1.0,
-            eval_batch_size: int = 10240,
+            semantic_eval_batch_size: int = 10240,
             satisfactions_path: str | None = None,
             gae_gamma: float = 0.99,
             gae_lambda: float = 0.95,
@@ -403,9 +404,10 @@ class REINFORCETrainerGAE(Trainer):
                 kwargs["tokenizer"] = tokenizer
             super().__init__(*args, **kwargs)
             self.kernel = kernel
+            self.trainer_kind = 'gae'
             self.formula_tokenizer = tokenizer
             self.reward_clip = reward_clip
-            self.eval_batch_size = eval_batch_size
+            self.semantic_eval_batch_size = semantic_eval_batch_size
             self.satisfactions_path = satisfactions_path
             self.gae_gamma = float(gae_gamma)
             self.gae_lambda = float(gae_lambda)
@@ -633,7 +635,7 @@ class REINFORCETrainerGAE(Trainer):
             for i, generated_str in enumerate(generated_strings):
                 try:
                     generated_formula = str_to_formula(generated_str)
-                    generated_sats = self.kernel._evaluate_formula_on_traces(generated_formula, self.eval_batch_size, 0)
+                    generated_sats = self.kernel._evaluate_formula_on_traces(generated_formula, self.semantic_eval_batch_size)
                     target_sats = target_satisfactions[i]
                     if generated_sats.numel() != target_sats.numel():
                         raise ValueError("Satisfaction length mismatch")

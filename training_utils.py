@@ -9,8 +9,11 @@ from torch.utils.data import DataLoader
 from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 from formula_utils import ParseError, str_to_formula
 from kernel_class import LTLKernel
+from dataset_class import LTLDataset
 from tokenizer_pretrained_class import LTLTokenizer
 from model_class import LTLModel
+from ce_trainer import CETrainer
+from reinforce_trainer import REINFORCETrainerGAE, REINFORCETrainerRB
 
 
 class UnifiedMetricsLoggerCallback(TrainerCallback):
@@ -20,11 +23,11 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
         self,
         output_dir: str,
         stage_name: str | None = None,
-        trainer_kind: str = "ce",
     ) -> None:
         self.output_dir = output_dir
         self.stage_name = stage_name or os.path.basename(os.path.normpath(output_dir))
-        self.trainer_kind = trainer_kind
+        self.trainer: CETrainer | REINFORCETrainerRB | REINFORCETrainerGAE = None
+        self.trainer_kind: str = None
         self.logs_dir = os.path.join(output_dir, "logs")
         self.metrics_path = os.path.join(self.logs_dir, "metrics_history.jsonl")
         self._train_start_time: float | None = None
@@ -34,10 +37,10 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
         self._stage_end_eval_metrics: dict[str, float] = {}
         self._metric_sums: dict[str, float | torch.Tensor] = {}
         self._metric_counts: dict[str, int] = defaultdict(int)
-        self.trainer = None
 
-    def attach_trainer(self, trainer) -> None:
+    def attach_trainer(self, trainer: CETrainer | REINFORCETrainerRB | REINFORCETrainerGAE) -> None:
         self.trainer = trainer
+        self.trainer_kind = trainer.trainer_kind
 
     def set_stage_end_eval_metrics(self, metrics: dict[str, float]) -> None:
         self._stage_end_eval_metrics = dict(metrics)
@@ -128,6 +131,8 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
         step_metrics = {}
         if self.trainer is not None:
             step_metrics = getattr(self.trainer, "_last_train_metrics", {}) or {}
+        else:
+            raise AttributeError('Please call `attach_trainer()` before running the training loop.')
 
         for key, value in step_metrics.items():
             self._accumulate_metric(key, value)
@@ -238,27 +243,37 @@ class SemanticEvaluationCallback(TrainerCallback):
     Computes kernel embeddings of generated formulas and compares with target embeddings.
     """
     def __init__(self, 
-                 kernel: LTLKernel,
                  tokenizer: LTLTokenizer,
-                 eval_dataset,
-                 kernel_eval_batch_size: int = 512,
-                 kernel_time_index: int = 0,
                  top_k_stage_end: int = 5):
         """
         Args:
-            kernel: LTLKernel instance for computing semantic embeddings
             tokenizer: LTLTokenizer for decoding generated sequences
+            eval_dataset: LTLDataset to be used for model evaluation during training
+            top_k_stage_end: Int that specifies the number of sequences to sample for end_of_stage metrics computation
         """
-        self.kernel = kernel
+        
         self.tokenizer: LTLTokenizer = tokenizer
-        self.eval_dataset = eval_dataset
-        self.kernel_eval_batch_size = kernel_eval_batch_size
-        self.kernel_time_index = kernel_time_index
         self.top_k_stage_end = max(1, int(top_k_stage_end))
+        self.trainer: CETrainer | REINFORCETrainerRB | REINFORCETrainerGAE = None
+        self.eval_dataset: LTLDataset = None
+        self.kernel: LTLKernel = None
+        self.trainer_kind: str = None
+        self.semantic_eval_batch_size: int = None
         self.metrics_logger: UnifiedMetricsLoggerCallback | None = None
+
+    def attach_trainer(self, trainer: CETrainer | REINFORCETrainerRB | REINFORCETrainerGAE) -> None:
+        self.trainer = trainer
+        self.eval_dataset = trainer.eval_dataset
+        self.kernel = trainer.kernel
+        self.trainer_kind = trainer.trainer_kind
+        self.semantic_eval_batch_size = trainer.semantic_eval_batch_size
 
     def attach_metrics_logger(self, metrics_logger: UnifiedMetricsLoggerCallback) -> None:
         self.metrics_logger = metrics_logger
+    
+    def _is_main_process(self, args: TrainingArguments) -> bool:
+        local_rank = getattr(args, "local_rank", -1)
+        return local_rank in (-1, 0)
 
     def _sentence_bleu(self, candidate: list[str], references: list[list[str]], max_n: int = 4) -> float:
         if not candidate:
@@ -324,30 +339,15 @@ class SemanticEvaluationCallback(TrainerCallback):
         args: TrainingArguments,
         state: TrainerState,
         model: LTLModel,
+        eval_dataloader: DataLoader,
     ) -> dict[str, float]:
-        eval_dataset = self.eval_dataset
-        if eval_dataset is None:
+        if self.eval_dataset is None:
             return {}
 
-        trainer_kind = "ce"
-        trainer = None
-        if self.metrics_logger is not None:
-            trainer_kind = self.metrics_logger.trainer_kind
-            trainer = self.metrics_logger.trainer
-
         reference_model_path = None
-        if trainer_kind != "ce":
-            if trainer is not None:
-                reference_model_path = getattr(trainer, "_ce_reference_model_path", None)
-
-        eval_dataloader = DataLoader(
-            eval_dataset,
-            batch_size=args.per_device_eval_batch_size,
-            num_workers=args.dataloader_num_workers,
-            collate_fn=lambda batch: self.tokenizer.collate_batch(batch, model.config.n_positions, include_metadata=True),
-            pin_memory=args.dataloader_pin_memory,
-            shuffle=False,
-        )
+        if self.trainer_kind is not None and self.trainer_kind != "ce":
+            if self.trainer is not None:
+                reference_model_path = getattr(self.trainer, "_ce_reference_model_path", None)
 
         reward_spread_total = 0.0
         reward_spread_count = 0
@@ -373,8 +373,9 @@ class SemanticEvaluationCallback(TrainerCallback):
                 if target_satisfaction is not None:
                     target_satisfaction = target_satisfaction.to(self.kernel.device)
 
+                gen_model = model.module if hasattr(model, 'module') else model
                 k = self.top_k_stage_end
-                generation = model.generate(
+                generation = gen_model.generate(
                     semantic_embeddings=semantic_embeddings,
                     do_sample=True,
                     max_new_tokens=model.config.n_positions,
@@ -417,7 +418,7 @@ class SemanticEvaluationCallback(TrainerCallback):
                 action_lp_num += float(seq_log_prob.sum().detach().cpu().item())
                 action_lp_den += float(seq_log_prob.numel())
 
-                if trainer_kind != "ce" and reference_model_path is not None:
+                if self.trainer_kind is not None and self.trainer_kind != "ce" and reference_model_path is not None:
                     shifted = sequences[:, :-1]
                     sem_rep = semantic_embeddings.repeat_interleave(k, dim=0)
                     kl_batches.append(
@@ -447,8 +448,7 @@ class SemanticEvaluationCallback(TrainerCallback):
                         generated_formula = str_to_formula(generated_str)
                         generated_sats = self.kernel._evaluate_formula_on_traces(
                             generated_formula,
-                            self.kernel_eval_batch_size,
-                            self.kernel_time_index,
+                            self.semantic_eval_batch_size,
                         )
                         if target_satisfaction is not None:
                             target_sats = target_satisfaction[b_idx]
@@ -483,7 +483,7 @@ class SemanticEvaluationCallback(TrainerCallback):
                         self_bleu_total += float(sum(bleu_vals) / len(bleu_vals))
                         self_bleu_count += 1
 
-        if trainer_kind != "ce" and reference_model_path is not None and kl_batches:
+        if self.trainer_kind is not None and self.trainer_kind != "ce" and reference_model_path is not None and kl_batches:
             reference_model = None
             try:
                 model.to("cpu")
@@ -529,9 +529,9 @@ class SemanticEvaluationCallback(TrainerCallback):
             metrics["eval_stage_self_bleu"] = self_bleu_total / self_bleu_count
         if entropy_den > 0.0:
             metrics["eval_stage_policy_entropy"] = entropy_num / entropy_den
-        if trainer_kind != "ce" and action_lp_den > 0.0:
+        if self.trainer_kind is not None and self.trainer_kind != "ce" and action_lp_den > 0.0:
             metrics["eval_stage_action_logprob_mean"] = action_lp_num / action_lp_den
-        if trainer_kind != "ce" and kl_den > 0.0:
+        if self.trainer_kind is not None and self.trainer_kind != "ce" and kl_den > 0.0:
             metrics["eval_stage_sequence_kl_mean"] = kl_num / kl_den
 
         return metrics
@@ -541,20 +541,11 @@ class SemanticEvaluationCallback(TrainerCallback):
         *,
         args: TrainingArguments,
         model: LTLModel,
+        eval_dataloader: DataLoader,
     ) -> dict[str, float]:
         
-        eval_dataset = self.eval_dataset
-        if eval_dataset is None:
+        if self.eval_dataset is None:
             return {}
-
-        eval_dataloader = DataLoader(
-            eval_dataset,
-            batch_size=args.per_device_eval_batch_size,
-            num_workers=args.dataloader_num_workers,
-            collate_fn=lambda batch : self.tokenizer.collate_batch(batch, model.config.n_positions, include_metadata=True),
-            pin_memory=args.dataloader_pin_memory,
-            shuffle=False
-        )
 
         total_distance = 0.0
         exact_string_matches = 0
@@ -589,9 +580,9 @@ class SemanticEvaluationCallback(TrainerCallback):
                     target_formulas = [str_to_formula(s) for s in target_strs]
 
                 batch_size = target_embeddings.size(0)
-                total_samples += batch_size
 
-                generated_ids = model.generate(
+                gen_model = model.module if hasattr(model, 'module') else model
+                generated_ids = gen_model.generate(
                     semantic_embeddings=target_embeddings,
                     max_length=model.config.n_positions,
                     num_beams=1,
@@ -602,63 +593,95 @@ class SemanticEvaluationCallback(TrainerCallback):
                 
                 generated_strs = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
 
+                per_sample_distance = torch.ones(size=(batch_size ,), device=self.kernel.device, dtype=torch.float32)
+                per_sample_exact_str_match = torch.zeros(size=(batch_size ,), device=self.kernel.device, dtype=torch.bool)
+                per_sample_semantic_equivalent = torch.zeros(size=(batch_size ,), device=self.kernel.device, dtype=torch.bool)
+                per_sample_incorrect = torch.zeros(size=(batch_size ,), device=self.kernel.device, dtype=torch.bool)
+                per_sample_invalid = torch.zeros(size=(batch_size ,), device=self.kernel.device, dtype=torch.bool)
+                per_sample_generated_depth = torch.zeros(size=(batch_size ,), device=self.kernel.device, dtype=torch.float32)
+                per_sample_generated_length = torch.zeros(size=(batch_size ,), device=self.kernel.device, dtype=torch.float32)
+
                 for i in range(batch_size):
                     generated_str = generated_strs[i]
                     target_str = target_strs[i]
                     target_formula = target_formulas[i]
-
-                    generated_length_sum += float(len(generated_str))
 
                     if target_satisfaction is not None:
                         target_sats = target_satisfaction[i]
                     else:
                         target_sats = self.kernel._evaluate_formula_on_traces(
                             formula=target_formula,
-                            batch_size=self.kernel_eval_batch_size,
-                            time_index=self.kernel_time_index
+                            batch_size=self.semantic_eval_batch_size,
                         )
 
                     try:
                         generated_formula = str_to_formula(generated_str)
-                        generated_depth_sum += float(generated_formula.depth())
+                        per_sample_generated_depth[i] = float(generated_formula.depth())
+                        per_sample_generated_length[i] = float(len(generated_str))
 
                         if generated_str == target_str:
-                            exact_string_matches += 1
+                            per_sample_exact_str_match[i] = True
 
                         generated_sats = self.kernel._evaluate_formula_on_traces(
                             formula=generated_formula,
-                            batch_size=self.kernel_eval_batch_size,
-                            time_index=self.kernel_time_index
+                            batch_size=self.semantic_eval_batch_size,
                         )
 
                         xor = torch.logical_xor(target_sats, generated_sats)
                         distance = xor.to(dtype=torch.float32).mean().item()
-                        total_distance += distance
+                        per_sample_distance[i] = distance
 
                         if distance == 0.0:
-                            semantic_equivalent += 1
+                            per_sample_semantic_equivalent[i] = True
                         else:
-                            incorrect += 1
+                            per_sample_incorrect[i] = True
                     
                     except ParseError:
                         # Penalize for invalid formula by adding max distance
-                        total_distance += 1.0
-                        invalid += 1
+                        per_sample_invalid[i] = True
                     except Exception as exc:
                         raise RuntimeError(
                             "Unexpected semantic evaluation failure while scoring generated formulas."
                         ) from exc
+                
+                (gathered_per_sample_distance, 
+                 gathered_per_sample_exact_str_match, 
+                 gathered_per_sample_semantic_equivalent, 
+                 gathered_per_sample_incorrect, 
+                 gathered_per_sample_invalid, 
+                 gathered_per_sample_generated_depth, 
+                 gathered_per_sample_generated_length 
+                 ) = self.trainer.accelerator.gather_for_metrics([
+                     per_sample_distance, 
+                     per_sample_exact_str_match, 
+                     per_sample_semantic_equivalent, 
+                     per_sample_incorrect, 
+                     per_sample_invalid, 
+                     per_sample_generated_depth, 
+                     per_sample_generated_length
+                 ])
+                
+                total_distance += float(gathered_per_sample_distance.sum().item())
+                exact_string_matches += int(gathered_per_sample_exact_str_match.sum().item())
+                semantic_equivalent += int(gathered_per_sample_semantic_equivalent.sum().item())
+                incorrect += int(gathered_per_sample_incorrect.sum().item())
+                invalid += int(gathered_per_sample_invalid.sum().item())
+                total_samples += len(gathered_per_sample_distance)
+                generated_depth_sum += float(gathered_per_sample_generated_depth.sum().item())
+                generated_length_sum += float(gathered_per_sample_generated_length.sum().item())
+
 
         if total_samples <= 0:
             return {}
-
+        
+        
         avg_distance = total_distance / total_samples
         exact_string_match_rate = exact_string_matches / total_samples
         semantic_equivalent_rate = semantic_equivalent / total_samples
         incorrect_rate = incorrect / total_samples
         invalid_rate = invalid / total_samples
         generated_depth_mean = generated_depth_sum / max(total_samples - invalid, 1)
-        generated_length_mean = generated_length_sum / total_samples
+        generated_length_mean = generated_length_sum / max(total_samples - invalid, 1)
 
         return {
             "eval_semantic_distance": float(avg_distance),
@@ -680,23 +703,35 @@ class SemanticEvaluationCallback(TrainerCallback):
         metrics: dict | None = None,
         **kwargs,
     ):
-        local_rank = getattr(args, "local_rank", -1)
-        if local_rank not in (-1, 0):
-            return
+        if self.trainer is None:
+            raise AttributeError('Please call `attach_trainer()` before running the training loop.')
 
-        metric_values = self._compute_semantic_metrics(args=args, model=model)
+        eval_dataloader: DataLoader = self.trainer.get_eval_dataloader()
+        eval_dataloader.collate_fn = lambda batch : self.tokenizer.collate_batch(batch, model.config.n_positions, include_metadata=True)
+        prepared_eval_dataloader = self.trainer.accelerator.prepare(eval_dataloader)
+
+        even_batches = getattr(self.trainer.accelerator, 'even_batches', None)
+        if even_batches is not None:
+            if self._is_main_process(args):
+                print(f'even_batches = {self.trainer.accelerator.getattr('even_batches', None)}')
+        else:
+            if self._is_main_process(args):
+                print("There was an issue retreiving the 'even_batches' argument.")    
+
+        metric_values = self._compute_semantic_metrics(args=args, model=model, eval_dataloader=prepared_eval_dataloader)
         if not metric_values:
             return
-
+        
         avg_distance = metric_values["eval_semantic_distance"]
         semantic_equiv_rate = metric_values["eval_semantic_equivalent_rate"]
 
         if metrics is not None:
             metrics.update(metric_values)
 
-        print(f"\n  Eval @ epoch {state.epoch} / step {state.global_step}:")
-        print(f"  eval_semantic_distance: {avg_distance:.4f}")
-        print(f"  eval_semantic_equivalent_rate: {semantic_equiv_rate:.4f}")
+        if self._is_main_process(args):
+            print(f"\n  Eval @ epoch {state.epoch} / step {state.global_step}:")
+            print(f"  eval_semantic_distance: {avg_distance:.4f}")
+            print(f"  eval_semantic_equivalent_rate: {semantic_equiv_rate:.4f}")
 
     def on_train_begin(
         self,
@@ -716,13 +751,14 @@ class SemanticEvaluationCallback(TrainerCallback):
         model: LTLModel,
         **kwargs,
     ):
-        local_rank = getattr(args, "local_rank", -1)
-        if local_rank not in (-1, 0):
-            return
-        if self.metrics_logger is None:
-            return
+        if self.trainer is None:
+            raise AttributeError('Please call `attach_trainer()` before running the training loop.')
+        
+        eval_dataloader: DataLoader = self.trainer.get_eval_dataloader()
+        eval_dataloader.collate_fn = lambda batch : self.tokenizer.collate_batch(batch, model.config.n_positions, include_metadata=True)
+        prepared_eval_dataloader = self.trainer.accelerator.prepare(eval_dataloader)
 
-        stage_end_metrics = self._compute_stage_end_metrics(args=args, state=state, model=model)
+        stage_end_metrics = self._compute_stage_end_metrics(args=args, state=state, model=model, eval_data_loader=prepared_eval_dataloader)
         if stage_end_metrics:
             self.metrics_logger.set_stage_end_eval_metrics(stage_end_metrics)
 

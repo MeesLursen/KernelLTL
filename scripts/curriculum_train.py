@@ -94,7 +94,6 @@ def parse_args() -> argparse.Namespace:
     callback_group = parser.add_argument_group("Semantic evaluation callback")
     callback_group.add_argument("--disable-semantic-callback", action="store_true")
     callback_group.add_argument("--semantic-eval-batch-size", type=_positive_int, default=10240)
-    callback_group.add_argument("--semantic-time-index", type=int, default=0)
 
     return parser.parse_args()
 
@@ -259,21 +258,16 @@ def main() -> None:
     semantic_callback = None
     if not args.disable_semantic_callback and eval_dataset is not None:
         semantic_callback = SemanticEvaluationCallback(
-            kernel=kernel,
             tokenizer=tokenizer,
-            eval_dataset=eval_dataset,
-            kernel_eval_batch_size=args.semantic_eval_batch_size,
-            kernel_time_index=args.semantic_time_index,
         )
         callbacks.append(semantic_callback)
-    metrics_logger = UnifiedMetricsLoggerCallback(
+    metrics_logger_callback = UnifiedMetricsLoggerCallback(
         output_dir=args.output_dir,
         stage_name=args.stage_name,
-        trainer_kind="ce",
     )
     if semantic_callback is not None:
-        semantic_callback.attach_metrics_logger(metrics_logger)
-    callbacks.append(metrics_logger)    
+        semantic_callback.attach_metrics_logger(metrics_logger_callback)
+    callbacks.append(metrics_logger_callback)    
     if args.early_stopping_patience is not None:
         if args.early_stopping_patience <= 0:
             raise ValueError("--early-stopping-patience must be > 0")
@@ -294,8 +288,11 @@ def main() -> None:
         eval_dataset=eval_dataset,
         callbacks=callbacks,
         processing_class=tokenizer,
+        kernel=kernel,
+        semantic_eval_batch_size=args.semantic_eval_batch_size
     )
-    metrics_logger.attach_trainer(trainer)
+    metrics_logger_callback.attach_trainer(trainer)
+    semantic_callback.attach_trainer(trainer)
 
     train_result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
     print(train_result)

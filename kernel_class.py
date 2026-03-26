@@ -7,7 +7,7 @@ from formula_class import eval_traces_batch, Formula, Atom, And, Next, Not
 from formula_utils import sample_traces, sample_traces_correlated, sample_formulas, str_to_formula
 
 class LTLKernel:
-    def __init__(self, T: int, AP: int, device: str | None = None, seed: int | None = None):
+    def __init__(self, T: int, AP: int, device: str | None = None, time_index: int = 0, seed: int | None = None):
         """
         Kernel for LTL formulas based on sampled traces.
 
@@ -29,6 +29,11 @@ class LTLKernel:
                                else 'cpu')
 
         self.device: str = resolved_device
+
+        if time_index > T-1 or time_index < 0:
+            raise ValueError(f'The specified time_index has to fall in the range (0,...{T-1}).')
+        else:
+            self.time_index = time_index
         
         self.rng: torch.Generator = (torch.Generator(device=self.device).manual_seed(self.seed)
                                      if self.seed is not None
@@ -169,11 +174,6 @@ class LTLKernel:
         if self.traces is None:
             raise ValueError('Please sample traces before calling sample_anchor_formulas_kernel2 so cosine similarity can be computed.')
 
-        time_index = 0
-
-        if time_index < 0 or time_index >= self.T:
-            raise ValueError(f'time_index must be between 0 and {self.T - 1}, but received {time_index}.')
-
         N = self.traces.size(dim=0)
         if N == 0:
             raise ValueError('Traces tensor is empty, cannot evaluate cosine similarity.')
@@ -196,7 +196,7 @@ class LTLKernel:
                                             rng=self.rng,
                                             device=self.device)[0]
 
-                candidate_vec = self._evaluate_formula_on_traces(formula=candidate,batch_size=batch_size,time_index=time_index)
+                candidate_vec = self._evaluate_formula_on_traces(formula=candidate,batch_size=batch_size)
                 candidate_vec = torch.where(candidate_vec, one, zero)
                 denom = torch.linalg.norm(candidate_vec)
                 if denom > 1e-8:
@@ -224,7 +224,7 @@ class LTLKernel:
 
 
     # ----------- Evaluation -----------
-    def build_F(self, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+    def build_F(self, batch_size: int = 512) -> torch.Tensor:
         """
         Method for building the feature matrix F from the sampled formulae and traces.
         - formulas: list of formulae length m.
@@ -246,7 +246,7 @@ class LTLKernel:
         m = len(self.anchor_formulas)
         F = torch.empty((m, N), dtype=torch.float32, device=self.device)
         for i, phi in enumerate(self.anchor_formulas):
-            sats = self._evaluate_formula_on_traces(formula=phi,batch_size=batch_size,time_index=time_index)
+            sats = self._evaluate_formula_on_traces(formula=phi,batch_size=batch_size)
             vals = torch.where(sats, 
                                torch.tensor(1.0, dtype=torch.float32, device=self.device),
                                torch.tensor(0.0, dtype=torch.float32, device=self.device))  # (B,)
@@ -257,8 +257,11 @@ class LTLKernel:
 
 
     # ----------- Kernel eval helper -----------
-    def _evaluate_formula_on_traces(self, formula: Formula, batch_size: int, time_index: int) -> torch.Tensor:
+    def _evaluate_formula_on_traces(self, formula: Formula, batch_size: int, time_index: int | None = None) -> torch.Tensor:
         """Return boolean satisfaction vector of length N for the provided formula."""
+        if time_index is None:
+            time_index = self.time_index
+
         if self.traces is None:
             raise ValueError('Please sample traces before evaluating formulas.')
 
@@ -297,7 +300,7 @@ class LTLKernel:
 
 
     # ----------- Embedding Computation -----------
-    def compute_formula_embedding(self, formula: Formula, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+    def compute_formula_embedding(self, formula: Formula, batch_size: int = 512) -> torch.Tensor:
         """
         Method for computing the embedding of formula, from feature matrix F.
         - formula: the formula for which the embedding is to be calcualted.
@@ -306,12 +309,12 @@ class LTLKernel:
         Returns:
             - emb: Tensor (m), the embedding of formula, where m = len(self.anchor_formulas) the number of anchor formulae.
         """ 
-        phi_sats = self._evaluate_formula_on_traces(formula=formula, batch_size=batch_size, time_index=time_index)
-        return self._compute_embedding_from_sats(phi_sats, move_to_cpu=True)
+        phi_sats = self._evaluate_formula_on_traces(formula=formula,batch_size=batch_size)
+        return self._compute_embedding_from_sats(phi_sats,move_to_cpu=True)
     
 
 
-    def compute_formula_embedding_no_move(self, formula: Formula, batch_size: int = 512, time_index: int = 0) -> torch.Tensor:
+    def compute_formula_embedding_no_move(self, formula: Formula, batch_size: int = 512) -> torch.Tensor:
         """
         Method for computing the embedding of formula, from feature matrix F.
         - formula: the formula for which the embedding is to be calcualted.
@@ -320,7 +323,7 @@ class LTLKernel:
         Returns:
             - emb: Tensor (m), the embedding of formula, where m = len(self.anchor_formulas) the number of anchor formulae.
         """ 
-        phi_sats = self._evaluate_formula_on_traces(formula=formula, batch_size=batch_size, time_index=time_index)
+        phi_sats = self._evaluate_formula_on_traces(formula=formula,batch_size=batch_size)
         return self._compute_embedding_from_sats(phi_sats, move_to_cpu=False)
 
 

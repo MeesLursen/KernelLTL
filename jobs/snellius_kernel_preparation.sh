@@ -64,7 +64,6 @@ COSINE_MAX_ATTEMPTS=1000
 
 # Feature matrix construction
 BUILD_F_BATCH_SIZE=1024
-BUILD_F_TIME_INDEX=0
 
 # ============================================================================
 # ENVIRONMENT SETUP
@@ -139,7 +138,6 @@ CMD=(
     --cosine-threshold "$COSINE_THRESHOLD"
     --cosine-max-attempts "$COSINE_MAX_ATTEMPTS"
     --build-f-batch-size "$BUILD_F_BATCH_SIZE"
-    --build-f-time-index "$BUILD_F_TIME_INDEX"
 )
 
 # Add seed if specified

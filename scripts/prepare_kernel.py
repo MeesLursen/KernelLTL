@@ -56,7 +56,6 @@ def parse_args() -> argparse.Namespace:
 
     build_group = parser.add_argument_group("Feature matrix (F) construction")
     build_group.add_argument("--build-f-batch-size", type=_positive_int, default=1024, help="Batch size when evaluating anchors across traces")
-    build_group.add_argument("--build-f-time-index", type=int, default=0, help="Trace time index used while evaluating anchors")
 
     return parser.parse_args()
 
@@ -118,7 +117,7 @@ def main() -> None:
         raise RuntimeError("Anchor sampling failed: kernel anchor set is empty")
 
     print("Building feature matrix F...")
-    kernel.build_F(batch_size=args.build_f_batch_size, time_index=args.build_f_time_index)
+    kernel.build_F(batch_size=args.build_f_batch_size)
     if kernel.F is None:
         raise RuntimeError("Kernel feature matrix remained uninitialized")
 
