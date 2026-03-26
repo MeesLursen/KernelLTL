@@ -6,6 +6,7 @@ from collections import defaultdict
 
 import torch
 from torch.utils.data import DataLoader
+import torch.distributed as dist
 from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 from formula_utils import ParseError, str_to_formula
 from kernel_class import LTLKernel
@@ -227,6 +228,7 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
         stage_record = self._base_record("train_stage_end", "train", state)
         stage_record["training_time_mmss"] = self._format_mmss(elapsed)
         stage_record["epochs_until_convergence"] = self._best_epoch if self._best_epoch is not None else -1
+        stage_record["best_semantic_distance"] = self._best_semantic_distance if self._best_semantic_distance is not None else 1.0
         self._append_record(stage_record)
 
         if self._last_eval_metrics:
@@ -344,11 +346,13 @@ class SemanticEvaluationCallback(TrainerCallback):
         if self.eval_dataset is None:
             return {}
 
+        is_dist = dist.is_available() and dist.is_initialized()
+
         reference_model_path = None
         if self.trainer_kind is not None and self.trainer_kind != "ce":
             if self.trainer is not None:
                 reference_model_path = getattr(self.trainer, "_ce_reference_model_path", None)
-
+        
         reward_spread_total = 0.0
         reward_spread_count = 0
         self_bleu_total = 0.0
@@ -362,23 +366,25 @@ class SemanticEvaluationCallback(TrainerCallback):
 
         kl_batches: list[dict[str, torch.Tensor]] = []
 
-        original_device = next(model.parameters()).device
-        original_training_mode = bool(model.training)
+        gen_model = model.module if hasattr(model, "module") else model
+        original_device = next(gen_model.parameters()).device
+        original_training_mode = bool(gen_model.training)
 
-        model.eval()
+        gen_model.eval()
         with torch.no_grad():
             for batch in eval_dataloader:
-                semantic_embeddings = batch["semantic_embeddings"].to(model.device, non_blocking=True)
+                semantic_embeddings = batch["semantic_embeddings"].to(original_device, non_blocking=True)
                 target_satisfaction = batch.get("target_satisfaction")
                 if target_satisfaction is not None:
-                    target_satisfaction = target_satisfaction.to(self.kernel.device)
+                    target_satisfaction = target_satisfaction.to(original_device)
 
-                gen_model = model.module if hasattr(model, 'module') else model
+                batch_size = semantic_embeddings.size(0)
                 k = self.top_k_stage_end
+
                 generation = gen_model.generate(
                     semantic_embeddings=semantic_embeddings,
                     do_sample=True,
-                    max_new_tokens=model.config.n_positions,
+                    max_new_tokens=gen_model.config.n_positions,
                     num_beams=1,
                     num_return_sequences=k,
                     return_dict_in_generate=True,
@@ -401,37 +407,41 @@ class SemanticEvaluationCallback(TrainerCallback):
                 if generated_tokens.size(-1) > total_steps:
                     generated_tokens = generated_tokens[:, :total_steps]
 
-                score_tensor = torch.stack(scores, dim=0).transpose(0, 1)  # (B*k, T, V)
+                score_tensor = torch.stack(scores, dim=0).transpose(0, 1) # (B*k, T, V)
                 score_log_probs = torch.log_softmax(score_tensor, dim=-1)
                 score_probs = torch.exp(score_log_probs)
-                token_entropy = -(score_probs * score_log_probs).sum(dim=-1)
+                token_entropy = -(score_probs * score_log_probs).sum(dim=-1)  # (B*k, T)
 
                 pad_id = self.tokenizer.pad_token_id
-                token_mask = (generated_tokens != pad_id)
-                token_mask_f = token_mask.to(dtype=score_tensor.dtype)
-                entropy_num += float((token_entropy * token_mask_f).sum().detach().cpu().item())
-                entropy_den += float(token_mask_f.sum().detach().cpu().item())
+                token_mask = (generated_tokens != pad_id)                     # (B*k, T)
+                token_mask_f = token_mask.to(dtype=score_tensor.dtype)          # (B*k, T)
 
-                token_log_probs = score_log_probs.gather(dim=-1, index=generated_tokens.unsqueeze(-1)).squeeze(-1)
-                lengths = token_mask_f.sum(dim=-1).clamp(min=1.0)
-                seq_log_prob = (token_log_probs * token_mask_f).sum(dim=-1) / lengths
-                action_lp_num += float(seq_log_prob.sum().detach().cpu().item())
-                action_lp_den += float(seq_log_prob.numel())
+                token_log_probs = score_log_probs.gather(
+                    dim=-1, index=generated_tokens.unsqueeze(-1)
+                ).squeeze(-1)                                                    # (B*k, T)
+                lengths = token_mask_f.sum(dim=-1).clamp(min=1.0)           # (B*k,)
+                seq_log_prob = (token_log_probs * token_mask_f).sum(dim=-1) / lengths  # (B*k,)
 
-                if self.trainer_kind is not None and self.trainer_kind != "ce" and reference_model_path is not None:
-                    shifted = sequences[:, :-1]
-                    sem_rep = semantic_embeddings.repeat_interleave(k, dim=0)
-                    kl_batches.append(
-                        {
-                            "shifted": shifted.detach().cpu(),
-                            "semantic_embeddings": sem_rep.detach().cpu(),
-                            "token_mask_f": token_mask_f.detach().cpu(),
-                            "re_log_probs": score_log_probs.detach().cpu().to(dtype=torch.float32),
-                        }
-                    )
 
-                generated_strs = self.tokenizer.batch_decode(generated_tokens.detach().cpu(), skip_special_tokens=True)
-                batch_size = semantic_embeddings.size(0)
+                entropy_bkt = (token_entropy * token_mask_f).reshape(batch_size, k, -1)  # (B, k, T)
+                mask_bkt = token_mask_f.reshape(batch_size, k, -1)                    # (B, k, T)
+                per_sample_entropy_num = entropy_bkt.sum(dim=(1, 2))  # (B,)
+                per_sample_entropy_den = mask_bkt.sum(dim=(1, 2))     # (B,)
+
+                seq_lp_bk = seq_log_prob.reshape(batch_size, k)  # (B, k)
+                per_sample_action_lp = seq_lp_bk.sum(dim=1)                 # (B,)
+                per_sample_action_den = torch.full(
+                    (batch_size,), float(k), dtype=torch.float32, device=original_device
+                )
+
+                per_sample_reward_spread = torch.zeros(batch_size, dtype=torch.float32, device=original_device)
+                per_sample_has_reward = torch.zeros(batch_size, dtype=torch.bool,    device=original_device)
+                per_sample_self_bleu = torch.zeros(batch_size, dtype=torch.float32, device=original_device)
+                per_sample_has_bleu = torch.zeros(batch_size, dtype=torch.bool,    device=original_device)
+
+                generated_strs = self.tokenizer.batch_decode(
+                    generated_tokens.detach().cpu(), skip_special_tokens=True
+                )
 
                 grouped_rewards: list[list[float]] = [[] for _ in range(batch_size)]
                 grouped_texts: list[list[str]] = [[] for _ in range(batch_size)]
@@ -447,14 +457,12 @@ class SemanticEvaluationCallback(TrainerCallback):
                     try:
                         generated_formula = str_to_formula(generated_str)
                         generated_sats = self.kernel._evaluate_formula_on_traces(
-                            generated_formula,
-                            self.semantic_eval_batch_size,
+                            generated_formula, self.semantic_eval_batch_size
                         )
                         if target_satisfaction is not None:
                             target_sats = target_satisfaction[b_idx]
                         else:
-                            reward_val = 0.0
-                            grouped_rewards[b_idx].append(reward_val)
+                            grouped_rewards[b_idx].append(0.0)
                             continue
                         hamming = torch.logical_xor(generated_sats, target_sats).to(torch.float32).mean().item()
                         reward_val = 1.0 - hamming
@@ -466,27 +474,65 @@ class SemanticEvaluationCallback(TrainerCallback):
                         ) from exc
                     grouped_rewards[b_idx].append(reward_val)
 
-                for rewards in grouped_rewards:
-                    if not rewards:
-                        continue
-                    reward_spread_total += float(max(rewards) - min(rewards))
-                    reward_spread_count += 1
+                for b_idx, rewards in enumerate(grouped_rewards):
+                    if rewards:
+                        per_sample_reward_spread[b_idx] = float(max(rewards) - min(rewards))
+                        per_sample_has_reward[b_idx] = True
 
-                for token_sequences in grouped_token_sequences:
-                    if len(token_sequences) < 2:
-                        continue
-                    bleu_vals = []
-                    for i, cand in enumerate(token_sequences):
-                        refs = [r for j, r in enumerate(token_sequences) if j != i]
-                        bleu_vals.append(self._sentence_bleu(cand, refs))
-                    if bleu_vals:
-                        self_bleu_total += float(sum(bleu_vals) / len(bleu_vals))
-                        self_bleu_count += 1
+                for b_idx, token_sequences in enumerate(grouped_token_sequences):
+                    if len(token_sequences) >= 2:
+                        bleu_vals = []
+                        for i, cand in enumerate(token_sequences):
+                            refs = [r for j, r in enumerate(token_sequences) if j != i]
+                            bleu_vals.append(self._sentence_bleu(cand, refs))
+                        if bleu_vals:
+                            per_sample_self_bleu[b_idx] = float(sum(bleu_vals) / len(bleu_vals))
+                            per_sample_has_bleu[b_idx] = True
 
-        if self.trainer_kind is not None and self.trainer_kind != "ce" and reference_model_path is not None and kl_batches:
+                (
+                    gathered_entropy_num,
+                    gathered_entropy_den,
+                    gathered_action_lp,
+                    gathered_action_den,
+                    gathered_reward_spread,
+                    gathered_has_reward,
+                    gathered_self_bleu,
+                    gathered_has_bleu,
+                ) = self.trainer.accelerator.gather_for_metrics((
+                    per_sample_entropy_num.to(original_device),
+                    per_sample_entropy_den.to(original_device),
+                    per_sample_action_lp.to(original_device),
+                    per_sample_action_den.to(original_device),
+                    per_sample_reward_spread.to(original_device),
+                    per_sample_has_reward.to(original_device),
+                    per_sample_self_bleu.to(original_device),
+                    per_sample_has_bleu.to(original_device),
+                ))
+
+                entropy_num += float(gathered_entropy_num.sum().item())
+                entropy_den += float(gathered_entropy_den.sum().item())
+                action_lp_num += float(gathered_action_lp.sum().item())
+                action_lp_den += float(gathered_action_den.sum().item())
+                reward_spread_total += float(gathered_reward_spread[gathered_has_reward].sum().item())
+                reward_spread_count += int(gathered_has_reward.sum().item())
+                self_bleu_total += float(gathered_self_bleu[gathered_has_bleu].sum().item())
+                self_bleu_count += int(gathered_has_bleu.sum().item())
+
+                if self.trainer_kind is not None and self.trainer_kind != "ce" and reference_model_path is not None:
+                    shifted = sequences[:, :-1]
+                    sem_rep = semantic_embeddings.repeat_interleave(k, dim=0)
+                    kl_batches.append({
+                        "shifted": shifted.detach().cpu(),
+                        "semantic_embeddings": sem_rep.detach().cpu(),
+                        "token_mask_f": token_mask_f.detach().cpu(),
+                        "re_log_probs": score_log_probs.detach().cpu().to(dtype=torch.float32),
+                    })
+
+        if self.trainer_kind is not None and self.trainer_kind != "ce" \
+                and reference_model_path is not None and kl_batches:
             reference_model = None
             try:
-                model.to("cpu")
+                gen_model.to("cpu")
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
@@ -503,8 +549,7 @@ class SemanticEvaluationCallback(TrainerCallback):
 
                         t_steps = re_log_probs.size(1)
                         ce_logits = reference_model(
-                            input_ids=shifted,
-                            semantic_embeddings=sem_rep,
+                            input_ids=shifted, semantic_embeddings=sem_rep
                         ).logits[:, -t_steps:, :]
                         ce_log_probs = torch.log_softmax(ce_logits, dim=-1)
                         re_probs = torch.exp(re_log_probs)
@@ -516,11 +561,18 @@ class SemanticEvaluationCallback(TrainerCallback):
                     del reference_model
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-                model.to(original_device)
+                gen_model.to(original_device)
                 if original_training_mode:
-                    model.train()
+                    gen_model.train()
                 else:
-                    model.eval()
+                    gen_model.eval()
+
+            if is_dist:
+                kl_tensor = torch.tensor(
+                    [kl_num, kl_den], dtype=torch.float64, device=original_device
+                )
+                dist.all_reduce(kl_tensor, op=dist.ReduceOp.SUM)
+                kl_num, kl_den = kl_tensor[0].item(), kl_tensor[1].item()
 
         metrics: dict[str, float] = {}
         if reward_spread_count > 0:
@@ -556,17 +608,18 @@ class SemanticEvaluationCallback(TrainerCallback):
         generated_depth_sum = 0.0
         generated_length_sum = 0.0
 
-        model.eval()
+        gen_model = model.module if hasattr(model, "module") else model
+        gen_model.eval()
         with torch.no_grad():
             for batch in eval_dataloader:
                 input_ids = batch['input_ids'] 
-                target_embeddings = batch['semantic_embeddings'].to(model.device, non_blocking=True)
+                target_embeddings = batch['semantic_embeddings'].to(gen_model.device, non_blocking=True)
                 attention_mask = batch['attention_mask']
                 target_formulas = batch.get('target_formulas')
                 target_formula_strs = batch.get('target_formula_strs')
                 target_satisfaction = batch.get('target_satisfaction')
                 if target_satisfaction is not None:
-                    target_satisfaction = target_satisfaction.to(self.kernel.device)
+                    target_satisfaction = target_satisfaction.to(gen_model.device)
                 
                 if target_formula_strs is not None:
                     target_strs = target_formula_strs
@@ -581,10 +634,9 @@ class SemanticEvaluationCallback(TrainerCallback):
 
                 batch_size = target_embeddings.size(0)
 
-                gen_model = model.module if hasattr(model, 'module') else model
                 generated_ids = gen_model.generate(
                     semantic_embeddings=target_embeddings,
-                    max_length=model.config.n_positions,
+                    max_length=gen_model.config.n_positions,
                     num_beams=1,
                     early_stopping=True,
                     pad_token_id=self.tokenizer.pad_token_id,
@@ -593,13 +645,13 @@ class SemanticEvaluationCallback(TrainerCallback):
                 
                 generated_strs = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
 
-                per_sample_distance = torch.ones(size=(batch_size ,), device=self.kernel.device, dtype=torch.float32)
-                per_sample_exact_str_match = torch.zeros(size=(batch_size ,), device=self.kernel.device, dtype=torch.bool)
-                per_sample_semantic_equivalent = torch.zeros(size=(batch_size ,), device=self.kernel.device, dtype=torch.bool)
-                per_sample_incorrect = torch.zeros(size=(batch_size ,), device=self.kernel.device, dtype=torch.bool)
-                per_sample_invalid = torch.zeros(size=(batch_size ,), device=self.kernel.device, dtype=torch.bool)
-                per_sample_generated_depth = torch.zeros(size=(batch_size ,), device=self.kernel.device, dtype=torch.float32)
-                per_sample_generated_length = torch.zeros(size=(batch_size ,), device=self.kernel.device, dtype=torch.float32)
+                per_sample_distance = torch.ones(size=(batch_size ,), device=gen_model.device, dtype=torch.float32)
+                per_sample_exact_str_match = torch.zeros(size=(batch_size ,), device=gen_model.device, dtype=torch.bool)
+                per_sample_semantic_equivalent = torch.zeros(size=(batch_size ,), device=gen_model.device, dtype=torch.bool)
+                per_sample_incorrect = torch.zeros(size=(batch_size ,), device=gen_model.device, dtype=torch.bool)
+                per_sample_invalid = torch.zeros(size=(batch_size ,), device=gen_model.device, dtype=torch.bool)
+                per_sample_generated_depth = torch.zeros(size=(batch_size ,), device=gen_model.device, dtype=torch.float32)
+                per_sample_generated_length = torch.zeros(size=(batch_size ,), device=gen_model.device, dtype=torch.float32)
 
                 for i in range(batch_size):
                     generated_str = generated_strs[i]
@@ -651,7 +703,7 @@ class SemanticEvaluationCallback(TrainerCallback):
                  gathered_per_sample_invalid, 
                  gathered_per_sample_generated_depth, 
                  gathered_per_sample_generated_length 
-                 ) = self.trainer.accelerator.gather_for_metrics([
+                 ) = self.trainer.accelerator.gather_for_metrics((
                      per_sample_distance, 
                      per_sample_exact_str_match, 
                      per_sample_semantic_equivalent, 
@@ -659,7 +711,7 @@ class SemanticEvaluationCallback(TrainerCallback):
                      per_sample_invalid, 
                      per_sample_generated_depth, 
                      per_sample_generated_length
-                 ])
+                 ))
                 
                 total_distance += float(gathered_per_sample_distance.sum().item())
                 exact_string_matches += int(gathered_per_sample_exact_str_match.sum().item())
