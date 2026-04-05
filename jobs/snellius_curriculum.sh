@@ -2,7 +2,7 @@
 #SBATCH --job-name=kernelltl-curriculum
 #SBATCH --output=logs/kernelltl_curriculum_%j.out
 #SBATCH --error=logs/kernelltl_curriculum_%j.err
-#SBATCH --time=16:00:00
+#SBATCH --time=24:00:00
 #SBATCH --partition=gpu_h100
 #SBATCH --gpus=4
 #SBATCH --cpus-per-task=64
@@ -27,24 +27,25 @@ set -e  # Exit on error
 # USER CONFIGURATION
 # ============================================================================
 
-PROJECT_DIR="$HOME/KernelLTL"
-VENV_DIR="$PROJECT_DIR/venv"
+HOME_DIR="$HOME/KernelLTL"
+PROJECT_DIR="/projects/prjs2029/KernelLTL"
+VENV_DIR="$HOME_DIR/venv"
 
 # Shared artifacts
-KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
-TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
+KERNEL_DIR="$HOME_DIR/artifacts/kernel"
+TOKENIZER_DIR="$HOME_DIR/artifacts/tokenizer"
 
 # Home output directory (for persisted copies)
-HOME_OUTPUT_DIR="$PROJECT_DIR/artifacts/models/CE"
+HOME_OUTPUT_DIR="$HOME_DIR/artifacts/models/CE"
 
 # Scratch (fast) storage
 SCRATCH_BASE="/scratch-local/$USER/KernelLTL"
 SCRATCH_OUTPUT_BASE="$SCRATCH_BASE/models/CE"
 
 # Training defaults (can be overridden per stage)
-DEFAULT_LEARNING_RATE=5e-4
+DEFAULT_LEARNING_RATE=1e-4
 DEFAULT_BATCH_SIZE=64
-DEFAULT_WARMUP_STEPS=500
+DEFAULT_WARMUP_STEPS=0.05
 
 # Mixed precision
 MIXED_PRECISION="--bf16"
@@ -61,13 +62,14 @@ EVAL_BATCH_SIZE="81920"
 # ============================================================================
 
 STAGE_CONFIGS=(
-    "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:75:1e-5:64" 
+    
+    "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:100:1e-4:64"
+    "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts/datasets/stage2/eval:100:5e-5:64"
+    "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:100:1e-5:64"
+    "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:100:5e-6:64" 
+
 )   
     # "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:10:1e-4:64"
-    # "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:50:5e-5:64"
-    # "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts/datasets/stage2/eval:100:1e-5:64"
-    # "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:100:1e-5:64"
-
 
 # ============================================================================
 # ENVIRONMENT SETUP
@@ -80,7 +82,7 @@ echo "Node: $SLURMD_NODENAME"
 echo "Start time: $(date)"
 echo "=============================================="
 
-mkdir -p "$PROJECT_DIR/logs"
+mkdir -p "$HOME_DIR/logs"
 
 # Load modules
 module purge
@@ -88,7 +90,7 @@ module load 2025
 module load Python/3.13.1-GCCcore-14.2.0
 module load CUDA/12.8.0
 
-cd "$PROJECT_DIR"
+cd "$HOME_DIR"
 
 # Setup virtual environment
 if [ ! -d "$VENV_DIR" ]; then
@@ -101,7 +103,7 @@ else
     source "$VENV_DIR/bin/activate"
 fi
 
-export PYTHONPATH="$PROJECT_DIR:$PYTHONPATH"
+export PYTHONPATH="$HOME_DIR:$PYTHONPATH"
 
 NUM_GPUS=$(nvidia-smi -L | wc -l)
 echo "Number of GPUs: $NUM_GPUS"

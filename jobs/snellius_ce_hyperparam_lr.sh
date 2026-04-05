@@ -2,7 +2,7 @@
 #SBATCH --job-name=kernelltl-lr-sweep
 #SBATCH --output=logs/kernelltl_lr_sweep_%j.out
 #SBATCH --error=logs/kernelltl_lr_sweep_%j.err
-#SBATCH --time=72:00:00          # 5 runs * ~14h each worst-case; early stopping reduces this significantly
+#SBATCH --time=10:00:00
 #SBATCH --partition=gpu_h100
 #SBATCH --gpus=4
 #SBATCH --cpus-per-task=64
@@ -32,15 +32,16 @@ set -e  # Exit on error
 # USER CONFIGURATION
 # ============================================================================
 
-PROJECT_DIR="$HOME/KernelLTL"
-VENV_DIR="$PROJECT_DIR/venv"
+PROJECT_DIR="/projects/prjs2029/KernelLTL"
+HOME_DIR="$HOME/KernelLTL"
+VENV_DIR="$HOME_DIR/venv"
 
 # Shared artifacts
-KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
-TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
+KERNEL_DIR="$HOME_DIR/artifacts/kernel"
+TOKENIZER_DIR="$HOME_DIR/artifacts/tokenizer"
 
 # Output directories
-HOME_OUTPUT_DIR="$PROJECT_DIR/artifacts/models/CE/sweep"
+HOME_OUTPUT_DIR="$HOME_DIR/artifacts/models/CE/sweep"
 SCRATCH_BASE="/scratch-local/$USER/KernelLTL"
 SCRATCH_OUTPUT_BASE="$SCRATCH_BASE/models/CE/sweep"
 
@@ -55,7 +56,7 @@ EVAL_DIR="$PROJECT_DIR/artifacts/datasets/stage1/eval"
 # Five learning rates on a log-uniform scale spanning two decades.
 # Adjust these values to focus the sweep on a narrower range once you have
 # a rough idea of where the optimum lies.
-LR_VALUES=("1e-5" "5e-5" "1e-4" "5e-4" "1e-3")
+LR_VALUES=("5e-6" "1e-5" "5e-5" "1e-4" "5e-4")
 
 # Max epochs per run. Early stopping will cut this short in practice.
 # Keep this high enough that well-behaved runs have time to converge.
@@ -73,8 +74,8 @@ EARLY_STOPPING_PATIENCE=10
 EARLY_STOPPING_THRESHOLD=0.0
 
 # Fixed training settings (shared across all runs for a fair comparison)
-DEFAULT_BATCH_SIZE=64
-DEFAULT_WARMUP_STEPS=500
+DEFAULT_BATCH_SIZE=256
+DEFAULT_WARMUP_STEPS=0.05
 MIXED_PRECISION="--bf16"
 EVAL_BATCH_SIZE="81920"
 
@@ -92,7 +93,7 @@ echo "Max epochs per run: $EPOCHS"
 echo "Early stopping patience: $EARLY_STOPPING_PATIENCE"
 echo "=============================================="
 
-mkdir -p "$PROJECT_DIR/logs"
+mkdir -p "$HOME_DIR/logs"
 
 # Load modules
 module purge
@@ -100,7 +101,7 @@ module load 2025
 module load Python/3.13.1-GCCcore-14.2.0
 module load CUDA/12.8.0
 
-cd "$PROJECT_DIR"
+cd "$HOME_DIR"
 
 # Setup virtual environment
 if [ ! -d "$VENV_DIR" ]; then
@@ -113,24 +114,10 @@ else
     source "$VENV_DIR/bin/activate"
 fi
 
-export PYTHONPATH="$PROJECT_DIR:$PYTHONPATH"
+export PYTHONPATH="$HOME_DIR:$PYTHONPATH"
 
 NUM_GPUS=$(nvidia-smi -L | wc -l)
 echo "Number of GPUs: $NUM_GPUS"
-
-# ============================================================================
-# COPY DATASETS TO SCRATCH
-# ============================================================================
-# Copy once and reuse across all LR runs to avoid redundant I/O.
-
-SCRATCH_TRAIN_DIR="$SCRATCH_BASE/datasets/stage1/train"
-SCRATCH_EVAL_DIR="$SCRATCH_BASE/datasets/stage1/eval"
-
-echo ""
-echo "Copying datasets to scratch..."
-mkdir -p "$SCRATCH_TRAIN_DIR" "$SCRATCH_EVAL_DIR"
-cp -r "$TRAIN_DIR/." "$SCRATCH_TRAIN_DIR/"
-cp -r "$EVAL_DIR/." "$SCRATCH_EVAL_DIR/"
 
 # ============================================================================
 # RUN SWEEP
@@ -162,8 +149,8 @@ for LR in "${LR_VALUES[@]}"; do
     CMD_ARGS=(
         "--kernel-dir"                   "$KERNEL_DIR"
         "--tokenizer-dir"                "$TOKENIZER_DIR"
-        "--train-dataset-dir"            "$SCRATCH_TRAIN_DIR"
-        "--eval-dataset-dir"             "$SCRATCH_EVAL_DIR"
+        "--train-dataset-dir"            "$TRAIN_DIR"
+        "--eval-dataset-dir"             "$EVAL_DIR"
         "--output-dir"                   "$STAGE_OUTPUT_DIR"
         "--model-save-dir"               "$STAGE_MODEL_SAVE_DIR"
         "--num-train-epochs"             "$EPOCHS"
