@@ -28,24 +28,10 @@ class CETrainer(Trainer):
         outputs = model(**inputs)
         loss = outputs.loss if hasattr(outputs, "loss") and outputs.loss is not None else outputs[0]
 
-        logits = getattr(outputs, "logits", None)
-        labels = inputs.get("labels")
-        policy_entropy = None
-        if logits is not None and labels is not None:
-            token_log_probs = torch.log_softmax(logits, dim=-1)
-            token_probs = torch.exp(token_log_probs)
-            token_entropy = -(token_probs * token_log_probs).sum(dim=-1)
-            token_mask = labels.ne(-100)
-            token_mask_f = token_mask.to(token_entropy.dtype)
-            denom = token_mask_f.sum().clamp(min=1.0)
-            policy_entropy = (token_entropy * token_mask_f).sum() / denom
-
         self._last_train_metrics = {
             "train_loss": loss.detach(),
         }
-        if policy_entropy is not None:
-            self._last_train_metrics["train_policy_entropy"] = policy_entropy.detach()
-
+        
         if return_outputs:
             return loss, outputs
         return loss

@@ -49,12 +49,13 @@ class REINFORCETrainerRB(Trainer):
         num_items_in_batch: int | None = None,
         return_outputs: bool = False,
     ):
+        self._last_rl_metrics = {}
         # ----------- REINFORCE loss -----------
-        semantic_embeddings = inputs.get("semantic_embeddings")
+        encoder_hidden_states = inputs.get("encoder_hidden_states")
         attention_mask = inputs.get("attention_mask")
         batch_formula_ids = inputs.get("formula_ids")
         generation_max_length: int | None = None
-        if semantic_embeddings is not None:
+        if encoder_hidden_states is not None:
             if attention_mask is not None:
                 generation_max_length = int(attention_mask.size(-1))
             elif hasattr(model, "config") and getattr(model.config, "n_positions", None):
@@ -65,12 +66,12 @@ class REINFORCETrainerRB(Trainer):
         reinforce_loss = None
         valid_mask = None
         if (
-            semantic_embeddings is not None
+            encoder_hidden_states is not None
             and generation_max_length is not None
         ):
             reinforce_loss, valid_mask = self._compute_reinforce_term(
                 model=model,
-                semantic_embeddings=semantic_embeddings,
+                encoder_hidden_states=encoder_hidden_states,
                 batch_formula_ids=batch_formula_ids,
                 generation_max_length=generation_max_length,
                 require_grad=model.training,
@@ -89,6 +90,7 @@ class REINFORCETrainerRB(Trainer):
                 "train_rl_loss": zero,
                 "train_ce_loss": ce_loss.detach(),
             }
+            self._last_train_metrics.update(self._last_rl_metrics)
             if return_outputs:
                 return ce_loss, outputs
             return ce_loss
@@ -135,13 +137,13 @@ class REINFORCETrainerRB(Trainer):
         self,
         *,
         model,
-        semantic_embeddings: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
         generation_max_length: int,
         batch_formula_ids: torch.Tensor | None = None,
         require_grad: bool = False,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        if semantic_embeddings is None or semantic_embeddings.ndim < 2:
-            print("[REINFORCETrainer] RL: semantic_embeddings invalid -> returning None")
+        if encoder_hidden_states is None or encoder_hidden_states.ndim < 2:
+            print("[REINFORCETrainer] RL: encoder_hidden_states invalid -> returning None")
             return None, None
 
         if batch_formula_ids is None:
@@ -161,7 +163,7 @@ class REINFORCETrainerRB(Trainer):
         bos_id = getattr(self.formula_tokenizer, "bos_token_id", None)
 
         generate_kwargs: dict[str, object] = {
-            "semantic_embeddings": semantic_embeddings,
+            "encoder_hidden_states": encoder_hidden_states,
             "do_sample": True,
             "max_new_tokens": generation_max_length,
             "num_beams": 1,
@@ -211,7 +213,7 @@ class REINFORCETrainerRB(Trainer):
                 model=model,
                 sequences=sequences,
                 generated_tokens=generated_tokens,
-                semantic_embeddings=semantic_embeddings,
+                encoder_hidden_states=encoder_hidden_states,
                 prefix_len=prefix_len,
                 pad_id=pad_id,
             )
@@ -222,6 +224,9 @@ class REINFORCETrainerRB(Trainer):
 
         token_mask = (generated_tokens != pad_id)
         token_mask_f = token_mask.to(dtype=token_log_probs.dtype)
+        token_count_per_sample = token_mask_f.sum(dim=1).detach()
+        token_entropy_sum = ((token_entropy * token_mask_f).sum(dim=1)).detach()
+        train_action_log_prob_sum = ((score_log_probs.amax(dim=-1)) * token_mask_f).sum(dim=1).detach()
 
         generated_tokens_cpu = generated_tokens.detach().cpu()
         try:
@@ -232,7 +237,7 @@ class REINFORCETrainerRB(Trainer):
             print("[REINFORCETrainer] RL: batch_decode failed:", repr(e))
             return None, None
 
-        reward_values: list[torch.Tensor] = []
+        reward_tensor = torch.zeros(len(generated_strings), dtype=token_log_probs.dtype, device=device)
         valid_mask = torch.zeros(len(generated_strings), dtype=torch.bool, device=device)
 
         with torch.no_grad():
@@ -249,24 +254,30 @@ class REINFORCETrainerRB(Trainer):
                     valid_mask[i] = True
                     if self.reward_clip is not None:
                         reward = torch.clamp(reward, min=-self.reward_clip, max=self.reward_clip)
-                    reward_values.append(reward)
+                    reward_tensor[i] = reward
                 except Exception:
                     continue
 
         if not bool(valid_mask.any()):
-            self._last_rl_metrics = {}
+            self._last_rl_metrics = {
+                "token_count_per_sample": token_count_per_sample,
+                "token_entropy_sum": token_entropy_sum,
+                "train_action_log_prob_sum": train_action_log_prob_sum,
+                "valid_formula_mask_per_sample": valid_mask.detach(),
+                "reward_per_sample": reward_tensor.detach(),
+                "advantage_per_sample": torch.zeros_like(reward_tensor),
+            }
             return None, valid_mask
 
         valid_idx = valid_mask.nonzero(as_tuple=False).squeeze(-1)
+        reward_valid = reward_tensor[valid_idx]
         token_log_probs = token_log_probs[valid_idx]
-        token_entropy = token_entropy[valid_idx]
         token_mask = token_mask[valid_idx]
         token_mask_f = token_mask_f[valid_idx]
-        reward_tensor = torch.stack(reward_values).to(device=device, dtype=token_log_probs.dtype)
         lengths_valid = token_mask.sum(dim=-1).clamp(min=1)
         seq_log_prob = (token_log_probs * token_mask_f).sum(dim=-1) / lengths_valid
-        reward_mean = reward_tensor.mean().detach()
-        reward_sq_mean = (reward_tensor ** 2).mean().detach()
+        reward_mean = reward_valid.mean().detach()
+        reward_sq_mean = (reward_valid ** 2).mean().detach()
 
         if self._reward_baseline is None or self._reward_sq_mean is None:
             self._reward_baseline = reward_mean
@@ -286,23 +297,25 @@ class REINFORCETrainerRB(Trainer):
         baseline = self._reward_baseline.to(device=device, dtype=reward_tensor.dtype)
         variance = (self._reward_sq_mean.to(device=device, dtype=reward_tensor.dtype) - baseline.square()).clamp(min=1e-8)
         std = variance.sqrt().clamp(min=1e-4)
-        advantage = ((reward_tensor - baseline) / std).detach()
+        advantage_valid = ((reward_valid - baseline) / std).detach()
+        advantage_per_sample = torch.zeros_like(reward_tensor)
+        advantage_per_sample[valid_idx] = advantage_valid
 
-        reinforce_loss = -(advantage * seq_log_prob).mean() 
+        reinforce_loss = -(advantage_valid * seq_log_prob).mean()
 
-        action_logprob_mean = seq_log_prob.mean().detach()
+        """ action_logprob_mean = seq_log_prob.mean().detach()
         reward_var = reward_tensor.var(unbiased=False).detach()
         advantage_mean = advantage.mean().detach()
         advantage_var = advantage.var(unbiased=False).detach()
-        policy_entropy = ((token_entropy * token_mask_f).sum() / token_mask_f.sum().clamp(min=1.0)).detach()
+        policy_entropy = ((token_entropy * token_mask_f).sum() / token_mask_f.sum().clamp(min=1.0)).detach() """
 
         self._last_rl_metrics = {
-            "train_action_logprob_mean": action_logprob_mean,
-            "train_reward_mean": reward_mean,
-            "train_reward_variance": reward_var,
-            "train_advantage_mean": advantage_mean,
-            "train_advantage_variance": advantage_var,
-            "train_policy_entropy": policy_entropy,
+            "token_count_per_sample": token_count_per_sample,
+            "token_entropy_sum": token_entropy_sum,
+            "train_action_log_prob_sum": train_action_log_prob_sum,
+            "valid_formula_mask_per_sample": valid_mask.detach(),
+            "reward_per_sample": reward_tensor.detach(),
+            "advantage_per_sample": advantage_per_sample.detach(),
         }
     
         
@@ -345,7 +358,7 @@ class REINFORCETrainerRB(Trainer):
         model,
         sequences: torch.Tensor,
         generated_tokens: torch.Tensor,
-        semantic_embeddings: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
         prefix_len: int,
         pad_id: int | None,
     ) -> torch.Tensor:
@@ -356,7 +369,7 @@ class REINFORCETrainerRB(Trainer):
         with torch.enable_grad():
             outputs = model(
                 input_ids=shifted_inputs,
-                semantic_embeddings=semantic_embeddings,
+                encoder_hidden_states=encoder_hidden_states,
             )
             logits = outputs.logits[:, -target_len:, :]
             log_probs = torch.log_softmax(logits, dim=-1)
@@ -391,8 +404,8 @@ class REINFORCETrainerGAE(Trainer):
             reward_clip: float | None = 1.0,
             semantic_eval_batch_size: int = 10240,
             satisfactions_path: str | None = None,
-            gae_gamma: float = 0.99,
-            gae_lambda: float = 0.95,
+            gae_gamma: float = 1.0,
+            gae_lambda: float = 1.0,
             critic_loss_coef: float = 0.5,
             critic_lr: float | None = None,
             critic_hidden_dim: int = 256,
@@ -444,12 +457,13 @@ class REINFORCETrainerGAE(Trainer):
         num_items_in_batch: int | None = None,
         return_outputs: bool = False,
     ):
+        self._last_rl_metrics = {}
         # ----------- REINFORCE loss -----------
-        semantic_embeddings = inputs.get("semantic_embeddings")
+        encoder_hidden_states = inputs.get("encoder_hidden_states")
         attention_mask = inputs.get("attention_mask")
         batch_formula_ids = inputs.get("formula_ids")
         generation_max_length: int | None = None
-        if semantic_embeddings is not None:
+        if encoder_hidden_states is not None:
             if attention_mask is not None:
                 generation_max_length = int(attention_mask.size(-1))
             elif hasattr(model, "config") and getattr(model.config, "n_positions", None):
@@ -460,12 +474,12 @@ class REINFORCETrainerGAE(Trainer):
         reinforce_loss = None
         valid_mask = None
         if (
-            semantic_embeddings is not None
+            encoder_hidden_states is not None
             and generation_max_length is not None
         ):
             reinforce_loss, valid_mask = self._compute_reinforce_term(
                 model=model,
-                semantic_embeddings=semantic_embeddings,
+                encoder_hidden_states=encoder_hidden_states,
                 batch_formula_ids=batch_formula_ids,
                 generation_max_length=generation_max_length,
                 require_grad=model.training,
@@ -484,6 +498,7 @@ class REINFORCETrainerGAE(Trainer):
                 "train_rl_loss": zero,
                 "train_ce_loss": ce_loss.detach(),
             }
+            self._last_train_metrics.update(self._last_rl_metrics)
             if return_outputs:
                 return ce_loss, outputs
             return ce_loss
@@ -531,13 +546,13 @@ class REINFORCETrainerGAE(Trainer):
         self,
         *,
         model,
-        semantic_embeddings: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
         generation_max_length: int,
         batch_formula_ids: torch.Tensor | None = None,
         require_grad: bool = False,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        if semantic_embeddings is None or semantic_embeddings.ndim < 2:
-            print("[REINFORCETrainer] RL: semantic_embeddings invalid -> returning None")
+        if encoder_hidden_states is None or encoder_hidden_states.ndim < 2:
+            print("[REINFORCETrainer] RL: encoder_hidden_states invalid -> returning None")
             return None, None
 
         if batch_formula_ids is None:
@@ -561,7 +576,7 @@ class REINFORCETrainerGAE(Trainer):
             return None, None
 
         generate_kwargs: dict[str, object] = {
-            "semantic_embeddings": semantic_embeddings,
+            "encoder_hidden_states": encoder_hidden_states,
             "do_sample": True,
             "max_new_tokens": generation_max_length,
             "num_beams": 1,
@@ -610,7 +625,7 @@ class REINFORCETrainerGAE(Trainer):
             model=model,
             sequences=sequences,
             generated_tokens=generated_tokens,
-            semantic_embeddings=semantic_embeddings,
+            encoder_hidden_states=encoder_hidden_states,
             prefix_len=prefix_len,
             pad_id=pad_id,
             require_grad=require_grad,
@@ -618,6 +633,9 @@ class REINFORCETrainerGAE(Trainer):
 
         token_mask = (generated_tokens != pad_id)
         token_mask_f = token_mask.to(dtype=token_log_probs.dtype)
+        token_count_per_sample = token_mask_f.sum(dim=1).detach()
+        token_entropy_sum = ((token_entropy * token_mask_f).sum(dim=1)).detach()
+        train_action_log_prob_sum = ((score_log_probs.amax(dim=-1)) * token_mask_f).sum(dim=1).detach()
 
         generated_tokens_cpu = generated_tokens.detach().cpu()
         try:
@@ -628,7 +646,7 @@ class REINFORCETrainerGAE(Trainer):
             print("[REINFORCETrainer] RL: batch_decode failed:", repr(e))
             return None, None
 
-        reward_values: list[torch.Tensor] = []
+        reward_tensor = torch.zeros(len(generated_strings), dtype=token_log_probs.dtype, device=device)
         valid_mask = torch.zeros(len(generated_strings), dtype=torch.bool, device=device)
 
         with torch.no_grad():
@@ -645,26 +663,37 @@ class REINFORCETrainerGAE(Trainer):
                     valid_mask[i] = True
                     if self.reward_clip is not None:
                         reward = torch.clamp(reward, min=-self.reward_clip, max=self.reward_clip)
-                    reward_values.append(reward)
+                    reward_tensor[i]=reward
                 except Exception:
                     continue
 
         if not bool(valid_mask.any()):
-            self._last_rl_metrics = {}
+            zeros_per_sample = torch.zeros_like(reward_tensor)
+            self._last_rl_metrics = {
+                "token_count_per_sample": token_count_per_sample,
+                "token_entropy_sum": token_entropy_sum,
+                "train_action_log_prob_sum": train_action_log_prob_sum,
+                "valid_formula_mask_per_sample": valid_mask.detach(),
+                "reward_per_sample": reward_tensor.detach(),
+                "advantage_per_sample": zeros_per_sample,
+                "value_sum_per_sample": zeros_per_sample,
+                "returns_sum": zeros_per_sample,
+                "returns_sq_sum": zeros_per_sample,
+                "value_err_sq_sum": zeros_per_sample,
+                "value_err_sum": zeros_per_sample,
+            }
             return None, valid_mask
 
         valid_idx = valid_mask.nonzero(as_tuple=False).squeeze(-1)
+        reward_valid = reward_tensor[valid_idx]
         token_log_probs = token_log_probs[valid_idx]
-        token_entropy = token_entropy[valid_idx]
         token_hidden = token_hidden[valid_idx].detach()
         token_mask = token_mask[valid_idx]
         token_mask_f = token_mask_f[valid_idx]
-        semantic_valid = semantic_embeddings[valid_idx]
-        reward_tensor = torch.stack(reward_values).to(device=device, dtype=token_log_probs.dtype)
+        semantic_valid = encoder_hidden_states[valid_idx]
         lengths_valid = token_mask.sum(dim=-1).clamp(min=1)
-        seq_log_prob = (token_log_probs * token_mask_f).sum(dim=-1) / lengths_valid
         rewards = torch.zeros_like(token_log_probs)
-        rewards.scatter_(1, (lengths_valid - 1).unsqueeze(-1), reward_tensor.unsqueeze(-1))
+        rewards.scatter_(1, (lengths_valid - 1).unsqueeze(-1), reward_valid.unsqueeze(-1))
 
         Bv, Tv, _ = token_hidden.shape
         sem_expanded = semantic_valid.unsqueeze(1).expand(Bv, Tv, semantic_valid.size(-1))
@@ -693,7 +722,28 @@ class REINFORCETrainerGAE(Trainer):
         critic_loss = torch.nn.functional.mse_loss(values * token_mask_f, returns, reduction="sum") / denom
         reinforce_loss = actor_loss + self.critic_loss_coef * critic_loss
 
-        values_mean = (values * token_mask_f).sum() / denom
+        advantage_per_sample = torch.zeros_like(reward_tensor)
+        advantage_per_sample[valid_idx] = (advantages * token_mask_f).sum(dim=1).detach()
+
+        value_sum_per_sample = torch.zeros_like(reward_tensor)
+        value_sum_per_sample[valid_idx] = (values * token_mask_f).sum(dim=1).detach()
+
+        returns_masked = returns * token_mask_f
+        returns_sum = torch.zeros_like(reward_tensor)
+        returns_sum[valid_idx] = returns_masked.sum(dim=1).detach()
+
+        returns_sq_sum = torch.zeros_like(reward_tensor)
+        returns_sq_sum[valid_idx] = (returns_masked * returns_masked).sum(dim=1).detach()
+
+        value_err = (returns - values)
+        value_err_masked = value_err * token_mask_f
+        value_err_sq_sum = torch.zeros_like(reward_tensor)
+        value_err_sq_sum[valid_idx] = (value_err_masked * value_err_masked).sum(dim=1).detach()
+
+        value_err_sum = torch.zeros_like(reward_tensor)
+        value_err_sum[valid_idx] = value_err_masked.sum(dim=1).detach()
+
+        """ values_mean = (values * token_mask_f).sum() / denom
         adv_mean = (advantages * token_mask_f).sum() / denom
         adv_centered = (advantages - adv_mean) * token_mask_f
         adv_var = (adv_centered * adv_centered).sum() / denom
@@ -708,19 +758,21 @@ class REINFORCETrainerGAE(Trainer):
         action_logprob_mean = seq_log_prob.mean().detach()
         reward_mean = reward_tensor.mean().detach()
         reward_var = reward_tensor.var(unbiased=False).detach()
-        policy_entropy = ((token_entropy * token_mask_f).sum() / denom).detach()
+        policy_entropy = ((token_entropy * token_mask_f).sum() / denom).detach() """
 
         self._last_rl_metrics = {
-            "train_action_logprob_mean": action_logprob_mean,
-            "train_reward_mean": reward_mean,
-            "train_reward_variance": reward_var,
-            "train_advantage_mean": adv_mean.detach(),
-            "train_advantage_variance": adv_var.detach(),
-            "train_value_loss": critic_loss.detach(),
-            "train_value_mean": values_mean.detach(),
-            "train_value_explained_variance": explained_var.detach(),
-            "train_policy_entropy": policy_entropy,
-        }
+            "token_count_per_sample": token_count_per_sample,
+            "token_entropy_sum": token_entropy_sum,
+            "train_action_log_prob_sum": train_action_log_prob_sum,
+            "valid_formula_mask_per_sample": valid_mask.detach(),
+            "reward_per_sample": reward_tensor.detach(),
+            "advantage_per_sample": advantage_per_sample,
+            "value_sum_per_sample": value_sum_per_sample,
+            "returns_sum": returns_sum,
+            "returns_sq_sum": returns_sq_sum,
+            "value_err_sq_sum": value_err_sq_sum,
+            "value_err_sum": value_err_sum,
+            }
 
         return reinforce_loss, valid_mask
 
@@ -760,7 +812,7 @@ class REINFORCETrainerGAE(Trainer):
         model,
         sequences: torch.Tensor,
         generated_tokens: torch.Tensor,
-        semantic_embeddings: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
         prefix_len: int,
         pad_id: int | None,
         require_grad: bool,
@@ -773,7 +825,7 @@ class REINFORCETrainerGAE(Trainer):
         with grad_ctx:
             outputs = model(
                 input_ids=shifted_inputs,
-                semantic_embeddings=semantic_embeddings,
+                encoder_hidden_states=encoder_hidden_states,
                 output_hidden_states=True,
             )
             logits = outputs.logits[:, -target_len:, :]
