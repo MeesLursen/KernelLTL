@@ -204,7 +204,7 @@ class LTLTokenizer:
                       max_len: int,
                       include_metadata: bool = False):
 
-        semantic_embeddings_ls = []
+        encoder_hidden_states_ls = []
         input_ids_ls = []
         formulas_ls: list[Formula] = []
         formula_strs_ls: list[str] = []
@@ -222,7 +222,7 @@ class LTLTokenizer:
 
             ids = torch.tensor(self.encode(formula_str, max_length=max_len), dtype=torch.long)
             input_ids_ls.append(ids)
-            semantic_embeddings_ls.append(emb)
+            encoder_hidden_states_ls.append(emb)
             formulas_ls.append(formula)
             formula_strs_ls.append(formula_str)
             formula_ids_list.append(idx)
@@ -236,7 +236,7 @@ class LTLTokenizer:
         loss_labels = input_ids.clone()
         loss_labels[loss_labels == self.pad_token_id] = -100
 
-        semantic_embs = torch.stack(semantic_embeddings_ls, dim=0).to(dtype=torch.float32)  # (B, m)
+        semantic_embs = torch.stack(encoder_hidden_states_ls, dim=0).to(dtype=torch.float32)  # (B, m)
 
         formula_ids = torch.tensor(formula_ids_list, dtype=torch.long)
 
@@ -244,7 +244,7 @@ class LTLTokenizer:
             "labels": loss_labels,
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "semantic_embeddings": semantic_embs,
+            "encoder_hidden_states": semantic_embs,
             "formula_ids": formula_ids,
         }
 
