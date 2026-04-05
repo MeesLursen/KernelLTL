@@ -53,6 +53,9 @@ MIXED_PRECISION="--bf16"
 # Evaluation Batch Size
 EVAL_BATCH_SIZE="81920"
 
+EARLY_STOPPING_PATIENCE=10
+EARLY_STOPPING_THRESHOLD=0.0
+
 # ============================================================================
 # STAGE CONFIGURATION
 # ============================================================================
