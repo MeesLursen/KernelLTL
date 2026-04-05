@@ -7,7 +7,7 @@ from formula_class import eval_traces_batch, Formula, Atom, And, Next, Not
 from formula_utils import sample_traces, sample_traces_correlated, sample_formulas, str_to_formula
 
 class LTLKernel:
-    def __init__(self, T: int, AP: int, device: str | None = None, time_index: int = 0, seed: int | None = None):
+    def __init__(self, T: int, AP: int, time_index: int = 0, device: str | None = None, seed: int | None = None):
         """
         Kernel for LTL formulas based on sampled traces.
 
@@ -376,6 +376,7 @@ class LTLKernel:
             "AP": self.AP,
             "seed": self.seed,
             "device": self.device,
+            "time_index": self.time_index,
             "m": self.m,
             "has_traces": self.traces is not None,
             "has_F": self.F is not None,
@@ -423,7 +424,7 @@ class LTLKernel:
         else:
             resolved_device = metadata["device"]
 
-        kernel = cls(T=int(metadata["T"]), AP=int(metadata["AP"]), device=resolved_device, seed=metadata.get("seed"))
+        kernel = cls(T=int(metadata["T"]), AP=int(metadata["AP"]), time_index=int(metadata["time_index"]), device=resolved_device, seed=metadata.get("seed"))
 
         # Anchor formulas
         anchor_path = os.path.join(dirpath, "anchor_formulas.jsonl")
