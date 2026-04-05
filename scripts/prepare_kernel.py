@@ -34,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trace-length", type=_positive_int, default=20, help="Maximum trace horizon T")
     parser.add_argument("--num-atomic-props", type=_positive_int, default=5, help="Number of atomic propositions (AP)")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
+    parser.add_argument("--time_index", type=int, default=0, help="Time index at which formulae will be evaluated.")
 
     trace_group = parser.add_argument_group("Trace sampling")
     trace_group.add_argument("--num-traces", type=_positive_int, default=None, help="Explicit number of traces to sample. Overrides eps/delta heuristic if provided.")
@@ -99,7 +100,7 @@ def main() -> None:
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
 
-    kernel = LTLKernel(T=args.trace_length, AP=args.num_atomic_props, seed=args.seed)
+    kernel = LTLKernel(T=args.trace_length, AP=args.num_atomic_props, time_index=args.time_index, seed=args.seed)
 
     if args.num_traces is not None:
         num_traces = args.num_traces
