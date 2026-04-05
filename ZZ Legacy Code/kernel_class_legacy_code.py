@@ -214,7 +214,6 @@ class LTLKernel:
         - AP: specifies the number of atomic propositions available to each formula.
         - rng: specifies the random number generator used, for reproducibility.
         """
-        # TODO: Make sure that sampled formulae are not to similar to each other on the sampled traces.
         sample = sample_formulas(n_formula=m,
                                  p_leaf=p_leaf,
                                  max_depth=max_depth,

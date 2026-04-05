@@ -548,7 +548,7 @@ class HybridTrainer(Trainer):
                     generated_vec = generated_vec.to(device=device, dtype=torch.float32, non_blocking=True)
                     target_vec = target_vec.to(device=device, dtype=torch.float32, non_blocking=True)
                     diff = generated_vec - target_vec
-                    nmse = diff.pow(2).sum() / (target_vec.pow(2).sum() + self._nmse_eps) #TODO: probably redo this with full sats vecs instead.
+                    nmse = diff.pow(2).sum() / (target_vec.pow(2).sum() + self._nmse_eps) 
                     reward = 1.0 - nmse
                     valid_count += 1
                     if should_inspect:
