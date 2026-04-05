@@ -1,10 +1,10 @@
 import os
 import torch
 import torch.nn as nn
-from transformers import AutoModelForCausalLM, GPT2LMHeadModel
+from transformers import GPT2LMHeadModel
 from config_class import LTLConfig
 
-class LTLModel(nn.Module):
+class LTLModel(GPT2LMHeadModel):
     """
     Wrapper that:
       - constructs an AutoModelForCausalLM using an LTLConfig
@@ -15,15 +15,10 @@ class LTLModel(nn.Module):
         Args:
             config: LTLConfig instanc
             semantic_emb_dim: dimensionality of your kernel embeddings (if provided, used to build projection)
-            device: torch.device (optional)
         """
-        super().__init__()
+        super().__init__(config)
 
         self.config = config
-
-        # instantiate HF causal LM (random init)
-        self.base: GPT2LMHeadModel = GPT2LMHeadModel(config)
-
         # projection from semantic embedding to model hidden size (if needed)
         self.semantic_emb_dim = semantic_emb_dim
         if semantic_emb_dim is not None and semantic_emb_dim != self.config.n_embd:
@@ -36,20 +31,20 @@ class LTLModel(nn.Module):
     @property
     def device(self) -> torch.device:
         """Current device of the underlying language model."""
-        return next(self.base.parameters()).device
+        return next(self.parameters()).device
 
 
 
-    def build_encoder_states(self, semantic_embeddings: torch.Tensor | None) -> torch.Tensor:
+    def build_encoder_states(self, encoder_hidden_states: torch.Tensor | None) -> torch.Tensor:
         """
         Convert kernel output (B, semantic_emb_dim) -> encoder_hidden_states (B, 1, n_embd).
         If encoder_proj is None and semantic_emb_dim==n_embd, this is effectively an unsqueeze.
         """
-        if semantic_embeddings is None:
+        if encoder_hidden_states is None:
             return None
 
         device = self.device
-        x = semantic_embeddings.to(device, non_blocking=True).float()  # (B, E_sem)
+        x = encoder_hidden_states.to(device, non_blocking=True).float()  # (B, E_sem)
         if self.encoder_proj is not None:
             x = self.encoder_proj(x)  # (B, n_embd)
         if x.ndim == 2:  # (B, n_embd)
@@ -57,14 +52,14 @@ class LTLModel(nn.Module):
         elif x.ndim == 3:
             return x                # assume already (B, 1, n_embd)
         else:
-            raise ValueError("semantic_embeddings must be (B, E) or (B, 1, E) after projection")
+            raise ValueError("encoder_hidden_states must be (B, E) or (B, 1, E) after projection")
 
 
 
     def forward(self, 
                 input_ids: torch.LongTensor | None = None,
                 attention_mask: torch.Tensor | None = None,
-                semantic_embeddings: torch.Tensor | None = None,
+                encoder_hidden_states: torch.Tensor | None = None,
                 encoder_attention_mask: torch.Tensor | None = None,
                 labels: torch.LongTensor | None = None,
                 **kwargs):
@@ -72,10 +67,9 @@ class LTLModel(nn.Module):
         Build encoder_hidden_states from semantic_embeddings and delegate to HF model.
         Extra kwargs are passed to HF model (use_cache, output_attentions, etc).
         """
-        # build encoder hidden states
         enc_states = None
-        if semantic_embeddings is not None:
-            enc_states = self.build_encoder_states(semantic_embeddings)
+        if encoder_hidden_states is not None:
+            enc_states = self.build_encoder_states(encoder_hidden_states)
             if encoder_attention_mask is None:
                 encoder_attention_mask = torch.ones(
                     enc_states.size(0),
@@ -84,17 +78,7 @@ class LTLModel(nn.Module):
                     device=self.device
                 )
 
-        # move inputs to device
-        if input_ids is not None:
-            input_ids = input_ids.to(self.device, non_blocking=True)
-        if attention_mask is not None:
-            attention_mask = attention_mask.to(self.device, non_blocking=True)
-        if labels is not None:
-            labels = labels.to(self.device, non_blocking=True)
-        if encoder_attention_mask is not None:
-            encoder_attention_mask = encoder_attention_mask.to(self.device, non_blocking=True)
-
-        outputs = self.base(
+        return super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
             encoder_hidden_states=enc_states,
@@ -102,18 +86,17 @@ class LTLModel(nn.Module):
             labels=labels,
             **kwargs
         )
-        return outputs
     
 
 
-    def generate(self, *args, semantic_embeddings: torch.Tensor | None = None, encoder_attention_mask: torch.Tensor | None = None, **kwargs):
+    def generate(self, *args, encoder_hidden_states: torch.Tensor | None = None, encoder_attention_mask: torch.Tensor | None = None, **kwargs):
         """
-        Same arguments semantics as HF generate but accept semantic_embeddings (B, E) and will inject encoder_hidden_states.
-        Example: generated = model.generate(input_ids=..., semantic_embeddings=sem, max_length=..., num_beams=...)
+        Same arguments semantics as HF generate and will inject a semantic embedding from the kernel as encoder_hidden_states.
+        Example: generated = model.generate(input_ids=..., encoder_hidden_states=sem, max_length=..., num_beams=...)
         """
         enc_states = None
-        if semantic_embeddings is not None:
-            enc_states = self.build_encoder_states(semantic_embeddings)
+        if encoder_hidden_states is not None:
+            enc_states = self.build_encoder_states(encoder_hidden_states)
             if encoder_attention_mask is None:
                 encoder_attention_mask = torch.ones(
                     enc_states.size(0),
@@ -123,14 +106,19 @@ class LTLModel(nn.Module):
                 )
 
         # pass through to HF generate, include encoder_hidden_states kwargs
-        return self.base.generate(*args, encoder_hidden_states=enc_states, encoder_attention_mask=encoder_attention_mask, **kwargs)
+        return super().generate(
+            *args,
+             encoder_hidden_states=enc_states, 
+             encoder_attention_mask=encoder_attention_mask, 
+             **kwargs
+             )
 
 
 
     # convenience saving/loading (saves projector separately)
-    def save_pretrained(self, save_directory: str):
+    def save_pretrained(self, save_directory: str, **kwargs):
         os.makedirs(save_directory, exist_ok=True)
-        self.base.save_pretrained(save_directory)
+        super().save_pretrained(save_directory, **kwargs)
         self.config.save_pretrained(save_directory)
         if self.encoder_proj is not None:
             torch.save(self.encoder_proj.state_dict(), os.path.join(save_directory, "encoder_proj.pt"))
@@ -138,48 +126,22 @@ class LTLModel(nn.Module):
 
 
     @classmethod
-    def from_pretrained(cls, load_directory: str, device: torch.device = None):
-        """
-        Load HF model from save_directory and attach a projection (expected to be saved at encoder_proj.pt).
-        Handles checkpoints saved with 'base.' prefix on keys.
-        """
+    def from_pretrained(cls, load_directory: str, **kwargs):
         cfg = LTLConfig.from_pretrained(load_directory)
         proj_path = os.path.join(load_directory, "encoder_proj.pt")
-        if not os.path.exists(proj_path):
-            semantic_emb_dim = None
-        else:
+        if os.path.exists(proj_path):
             semantic_emb_dim = torch.load(proj_path, map_location='cpu', weights_only=True)['weight'].size(dim=1)
-            
-        inst = cls(cfg, semantic_emb_dim=semantic_emb_dim)
-        
-        # Load weights manually to handle 'base.' prefix from LTLModel wrapper
-        weights_path = os.path.join(load_directory, "pytorch_model.bin")
-                
-        if os.path.exists(weights_path):
-            state_dict = torch.load(weights_path, map_location="cpu", weights_only=True)
-            
-            # Strip "base." prefix if present (from LTLModel wrapper saves)
-            new_state_dict = {}
-            for k, v in state_dict.items():
-                if k.startswith("base."):
-                    new_state_dict[k[5:]] = v  # Remove "base." prefix
-                else:
-                    new_state_dict[k] = v
-            
-            # Load into base model
-            missing, unexpected = inst.base.load_state_dict(new_state_dict, strict=False)
-            if missing:
-                print(f"Warning: Missing keys when loading base model: {missing[:10]}{'...' if len(missing) > 10 else ''}")
-            if unexpected:
-                print(f"Warning: Unexpected keys when loading base model: {unexpected[:10]}{'...' if len(unexpected) > 10 else ''}")
         else:
-            raise FileNotFoundError(f"No weights file found in {load_directory}")
-        
-        if device is not None:
-            inst.to(device)
-        
-        # Load projector if present
-        if inst.encoder_proj is not None and os.path.exists(proj_path):
-            inst.encoder_proj.load_state_dict(torch.load(proj_path, map_location="cpu", weights_only=True))
-        
-        return inst
+            semantic_emb_dim = None
+
+        model: LTLModel = super().from_pretrained(load_directory, config=cfg, **kwargs)
+        model.semantic_emb_dim = semantic_emb_dim
+        if semantic_emb_dim is not None and semantic_emb_dim != cfg.n_embd:
+            model.encoder_proj = nn.Linear(semantic_emb_dim, cfg.n_embd)
+            model.encoder_proj.load_state_dict(torch.load(proj_path, map_location="cpu", weights_only=True))
+            # Move to same device as model's first parameter
+            model.encoder_proj.to(model.device)
+        else:
+            model.encoder_proj = None
+
+        return model
