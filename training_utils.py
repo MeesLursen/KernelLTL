@@ -724,9 +724,11 @@ class SemanticEvaluationCallback(TrainerCallback):
             if self.trainer is not None:
                 reference_model_path = getattr(self.trainer, "_ce_reference_model_path", None)
         
-        reward_spread_total = 0.0
-        reward_spread_count = 0
+        reward_variance_total = 0.0
+        reward_mean_total = 0.0
+        reward_count = 0
         self_bleu_total = 0.0
+        self_bleu_sq_total = 0.0
         self_bleu_count = 0
         entropy_num = 0.0
         entropy_den = 0.0
@@ -803,7 +805,8 @@ class SemanticEvaluationCallback(TrainerCallback):
                 per_sample_action_lp = seq_lp_bk.sum(dim=1)                 # (B,)
                 per_sample_action_den = torch.full((batch_size,), float(k), dtype=torch.float32, device=original_device)
 
-                per_sample_reward_spread = torch.zeros(batch_size, dtype=torch.float32, device=original_device)
+                per_sample_reward_variance = torch.zeros(batch_size, dtype=torch.float32, device=original_device)
+                per_sample_reward_mean = torch.zeros(batch_size, dtype=torch.float32, device=original_device)
                 per_sample_has_reward = torch.zeros(batch_size, dtype=torch.bool, device=original_device)
                 per_sample_self_bleu = torch.zeros(batch_size, dtype=torch.float32, device=original_device)
                 per_sample_has_bleu = torch.zeros(batch_size, dtype=torch.bool, device=original_device)
@@ -845,7 +848,11 @@ class SemanticEvaluationCallback(TrainerCallback):
 
                 for b_idx, rewards in enumerate(grouped_rewards):
                     if rewards:
-                        per_sample_reward_spread[b_idx] = float(max(rewards) - min(rewards))
+                        rewards_t = torch.tensor(rewards, dtype=torch.float32, device=original_device)
+                        reward_mean = float(rewards_t.mean().item())
+                        reward_var = float(torch.var(rewards_t, unbiased=False).item())
+                        per_sample_reward_mean[b_idx] = reward_mean
+                        per_sample_reward_variance[b_idx] = reward_var
                         per_sample_has_reward[b_idx] = True
 
                 for b_idx, token_sequences in enumerate(grouped_token_sequences):
@@ -863,7 +870,8 @@ class SemanticEvaluationCallback(TrainerCallback):
                     gathered_entropy_den,
                     gathered_action_lp,
                     gathered_action_den,
-                    gathered_reward_spread,
+                    gathered_reward_variance,
+                    gathered_reward_mean,
                     gathered_has_reward,
                     gathered_self_bleu,
                     gathered_has_bleu,
@@ -872,7 +880,8 @@ class SemanticEvaluationCallback(TrainerCallback):
                     per_sample_entropy_den.to(original_device),
                     per_sample_action_lp.to(original_device),
                     per_sample_action_den.to(original_device),
-                    per_sample_reward_spread.to(original_device),
+                    per_sample_reward_variance.to(original_device),
+                    per_sample_reward_mean.to(original_device),
                     per_sample_has_reward.to(original_device),
                     per_sample_self_bleu.to(original_device),
                     per_sample_has_bleu.to(original_device),
@@ -889,7 +898,8 @@ class SemanticEvaluationCallback(TrainerCallback):
                                 "per_sample_entropy_den": int(per_sample_entropy_den.numel()),
                                 "per_sample_action_lp": int(per_sample_action_lp.numel()),
                                 "per_sample_action_den": int(per_sample_action_den.numel()),
-                                "per_sample_reward_spread": int(per_sample_reward_spread.numel()),
+                                "per_sample_reward_variance": int(per_sample_reward_variance.numel()),
+                                "per_sample_reward_mean": int(per_sample_reward_mean.numel()),
                                 "per_sample_has_reward": int(per_sample_has_reward.numel()),
                                 "per_sample_self_bleu": int(per_sample_self_bleu.numel()),
                                 "per_sample_has_bleu": int(per_sample_has_bleu.numel()),
@@ -899,7 +909,8 @@ class SemanticEvaluationCallback(TrainerCallback):
                                 "gathered_entropy_den": int(gathered_entropy_den.numel()),
                                 "gathered_action_lp": int(gathered_action_lp.numel()),
                                 "gathered_action_den": int(gathered_action_den.numel()),
-                                "gathered_reward_spread": int(gathered_reward_spread.numel()),
+                                "gathered_reward_variance": int(gathered_reward_variance.numel()),
+                                "gathered_reward_mean": int(gathered_reward_mean.numel()),
                                 "gathered_has_reward": int(gathered_has_reward.numel()),
                                 "gathered_self_bleu": int(gathered_self_bleu.numel()),
                                 "gathered_has_bleu": int(gathered_has_bleu.numel()),
@@ -911,9 +922,12 @@ class SemanticEvaluationCallback(TrainerCallback):
                 entropy_den += float(gathered_entropy_den.sum().item())
                 action_lp_num += float(gathered_action_lp.sum().item())
                 action_lp_den += float(gathered_action_den.sum().item())
-                reward_spread_total += float(gathered_reward_spread[gathered_has_reward].sum().item())
-                reward_spread_count += int(gathered_has_reward.sum().item())
-                self_bleu_total += float(gathered_self_bleu[gathered_has_bleu].sum().item())
+                reward_variance_total += float(gathered_reward_variance[gathered_has_reward].sum().item())
+                reward_mean_total += float(gathered_reward_mean[gathered_has_reward].sum().item())
+                reward_count += int(gathered_has_reward.sum().item())
+                valid_self_bleu = gathered_self_bleu[gathered_has_bleu].to(dtype=torch.float32)
+                self_bleu_total += float(valid_self_bleu.sum().item())
+                self_bleu_sq_total += float((valid_self_bleu * valid_self_bleu).sum().item())
                 self_bleu_count += int(gathered_has_bleu.sum().item())
 
                 if self.trainer_kind is not None and self.trainer_kind != "ce" and reference_model_path is not None:
@@ -973,10 +987,14 @@ class SemanticEvaluationCallback(TrainerCallback):
                 kl_num, kl_den = kl_tensor[0].item(), kl_tensor[1].item()
 
         metrics: dict[str, float] = {}
-        if reward_spread_count > 0:
-            metrics["eval_stage_reward_spread"] = reward_spread_total / reward_spread_count
+        if reward_count > 0:
+            metrics["eval_stage_reward_variance"] = reward_variance_total / reward_count
+            metrics["eval_stage_reward_mean"] = reward_mean_total / reward_count
         if self_bleu_count > 0:
-            metrics["eval_stage_self_bleu"] = self_bleu_total / self_bleu_count
+            self_bleu_mean = self_bleu_total / self_bleu_count
+            metrics["eval_stage_self_bleu"] = self_bleu_mean
+            self_bleu_var = max(0.0, (self_bleu_sq_total / self_bleu_count) - (self_bleu_mean * self_bleu_mean))
+            metrics["eval_stage_self_bleu_variance"] = self_bleu_var
         if entropy_den > 0.0:
             metrics["eval_stage_policy_entropy"] = entropy_num / entropy_den
         if self.trainer_kind is not None and self.trainer_kind != "ce" and action_lp_den > 0.0:
