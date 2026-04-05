@@ -191,6 +191,10 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--dataloader-pin-memory"
         $MIXED_PRECISION
         "--semantic-eval-batch-size" "$EVAL_BATCH_SIZE"
+        "--metric-for-best-model"        "eval_semantic_distance"
+        "--greater-is-better"            "false"
+        "--early-stopping-patience" "$EARLY_STOPPING_PATIENCE"
+        "--early-stopping-threshold" "$EARLY_STOPPING_THRESHOLD"
     )
     
     # Set debugging options
