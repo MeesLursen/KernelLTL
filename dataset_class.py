@@ -471,7 +471,7 @@ class LTLDataset(Dataset):
 
 
     @classmethod
-    def load(cls, dirpath: str) -> "LTLDataset":
+    def load(cls, dirpath: str, load_satisfactions: bool = True) -> "LTLDataset":
         metadata_path = os.path.join(dirpath, "metadata.json")
         if not os.path.exists(metadata_path):
             raise FileNotFoundError(f"Dataset metadata not found in {dirpath}")
@@ -507,7 +507,7 @@ class LTLDataset(Dataset):
         if dataset.store_formula_str and dataset.formula_strs is not None:
             dataset.formula_strs = [str(f) for f in formulas]
 
-        if metadata.get("has_satisfactions") and os.path.exists(satisfactions_path):
+        if load_satisfactions and metadata.get("has_satisfactions") and os.path.exists(satisfactions_path):
             dataset.satisfactions = torch.load(satisfactions_path, map_location="cpu")
         else:
             dataset.satisfactions = None
@@ -578,11 +578,11 @@ class LTLDataset(Dataset):
         if prev_dirpath is not None:
             prev_metadata_path = os.path.join(prev_dirpath, "metadata.json")
             if os.path.exists(prev_metadata_path):
-                with open(metadata_path, "r", encoding="utf-8") as fp:
+                with open(prev_metadata_path, "r", encoding="utf-8") as fp:
                     prev_metadata = json.load(fp)
                 prev_len = prev_metadata.get("size", 0)
                 if prev_len == 0:
-                    raise ArithmeticError(f"The loaded satisfactions are not of length {prev_len}. Please inspect the datasets manually.")
+                    raise ArithmeticError(f"The metadata at {prev_metadata_path} reports a size of 0. Please inspect the datasets manually.")
             else:
                 raise FileNotFoundError(f"Previous satisfactions.pt not found in {prev_dirpath}")
 
@@ -595,21 +595,25 @@ class LTLDataset(Dataset):
         end = min(new_start + (rank + 1) * chunk_size, total)
         formulas_chunk = formulas[start:end] if start < end else []
 
-        satisfactions: list[torch.Tensor] = []
-        for phi in formulas_chunk:
-            phi_sats = kernel._evaluate_formula_on_traces(
-                formula=phi,
-                batch_size=batch_size,
-                time_index=time_index,
-            )
-            satisfactions.append(phi_sats.to(dtype=torch.bool, device="cpu"))
-
-        # Save partial chunk
         part_path = os.path.join(dirpath, f"satisfactions.part{rank}.pt")
-        if satisfactions:
-            sats_tensor = torch.stack(satisfactions, dim=0).to(dtype=torch.bool, device="cpu")
+        num_new_in_chunk = len(formulas_chunk)
+        
+        if num_new_in_chunk > 0:
+            # Pre-allocate chunk tensor on GPU
+            num_traces = kernel.traces.size(0)
+            sats_tensor = torch.empty((num_new_in_chunk, num_traces), dtype=torch.bool, device="cuda")
+            
+            for i, phi in enumerate(formulas_chunk):
+                phi_sats = kernel._evaluate_formula_on_traces(
+                    formula=phi,
+                    batch_size=batch_size,
+                    time_index=time_index,
+                )
+                # Copy directly into the pre-allocated buffer
+                sats_tensor[i] = phi_sats.to(dtype=torch.bool)
         else:
             sats_tensor = torch.empty((0,), dtype=torch.bool)
+            
         torch.save(sats_tensor, part_path)
         print(f'rank {rank} finished and saved tensor.')
 
@@ -621,33 +625,43 @@ class LTLDataset(Dataset):
         if rank == 0:
             # Wait for all part files
             import time
-            for r in range(world_size):
-                wait_path = os.path.join(dirpath, f"satisfactions.part{r}.pt")
-                while not os.path.exists(wait_path):
-                    time.sleep(1)
-            # Concatenate all parts for new formulas
-            all_parts = [torch.load(os.path.join(dirpath, f"satisfactions.part{r}.pt"), map_location="cpu") for r in range(world_size)]
-            if all_parts:
-                new_sats_tensor = torch.cat(all_parts, dim=0)
-            else:
-                new_sats_tensor = torch.empty((0,), dtype=torch.bool)
-                print("No new sats added. This is an indicator something is wrong.")
-            # Concatenate previous and new satisfactions in order
-            prev_sats = None
-            if prev_dirpath is not None:
+            num_traces = kernel.traces.size(0)
+            # Pre-allocate full result tensor on CPU to avoid multiple large copies in RAM
+            sats_tensor = torch.empty((total, num_traces), dtype=torch.bool, device="cpu")
+
+            # 1. Copy previous satisfactions if they exist
+            if prev_len > 0:
                 prev_sats_path = os.path.join(prev_dirpath, "satisfactions.pt")
                 if os.path.exists(prev_sats_path):
-                    prev_sats = torch.load(prev_sats_path, map_location="cpu")
+                    print(f"Loading previous satisfactions (mmap) from {prev_sats_path}...")
+                    # mmap=True allows loading without immediate allocation of full RAM
+                    prev_data = torch.load(prev_sats_path, map_location="cpu", mmap=True)
+                    sats_tensor[:prev_len] = prev_data
+                    del prev_data
                 else:
                     raise FileNotFoundError(f"Previous satisfactions.pt not found in {prev_dirpath}")
-            if prev_sats is not None:
-                sats_tensor = torch.cat([prev_sats, new_sats_tensor], dim=0)
-            else:
-                sats_tensor = new_sats_tensor
-            torch.save(sats_tensor, satisfactions_path)
-            # Clean up part files
+
+            # 2. Load and copy new chunks sequentially
+            current_idx = prev_len
+            print(f"Aggregating {world_size} satisfaction parts sequentially...")
             for r in range(world_size):
-                os.remove(os.path.join(dirpath, f"satisfactions.part{r}.pt"))
+                part_path = os.path.join(dirpath, f"satisfactions.part{r}.pt")
+                while not os.path.exists(part_path):
+                    time.sleep(1)
+                
+                # Load chunk, copy to pre-allocated slice, then free memory
+                part_data = torch.load(part_path, map_location="cpu", mmap=True)
+                num_in_part = part_data.size(0)
+                if num_in_part > 0:
+                    sats_tensor[current_idx : current_idx + num_in_part] = part_data
+                    current_idx += num_in_part
+                
+                del part_data
+                os.remove(part_path)
+
+            # 3. Save final consolidated tensor
+            torch.save(sats_tensor, satisfactions_path)
+            del sats_tensor
 
             metadata["store_satisfaction"] = True
             metadata["has_satisfactions"] = True
