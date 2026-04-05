@@ -2,7 +2,7 @@
 #SBATCH --job-name=kernelltl-curriculum
 #SBATCH --output=logs/kernelltl_curriculum_%j.out
 #SBATCH --error=logs/kernelltl_curriculum_%j.err
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --partition=gpu_h100
 #SBATCH --gpus=4
 #SBATCH --cpus-per-task=64
@@ -45,7 +45,7 @@ SCRATCH_OUTPUT_BASE="$SCRATCH_BASE/models/CE"
 # Training defaults (can be overridden per stage)
 DEFAULT_LEARNING_RATE=1e-4
 DEFAULT_BATCH_SIZE=256
-DEFAULT_WARMUP_STEPS=0.05
+DEFAULT_WARMUP_RATIO=0.05
 
 # Mixed precision
 MIXED_PRECISION="--bf16"
@@ -181,9 +181,9 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--model-save-dir" "$STAGE_MODEL_SAVE_DIR"
         "--num-train-epochs" "$EPOCHS"
         "--learning-rate" "$LR"
-        "--per-device-train-batch-size" "$BATCH_SIZE"
-        "--per-device-eval-batch-size" "$BATCH_SIZE"
-        "--warmup-steps" "$DEFAULT_WARMUP_STEPS"
+        "--per-device-train-batch-size" "$DEFAULT_BATCH_SIZE"
+        "--per-device-eval-batch-size" "$DEFAULT_BATCH_SIZE"
+        "--warmup-ratio" "$DEFAULT_WARMUP_RATIO"
         "--logging-steps" "$STEP_INTERVAL"
         "--eval-steps" "$STEP_INTERVAL"
         "--save-steps" "$STEP_INTERVAL"

@@ -43,7 +43,7 @@ BASE_CE_OUTPUT_DIR="$BASE_MODELS_ROOT/CE"
 # Training defaults (can be overridden per stage)
 DEFAULT_LEARNING_RATE=5e-4
 DEFAULT_BATCH_SIZE=64
-DEFAULT_WARMUP_STEPS=0.05
+DEFAULT_WARMUP_RATIO=0.05
 
 # Mixed precision
 MIXED_PRECISION="--bf16"
@@ -71,18 +71,18 @@ DEFAULT_CRITIC_WEIGHT_DECAY="0.0"
 # STAGE CONFIGURATION
 # ============================================================================
 # Define your curriculum stages here
-# Format: "STAGE_NAME|TRAIN_DIR|EVAL_DIR|EPOCHS|LEARNING_RATE|BATCH_SIZE|WARMUP|RL_TRAINER"
+# Format: "STAGE_NAME|TRAIN_DIR|EVAL_DIR|EPOCHS|LEARNING_RATE|RL_TRAINER"
 
 # ============================================================================
 
 STAGE_CONFIGS=(
-    "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:50:5e-4:64:1000:gae"
-    "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:100:5e-4:64:1500:gae"
+    "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:50:5e-4gae"
+    "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:100:5e-4gae"
    
 )   
-    # "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts//datasets/stage2/eval:200:5e-4:64:500:gae"
-    # "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:300:5e-4:64:500:gae"
-    # "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:400:5e-4:64:500:gae" 
+    # "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts//datasets/stage2/eval:200:5e-4gae"
+    # "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:300:5e-4gae"
+    # "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:400:5e-4gae" 
 
 
 # ============================================================================
@@ -151,12 +151,11 @@ DEBUG_OPTION="underflow_overflow"
 
 for i in "${!STAGE_CONFIGS[@]}"; do
     # Parse stage configuration
-    IFS=':' read -r STAGE_NAME TRAIN_DIR EVAL_DIR EPOCHS LR BATCH_SIZE WARMUP STAGE_RL_TRAINER <<< "${STAGE_CONFIGS[$i]}"
+    IFS=':' read -r STAGE_NAME TRAIN_DIR EVAL_DIR EPOCHS LR STAGE_RL_TRAINER <<< "${STAGE_CONFIGS[$i]}"
     
     # Use defaults if not specified
     LR=${LR:-$DEFAULT_LEARNING_RATE}
     BATCH_SIZE=${BATCH_SIZE:-$DEFAULT_BATCH_SIZE}
-    WARMUP=${WARMUP:-$DEFAULT_WARMUP_STEPS}
     STAGE_RL_TRAINER=${STAGE_RL_TRAINER:-$DEFAULT_RL_TRAINER}
 
     STAGE_OUTPUT_DIR="$BASE_RE_OUTPUT_DIR/$STAGE_NAME"
@@ -223,7 +222,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--learning-rate" "$LR"
         "--per-device-train-batch-size" "$BATCH_SIZE"
         "--per-device-eval-batch-size" "$BATCH_SIZE"
-        "--warmup-steps" "$WARMUP"
+        "--warmup-ratio" "$DEFAULT_WARMUP_RATIO"
         "--logging-steps" 0.02
         "--eval-steps" 0.02
         "--save-steps" 0.2

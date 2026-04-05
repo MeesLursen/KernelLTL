@@ -75,7 +75,7 @@ EARLY_STOPPING_THRESHOLD=0.0
 
 # Fixed training settings (shared across all runs for a fair comparison)
 DEFAULT_BATCH_SIZE=256
-DEFAULT_WARMUP_STEPS=0.05
+DEFAULT_WARMUP_RATIO=0.05
 MIXED_PRECISION="--bf16"
 EVAL_BATCH_SIZE="81920"
 
@@ -157,7 +157,7 @@ for LR in "${LR_VALUES[@]}"; do
         "--learning-rate"                "$LR"
         "--per-device-train-batch-size"  "$DEFAULT_BATCH_SIZE"
         "--per-device-eval-batch-size"   "$DEFAULT_BATCH_SIZE"
-        "--warmup-steps"                 "$DEFAULT_WARMUP_STEPS"
+        "--warmup-ratio"                 "$DEFAULT_WARMUP_RATIO"
         "--logging-steps"                "$STEP_INTERVAL"
         "--eval-steps"                   "$STEP_INTERVAL"
         "--save-steps"                   "$STEP_INTERVAL"

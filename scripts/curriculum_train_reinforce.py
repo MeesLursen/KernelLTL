@@ -89,7 +89,7 @@ def parse_args() -> argparse.Namespace:
     train_group.add_argument("--learning-rate", type=float, default=None)
     train_group.add_argument("--per-device-train-batch-size", type=_positive_int, default=None)
     train_group.add_argument("--per-device-eval-batch-size", type=_positive_int, default=None)
-    train_group.add_argument("--warmup-steps", type=float, default=None)
+    train_group.add_argument("--warmup-ratio", type=float, default=None)
     train_group.add_argument("--weight-decay", type=float, default=None)
     train_group.add_argument("--logging-steps", type=float, default=None)
     train_group.add_argument("--eval-steps", type=float, default=None)
@@ -191,7 +191,7 @@ def _load_training_args(args: argparse.Namespace) -> TrainingArguments:
             "learning_rate": 5e-4,
             "per_device_train_batch_size": 32,
             "per_device_eval_batch_size": 32,
-            "warmup_steps": 500,
+            "warmup_ratio": 500,
             "weight_decay": 0.01,
             "logging_strategy": "steps",
             "logging_steps": 0.02,
@@ -217,7 +217,7 @@ def _load_training_args(args: argparse.Namespace) -> TrainingArguments:
         "learning_rate": args.learning_rate,
         "per_device_train_batch_size": args.per_device_train_batch_size,
         "per_device_eval_batch_size": args.per_device_eval_batch_size,
-        "warmup_steps": args.warmup_steps,
+        "warmup_ratio": args.warmup_ratio,
         "weight_decay": args.weight_decay,
         "logging_steps": args.logging_steps,
         "eval_steps": args.eval_steps,

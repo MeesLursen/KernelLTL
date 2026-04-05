@@ -50,7 +50,7 @@ SCRATCH_OUTPUT_DIR="$SCRATCH_BASE/models/CE/hpo_optuna"
 EPOCHS=100
 LEARNING_RATE=5e-4
 BATCH_SIZE=256
-WARMUP_STEPS=0.05
+WARMUP_RATIO=0.05
 MIXED_PRECISION="--bf16"
 EVAL_BATCH_SIZE="81920"
 EARLY_STOPPING_PATIENCE=10
@@ -134,7 +134,7 @@ CMD_ARGS=(
     "--learning-rate" "$LEARNING_RATE"
     "--per-device-train-batch-size" "$BATCH_SIZE"
     "--per-device-eval-batch-size" "$BATCH_SIZE"
-    "--warmup-steps" "$WARMUP_STEPS"
+    "--warmup-ratio" "$WARMUP_RATIO"
     "--logging-steps" "$STEP_INTERVAL"
     "--eval-steps" "$STEP_INTERVAL"
     "--save-steps" "$STEP_INTERVAL"
