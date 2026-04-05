@@ -32,6 +32,13 @@ def _positive_int(value: str) -> int:
     return ival
 
 
+def _dropout_rate(value: str) -> float:
+    fval = float(value)
+    if fval < 0.0 or fval >= 1.0:
+        raise argparse.ArgumentTypeError("Dropout must be in [0.0, 1.0)")
+    return fval
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Load kernel/tokenizer/datasets/checkpoints and run a curriculum training stage.",
@@ -41,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kernel-dir", required=True, help="Directory of the persisted kernel for semantic embeddings")
     parser.add_argument("--tokenizer-dir", required=True, help="Directory containing the tokenizer (saved via prepare_tokenizer.py)")
     parser.add_argument("--train-dataset-dir", required=True, help="Directory containing a saved training dataset")
-    parser.add_argument("--eval-dataset-dir", help="Directory containing a saved evaluation dataset")
+    parser.add_argument("--eval-dataset-dir", required=True, help="Directory containing a saved evaluation dataset")
     parser.add_argument("--model-load-dir", help="Directory with a previously saved curriculum checkpoint to resume from")
     parser.add_argument(
         "--output-dir",
@@ -64,6 +71,12 @@ def parse_args() -> argparse.Namespace:
     config_group.add_argument("--n-positions", type=_positive_int, default=512)
     config_group.add_argument("--n-layer", type=_positive_int, default=12)
     config_group.add_argument("--n-head", type=_positive_int, default=16)
+    config_group.add_argument(
+        "--dropout",
+        type=_dropout_rate,
+        default=None,
+        help="Optional dropout override applied to attn_pdrop/resid_pdrop/embd_pdrop for fresh model initialisation",
+    )
 
     # TrainingArgument overrides
     train_group = parser.add_argument_group("Training argument overrides")
@@ -71,7 +84,7 @@ def parse_args() -> argparse.Namespace:
     train_group.add_argument("--learning-rate", type=float, default=None)
     train_group.add_argument("--per-device-train-batch-size", type=_positive_int, default=None)
     train_group.add_argument("--per-device-eval-batch-size", type=_positive_int, default=None)
-    train_group.add_argument("--warmup-steps", type=_positive_int, default=None)
+    train_group.add_argument("--warmup-steps", type=float, default=None)
     train_group.add_argument("--weight-decay", type=float, default=None)
     train_group.add_argument("--logging-steps", type=float, default=None)
     train_group.add_argument("--eval-steps", type=float, default=None)
@@ -94,6 +107,11 @@ def parse_args() -> argparse.Namespace:
     callback_group = parser.add_argument_group("Semantic evaluation callback")
     callback_group.add_argument("--disable-semantic-callback", action="store_true")
     callback_group.add_argument("--semantic-eval-batch-size", type=_positive_int, default=10240)
+    callback_group.add_argument(
+        "--callback-debug",
+        action="store_true",
+        help="Enable detailed debug prints for metrics gathering/aggregation in callbacks",
+    )
 
     return parser.parse_args()
 
@@ -107,8 +125,8 @@ def _load_kernel(kernel_dir: str) -> LTLKernel:
     return kernel
 
 
-def _load_dataset(path: str) -> LTLDataset:
-    dataset = LTLDataset.load(path)
+def _load_dataset(path: str, load_satisfactions: bool) -> LTLDataset:
+    dataset = LTLDataset.load(path, load_satisfactions=load_satisfactions)
     if len(dataset) == 0:
         raise ValueError(f"Dataset at {path} is empty")
     return dataset
@@ -199,6 +217,8 @@ def _build_model(args: argparse.Namespace, kernel: LTLKernel, tokenizer: LTLToke
         raise ValueError("Kernel anchor set size 'm' is unknown")
 
     if args.model_load_dir:
+        if args.dropout is not None:
+            raise ValueError("--dropout cannot be used together with --model-load-dir because loaded checkpoints keep their saved dropout settings")
         print(f"Loading model from {args.model_load_dir}")
         model = LTLModel.from_pretrained(args.model_load_dir)
         if model.config.n_embd != kernel.m:
@@ -226,6 +246,11 @@ def _build_model(args: argparse.Namespace, kernel: LTLKernel, tokenizer: LTLToke
             pad_token_id=tokenizer.pad_token_id,
         )
 
+    if args.dropout is not None:
+        config.attn_pdrop = args.dropout
+        config.resid_pdrop = args.dropout
+        config.embd_pdrop = args.dropout
+
     if config.n_embd % config.n_head != 0:
         raise ValueError("n_embd must be divisible by n_head")
 
@@ -243,8 +268,8 @@ def main() -> None:
 
     kernel = _load_kernel(args.kernel_dir)
     tokenizer = _load_tokenizer(args.tokenizer_dir)
-    train_dataset = _load_dataset(args.train_dataset_dir)
-    eval_dataset = _load_dataset(args.eval_dataset_dir) if args.eval_dataset_dir else None
+    train_dataset = _load_dataset(args.train_dataset_dir, load_satisfactions=False)
+    eval_dataset = _load_dataset(args.eval_dataset_dir, load_satisfactions=True)
 
     training_args = _load_training_args(args)
     model = _build_model(args, kernel, tokenizer)
@@ -259,11 +284,13 @@ def main() -> None:
     if not args.disable_semantic_callback and eval_dataset is not None:
         semantic_callback = SemanticEvaluationCallback(
             tokenizer=tokenizer,
+            debug_metrics=args.callback_debug,
         )
         callbacks.append(semantic_callback)
     metrics_logger_callback = UnifiedMetricsLoggerCallback(
         output_dir=args.output_dir,
         stage_name=args.stage_name,
+        debug_metrics=args.callback_debug,
     )
     if semantic_callback is not None:
         semantic_callback.attach_metrics_logger(metrics_logger_callback)

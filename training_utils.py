@@ -24,11 +24,15 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
         self,
         output_dir: str,
         stage_name: str | None = None,
+        debug_metrics: bool = False,
+        debug_step_interval: int = 50,
     ) -> None:
         self.output_dir = output_dir
         self.stage_name = stage_name or os.path.basename(os.path.normpath(output_dir))
         self.trainer: CETrainer | REINFORCETrainerRB | REINFORCETrainerGAE = None
         self.trainer_kind: str = None
+        self.debug_metrics = bool(debug_metrics)
+        self.debug_step_interval = max(1, int(debug_step_interval))
         self.logs_dir = os.path.join(output_dir, "logs")
         self.metrics_path = os.path.join(self.logs_dir, "metrics_history.jsonl")
         self._train_start_time: float | None = None
@@ -38,6 +42,21 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
         self._stage_end_eval_metrics: dict[str, float] = {}
         self._metric_sums: dict[str, float | torch.Tensor] = {}
         self._metric_counts: dict[str, int] = defaultdict(int)
+        self._rl_stats: dict[str, float] = defaultdict(float)
+
+    _RL_VECTOR_KEYS = {
+        "token_count_per_sample",
+        "token_entropy_sum",
+        "train_action_log_prob_sum",
+        "valid_formula_mask_per_sample",
+        "reward_per_sample",
+        "advantage_per_sample",
+        "value_sum_per_sample",
+        "returns_sum",
+        "returns_sq_sum",
+        "value_err_sq_sum",
+        "value_err_sum",
+    }
 
     def attach_trainer(self, trainer: CETrainer | REINFORCETrainerRB | REINFORCETrainerGAE) -> None:
         self.trainer = trainer
@@ -59,6 +78,79 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
         os.makedirs(self.logs_dir, exist_ok=True)
         with open(self.metrics_path, "a") as f:
             f.write(json.dumps(record) + "\n")
+
+    def _should_debug_print_step(self, state: TrainerState) -> bool:
+        if not self.debug_metrics:
+            return False
+        step = int(state.global_step)
+        if step <= 3:
+            return True
+        if step % self.debug_step_interval == 0:
+            return True
+        epoch = state.epoch
+        if epoch is not None:
+            epoch_float = float(epoch)
+            epoch_rounded = round(epoch_float)
+            # Print at the last optimizer step of each epoch (epoch index becomes an integer).
+            if epoch_rounded >= 1 and abs(epoch_float - float(epoch_rounded)) < 1e-8:
+                return True
+        return False
+
+    def _debug_print(self, tag: str, payload: dict) -> None:
+        if not self.debug_metrics:
+            return
+        print(f"[MetricsDebug][{tag}] {json.dumps(payload, sort_keys=True)}")
+
+    def _gather_metric_tensor(
+        self,
+        value: int | float | torch.Tensor,
+        *,
+        metric_key: str,
+        state: TrainerState,
+    ) -> torch.Tensor:
+        accelerator = self.trainer.accelerator
+        device = getattr(accelerator, "device", torch.device("cpu"))
+
+        if torch.is_tensor(value):
+            tensor = value.detach()
+            if tensor.ndim == 0:
+                tensor = tensor.reshape(1)
+            else:
+                tensor = tensor.reshape(-1)
+            gathered = accelerator.gather_for_metrics(tensor)
+            if self._should_debug_print_step(state):
+                self._debug_print( #are we printing this on every rank?
+                    "step_gather_metric",
+                    {
+                        "metric_key": metric_key,
+                        "pregather_numel": int(tensor.numel()),
+                        "gathered_numel": int(gathered.numel()),
+                        "pregather_shape": list(tensor.shape),
+                        "gathered_shape": list(gathered.shape),
+                        "dtype": str(tensor.dtype),
+                        "global_step": int(state.global_step),
+                        "epoch": float(state.epoch) if state.epoch is not None else -1.0,
+                    },
+                )
+            return gathered
+
+        tensor = torch.tensor([float(value)], dtype=torch.float32, device=device)
+        gathered = accelerator.gather_for_metrics(tensor)
+        if self._should_debug_print_step(state):
+            self._debug_print(
+                "step_gather_metric",
+                {
+                    "metric_key": metric_key,
+                    "pregather_numel": int(tensor.numel()),
+                    "gathered_numel": int(gathered.numel()),
+                    "pregather_shape": list(tensor.shape),
+                    "gathered_shape": list(gathered.shape),
+                    "dtype": str(tensor.dtype),
+                    "global_step": int(state.global_step),
+                    "epoch": float(state.epoch) if state.epoch is not None else -1.0,
+                },
+            )
+        return gathered
 
     def _accumulate_metric(self, key: str, value: int | float | torch.Tensor) -> None:
         if isinstance(value, (int, float)):
@@ -87,6 +179,137 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
         if torch.is_tensor(value) and value.numel() == 1:
             return float(value.detach().to(dtype=torch.float32).cpu().item())
         return None
+
+    def _accumulate_scalar_step_metric(self, key: str, gathered_values: torch.Tensor) -> None:
+        if gathered_values.numel() == 0:
+            return
+        step_mean = float(gathered_values.detach().to(dtype=torch.float32).mean().cpu().item())
+        self._accumulate_metric(key, step_mean)
+
+    def _accumulate_sum_count(
+        self,
+        prefix: str,
+        numerator_values: torch.Tensor,
+        denominator_values: torch.Tensor,
+    ) -> None:
+        if numerator_values.numel() == 0 or denominator_values.numel() == 0:
+            return
+        numerator_f = numerator_values.detach().to(dtype=torch.float32)
+        denominator_f = denominator_values.detach().to(dtype=torch.float32)
+        self._rl_stats[f"{prefix}_sum"] += float(numerator_f.sum().cpu().item())
+        self._rl_stats[f"{prefix}_count"] += float(denominator_f.sum().cpu().item())
+
+    def _accumulate_sum_sq_count(self, prefix: str, values: torch.Tensor) -> None:
+        if values.numel() == 0:
+            return
+        values_f = values.detach().to(dtype=torch.float32)
+        self._rl_stats[f"{prefix}_sum"] += float(values_f.sum().cpu().item())
+        self._rl_stats[f"{prefix}_sq_sum"] += float((values_f * values_f).sum().cpu().item())
+        self._rl_stats[f"{prefix}_count"] += float(values_f.numel())
+
+    def _sample_variance_from_moments(self, prefix: str) -> float | None:
+        count = self._rl_stats.get(f"{prefix}_count", 0.0)
+        if count <= 1.0:
+            return None
+        total = self._rl_stats.get(f"{prefix}_sum", 0.0)
+        total_sq = self._rl_stats.get(f"{prefix}_sq_sum", 0.0)
+        numerator = total_sq - (total * total) / count
+        return max(0.0, numerator / (count - 1.0))
+
+    def _accumulate_sample_counts(self, token_count: torch.Tensor, valid_mask: torch.Tensor) -> None:
+        sample_count = float(token_count.numel())
+        valid_sample_count = float(valid_mask.sum().cpu().item())
+        self._rl_stats["sample_count"] += sample_count
+        self._rl_stats["valid_sample_count"] += valid_sample_count
+
+    def _accumulate_value_moment_totals(
+        self,
+        *,
+        returns_sum: torch.Tensor,
+        returns_sq_sum: torch.Tensor,
+        value_err_sum: torch.Tensor,
+        value_err_sq_sum: torch.Tensor,
+        token_count: torch.Tensor,
+        valid_with_tokens: torch.Tensor,
+    ) -> None:
+        valid_returns_sum = returns_sum.detach().to(dtype=torch.float32)[valid_with_tokens]
+        valid_returns_sq_sum = returns_sq_sum.detach().to(dtype=torch.float32)[valid_with_tokens]
+        valid_value_err_sum = value_err_sum.detach().to(dtype=torch.float32)[valid_with_tokens]
+        valid_value_err_sq_sum = value_err_sq_sum.detach().to(dtype=torch.float32)[valid_with_tokens]
+        valid_token_count = token_count.detach().to(dtype=torch.float32)[valid_with_tokens]
+
+        self._rl_stats["returns_sum_total"] += float(valid_returns_sum.sum().cpu().item())
+        self._rl_stats["returns_sq_sum_total"] += float(valid_returns_sq_sum.sum().cpu().item())
+        self._rl_stats["value_err_sum_total"] += float(valid_value_err_sum.sum().cpu().item())
+        self._rl_stats["value_err_sq_sum_total"] += float(valid_value_err_sq_sum.sum().cpu().item())
+        self._rl_stats["value_token_count_total"] += float(valid_token_count.sum().cpu().item())
+
+    def _accumulate_rl_step_metrics(self, gathered_vectors: dict[str, torch.Tensor]) -> None:
+        token_count = gathered_vectors.get("token_count_per_sample")
+        if token_count is None or token_count.numel() == 0:
+            return
+
+        token_count_f = token_count.detach().to(dtype=torch.float32)
+        has_tokens = token_count_f > 0.0 
+        valid_mask_tensor = gathered_vectors.get("valid_formula_mask_per_sample")
+        if valid_mask_tensor is None:
+            valid_mask = torch.ones_like(token_count_f, dtype=torch.bool)
+        else:
+            valid_mask = valid_mask_tensor.detach().to(dtype=torch.bool)
+
+        self._accumulate_sample_counts(token_count_f, valid_mask)
+
+        token_count_nonzero = token_count_f[has_tokens]
+
+        entropy_sum = gathered_vectors.get("token_entropy_sum")
+        if entropy_sum is not None:
+            entropy_sum_f = entropy_sum.detach().to(dtype=torch.float32)[has_tokens]
+            self._accumulate_sum_count("policy_entropy", entropy_sum_f, token_count_nonzero)
+
+        action_lp_sum = gathered_vectors.get("train_action_log_prob_sum")
+        if action_lp_sum is not None:
+            action_lp_sum_f = action_lp_sum.detach().to(dtype=torch.float32)[has_tokens]
+            self._accumulate_sum_count("action_logprob", action_lp_sum_f, token_count_nonzero)
+
+        valid_with_tokens = valid_mask & has_tokens
+
+        reward = gathered_vectors.get("reward_per_sample")
+        if reward is not None:
+            reward_valid = reward.detach().to(dtype=torch.float32)[valid_mask]
+            self._accumulate_sum_sq_count("reward", reward_valid)
+
+        advantage = gathered_vectors.get("advantage_per_sample")
+        if advantage is not None:
+            advantage_f = advantage.detach().to(dtype=torch.float32)
+            if self.trainer_kind == "gae":
+                advantage_values = (advantage_f[valid_with_tokens] / token_count_f[valid_with_tokens])
+            else:
+                advantage_values = advantage_f[valid_mask]
+            self._accumulate_sum_sq_count("advantage", advantage_values)
+
+        value_sum = gathered_vectors.get("value_sum_per_sample")
+        if value_sum is not None:
+            value_mean_per_sample = value_sum.detach().to(dtype=torch.float32)[valid_with_tokens] / token_count_f[valid_with_tokens]
+            self._accumulate_sum_sq_count("value", value_mean_per_sample)
+
+        returns_sum = gathered_vectors.get("returns_sum")
+        returns_sq_sum = gathered_vectors.get("returns_sq_sum")
+        value_err_sum = gathered_vectors.get("value_err_sum")
+        value_err_sq_sum = gathered_vectors.get("value_err_sq_sum")
+        if (
+            returns_sum is not None
+            and returns_sq_sum is not None
+            and value_err_sum is not None
+            and value_err_sq_sum is not None
+        ):
+            self._accumulate_value_moment_totals(
+                returns_sum=returns_sum,
+                returns_sq_sum=returns_sq_sum,
+                value_err_sum=value_err_sum,
+                value_err_sq_sum=value_err_sq_sum,
+                token_count=token_count_f,
+                valid_with_tokens=valid_with_tokens,
+            )
 
     def _base_record(
         self,
@@ -126,17 +349,65 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ):
+        if self.trainer is None:
+            raise AttributeError('Please call `attach_trainer()` before running the training loop.')
+
+        step_metrics = getattr(self.trainer, "_last_train_metrics", None)
+        if not step_metrics:
+            return
+
+        gathered_scalars: dict[str, torch.Tensor] = {}
+        gathered_vectors: dict[str, torch.Tensor] = {}
+
+        if self._should_debug_print_step(state):
+            self._debug_print(
+                "step_begin",
+                {
+                    "global_step": int(state.global_step),
+                    "epoch": float(state.epoch) if state.epoch is not None else -1.0,
+                    "trainer_kind": self.trainer_kind,
+                    "local_rank": int(getattr(args, "local_rank", -1)),
+                    "is_main_process": bool(self._is_main_process(args)),
+                    "step_metric_keys": sorted(list(step_metrics.keys())),
+                },
+            )
+
+        for key, value in step_metrics.items():
+            if key in self._RL_VECTOR_KEYS:
+                gathered_vectors[key] = self._gather_metric_tensor(value, metric_key=key, state=state)
+            else:
+                gathered_scalars[key] = self._gather_metric_tensor(value, metric_key=key, state=state)
+
         if not self._is_main_process(args):
             return
 
-        step_metrics = {}
-        if self.trainer is not None:
-            step_metrics = getattr(self.trainer, "_last_train_metrics", {}) or {}
-        else:
-            raise AttributeError('Please call `attach_trainer()` before running the training loop.')
+        for key, values in gathered_scalars.items():
+            self._accumulate_scalar_step_metric(key, values)
 
-        for key, value in step_metrics.items():
-            self._accumulate_metric(key, value)
+        self._accumulate_rl_step_metrics(gathered_vectors)
+
+        if self._should_debug_print_step(state):
+            debug_lengths = {k: int(v.numel()) for k, v in gathered_vectors.items()}
+            self._debug_print(
+                "step_post_accumulate",
+                {
+                    "global_step": int(state.global_step),
+                    "epoch": float(state.epoch) if state.epoch is not None else -1.0,
+                    "gathered_vector_numel": debug_lengths,
+                    "rl_stats_snapshot": {
+                        "sample_count": self._rl_stats.get("sample_count", 0.0),
+                        "valid_sample_count": self._rl_stats.get("valid_sample_count", 0.0),
+                        "policy_entropy_sum": self._rl_stats.get("policy_entropy_sum", 0.0),
+                        "policy_entropy_count": self._rl_stats.get("policy_entropy_count", 0.0),
+                        "action_logprob_sum": self._rl_stats.get("action_logprob_sum", 0.0),
+                        "action_logprob_count": self._rl_stats.get("action_logprob_count", 0.0),
+                        "reward_count": self._rl_stats.get("reward_count", 0.0),
+                        "advantage_count": self._rl_stats.get("advantage_count", 0.0),
+                        "value_count": self._rl_stats.get("value_count", 0.0),
+                        "value_token_count_total": self._rl_stats.get("value_token_count_total", 0.0),
+                    },
+                },
+            )
 
     def on_log(
         self,
@@ -171,13 +442,80 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
                 if mean_value is not None:
                     payload[f"{key}_mean"] = mean_value
 
+        sample_count = self._rl_stats.get("sample_count", 0.0)
+        valid_sample_count = self._rl_stats.get("valid_sample_count", 0.0)
+        if sample_count > 0.0:
+            payload["train_valid_formula_ratio"] = valid_sample_count / sample_count
+
+        entropy_count = self._rl_stats.get("policy_entropy_count", 0.0)
+        if entropy_count > 0.0:
+            payload["train_policy_entropy"] = self._rl_stats.get("policy_entropy_sum", 0.0) / entropy_count
+
+        action_lp_count = self._rl_stats.get("action_logprob_count", 0.0)
+        if action_lp_count > 0.0:
+            payload["train_action_logprob_avg"] = self._rl_stats.get("action_logprob_sum", 0.0) / action_lp_count
+
+        reward_count = self._rl_stats.get("reward_count", 0.0)
+        if reward_count > 0.0:
+            reward_mean = self._rl_stats.get("reward_sum", 0.0) / reward_count
+            payload["train_reward_avg"] = reward_mean
+            reward_var = self._sample_variance_from_moments("reward")
+            if reward_var is not None:
+                payload["train_reward_variance"] = reward_var
+
+        advantage_count = self._rl_stats.get("advantage_count", 0.0)
+        if advantage_count > 0.0:
+            advantage_mean = self._rl_stats.get("advantage_sum", 0.0) / advantage_count
+            payload["train_advantage_avg"] = advantage_mean
+            advantage_var = self._sample_variance_from_moments("advantage")
+            if advantage_var is not None:
+                payload["train_advantage_variance"] = advantage_var
+
+        value_count = self._rl_stats.get("value_count", 0.0)
+        if value_count > 0.0:
+            value_mean = self._rl_stats.get("value_sum", 0.0) / value_count
+            payload["train_value_avg"] = value_mean
+            value_var = self._sample_variance_from_moments("value")
+            if value_var is not None:
+                payload["train_value_variance"] = value_var
+
+        value_token_count = self._rl_stats.get("value_token_count_total", 0.0)
+        if value_token_count > 0.0:
+            returns_sum_total = self._rl_stats.get("returns_sum_total", 0.0)
+            returns_sq_sum_total = self._rl_stats.get("returns_sq_sum_total", 0.0)
+            value_err_sum_total = self._rl_stats.get("value_err_sum_total", 0.0)
+            value_err_sq_sum_total = self._rl_stats.get("value_err_sq_sum_total", 0.0)
+
+            returns_mean = returns_sum_total / value_token_count
+            returns_var = max(0.0, (returns_sq_sum_total / value_token_count) - (returns_mean * returns_mean))
+
+            value_err_mean = value_err_sum_total / value_token_count
+            value_err_centered_var = max(0.0, (value_err_sq_sum_total / value_token_count) - (value_err_mean * value_err_mean))
+
+            payload["train_value_centered_residual_var"] = value_err_centered_var
+            payload["train_value_explained_variance"] = 1.0 - (value_err_centered_var / max(returns_var, 1e-8))
+
         if payload:
             record = self._base_record("train_epoch_end", "train", state)
             record.update(payload)
             self._append_record(record)
 
+        if self.debug_metrics:
+            self._debug_print(
+                "epoch_end_payload",
+                {
+                    "global_step": int(state.global_step),
+                    "epoch": float(state.epoch) if state.epoch is not None else -1.0,
+                    "payload_keys": sorted(list(payload.keys())),
+                    "payload": payload,
+                    "scalar_metric_counts": dict(self._metric_counts),
+                    "rl_stats": dict(self._rl_stats),
+                },
+            )
+
         self._metric_sums.clear()
         self._metric_counts.clear()
+        self._rl_stats.clear()
 
     def on_evaluate(
         self,
@@ -246,7 +584,9 @@ class SemanticEvaluationCallback(TrainerCallback):
     """
     def __init__(self, 
                  tokenizer: LTLTokenizer,
-                 top_k_stage_end: int = 5):
+                 top_k_stage_end: int = 5,
+                 debug_metrics: bool = False,
+                 debug_step_interval: int = 50):
         """
         Args:
             tokenizer: LTLTokenizer for decoding generated sequences
@@ -256,12 +596,36 @@ class SemanticEvaluationCallback(TrainerCallback):
         
         self.tokenizer: LTLTokenizer = tokenizer
         self.top_k_stage_end = max(1, int(top_k_stage_end))
+        self.debug_metrics = bool(debug_metrics)
+        self.debug_step_interval = max(1, int(debug_step_interval))
         self.trainer: CETrainer | REINFORCETrainerRB | REINFORCETrainerGAE = None
         self.eval_dataset: LTLDataset = None
         self.kernel: LTLKernel = None
         self.trainer_kind: str = None
         self.semantic_eval_batch_size: int = None
         self.metrics_logger: UnifiedMetricsLoggerCallback | None = None
+
+    def _should_debug_print_step(self, state: TrainerState) -> bool:
+        if not self.debug_metrics:
+            return False
+        step = int(state.global_step)
+        if step <= 3:
+            return True
+        if step % self.debug_step_interval == 0:
+            return True
+        epoch = state.epoch
+        if epoch is not None:
+            epoch_float = float(epoch)
+            epoch_rounded = round(epoch_float)
+            # Print at the last optimizer step of each epoch (epoch index becomes an integer).
+            if epoch_rounded >= 1 and abs(epoch_float - float(epoch_rounded)) < 1e-8:
+                return True
+        return False
+
+    def _debug_print(self, tag: str, payload: dict) -> None:
+        if not self.debug_metrics:
+            return
+        print(f"[MetricsDebug][{tag}] {json.dumps(payload, sort_keys=True)}")
 
     def attach_trainer(self, trainer: CETrainer | REINFORCETrainerRB | REINFORCETrainerGAE) -> None:
         self.trainer = trainer
@@ -327,8 +691,15 @@ class SemanticEvaluationCallback(TrainerCallback):
         eos_id = self.tokenizer.eos_token_id
         pad_id = self.tokenizer.pad_token_id
 
-        start_idx = token_ids.index(bos_id) + 1
-        end_idx = token_ids.index(eos_id, start_idx)
+        if bos_id in token_ids:
+            start_idx = token_ids.index(bos_id) + 1
+        else:
+            start_idx = 0
+
+        try:
+            end_idx = token_ids.index(eos_id, start_idx)
+        except ValueError:
+            end_idx = len(token_ids)
 
         content_ids = token_ids[start_idx:end_idx]
         filtered_ids = [token_id for token_id in content_ids if token_id != pad_id]
@@ -373,16 +744,16 @@ class SemanticEvaluationCallback(TrainerCallback):
         gen_model.eval()
         with torch.no_grad():
             for batch in eval_dataloader:
-                semantic_embeddings = batch["semantic_embeddings"].to(original_device, non_blocking=True)
+                encoder_hidden_states = batch["encoder_hidden_states"].to(original_device, non_blocking=True)
                 target_satisfaction = batch.get("target_satisfaction")
                 if target_satisfaction is not None:
                     target_satisfaction = target_satisfaction.to(original_device)
 
-                batch_size = semantic_embeddings.size(0)
+                batch_size = encoder_hidden_states.size(0)
                 k = self.top_k_stage_end
 
                 generation = gen_model.generate(
-                    semantic_embeddings=semantic_embeddings,
+                    encoder_hidden_states=encoder_hidden_states,
                     do_sample=True,
                     max_new_tokens=gen_model.config.n_positions,
                     num_beams=1,
@@ -430,14 +801,12 @@ class SemanticEvaluationCallback(TrainerCallback):
 
                 seq_lp_bk = seq_log_prob.reshape(batch_size, k)  # (B, k)
                 per_sample_action_lp = seq_lp_bk.sum(dim=1)                 # (B,)
-                per_sample_action_den = torch.full(
-                    (batch_size,), float(k), dtype=torch.float32, device=original_device
-                )
+                per_sample_action_den = torch.full((batch_size,), float(k), dtype=torch.float32, device=original_device)
 
                 per_sample_reward_spread = torch.zeros(batch_size, dtype=torch.float32, device=original_device)
-                per_sample_has_reward = torch.zeros(batch_size, dtype=torch.bool,    device=original_device)
+                per_sample_has_reward = torch.zeros(batch_size, dtype=torch.bool, device=original_device)
                 per_sample_self_bleu = torch.zeros(batch_size, dtype=torch.float32, device=original_device)
-                per_sample_has_bleu = torch.zeros(batch_size, dtype=torch.bool,    device=original_device)
+                per_sample_has_bleu = torch.zeros(batch_size, dtype=torch.bool, device=original_device)
 
                 generated_strs = self.tokenizer.batch_decode(
                     generated_tokens.detach().cpu(), skip_special_tokens=True
@@ -509,6 +878,35 @@ class SemanticEvaluationCallback(TrainerCallback):
                     per_sample_has_bleu.to(original_device),
                 ))
 
+                if self._should_debug_print_step(state):
+                    self._debug_print(
+                        "stage_end_gather",
+                        {
+                            "global_step": int(state.global_step),
+                            "epoch": float(state.epoch) if state.epoch is not None else -1.0,
+                            "pregather_numel": {
+                                "per_sample_entropy_num": int(per_sample_entropy_num.numel()),
+                                "per_sample_entropy_den": int(per_sample_entropy_den.numel()),
+                                "per_sample_action_lp": int(per_sample_action_lp.numel()),
+                                "per_sample_action_den": int(per_sample_action_den.numel()),
+                                "per_sample_reward_spread": int(per_sample_reward_spread.numel()),
+                                "per_sample_has_reward": int(per_sample_has_reward.numel()),
+                                "per_sample_self_bleu": int(per_sample_self_bleu.numel()),
+                                "per_sample_has_bleu": int(per_sample_has_bleu.numel()),
+                            },
+                            "gathered_numel": {
+                                "gathered_entropy_num": int(gathered_entropy_num.numel()),
+                                "gathered_entropy_den": int(gathered_entropy_den.numel()),
+                                "gathered_action_lp": int(gathered_action_lp.numel()),
+                                "gathered_action_den": int(gathered_action_den.numel()),
+                                "gathered_reward_spread": int(gathered_reward_spread.numel()),
+                                "gathered_has_reward": int(gathered_has_reward.numel()),
+                                "gathered_self_bleu": int(gathered_self_bleu.numel()),
+                                "gathered_has_bleu": int(gathered_has_bleu.numel()),
+                            },
+                        },
+                    )
+
                 entropy_num += float(gathered_entropy_num.sum().item())
                 entropy_den += float(gathered_entropy_den.sum().item())
                 action_lp_num += float(gathered_action_lp.sum().item())
@@ -520,10 +918,10 @@ class SemanticEvaluationCallback(TrainerCallback):
 
                 if self.trainer_kind is not None and self.trainer_kind != "ce" and reference_model_path is not None:
                     shifted = sequences[:, :-1]
-                    sem_rep = semantic_embeddings.repeat_interleave(k, dim=0)
+                    sem_rep = encoder_hidden_states.repeat_interleave(k, dim=0)
                     kl_batches.append({
                         "shifted": shifted.detach().cpu(),
-                        "semantic_embeddings": sem_rep.detach().cpu(),
+                        "encoder_hidden_states": sem_rep.detach().cpu(),
                         "token_mask_f": token_mask_f.detach().cpu(),
                         "re_log_probs": score_log_probs.detach().cpu().to(dtype=torch.float32),
                     })
@@ -543,13 +941,13 @@ class SemanticEvaluationCallback(TrainerCallback):
                 with torch.no_grad():
                     for kl_batch in kl_batches:
                         shifted = kl_batch["shifted"].to(original_device, non_blocking=True)
-                        sem_rep = kl_batch["semantic_embeddings"].to(original_device, non_blocking=True)
+                        sem_rep = kl_batch["encoder_hidden_states"].to(original_device, non_blocking=True)
                         token_mask_f = kl_batch["token_mask_f"].to(original_device, non_blocking=True)
                         re_log_probs = kl_batch["re_log_probs"].to(original_device, non_blocking=True)
 
                         t_steps = re_log_probs.size(1)
                         ce_logits = reference_model(
-                            input_ids=shifted, semantic_embeddings=sem_rep
+                            input_ids=shifted, encoder_hidden_states=sem_rep
                         ).logits[:, -t_steps:, :]
                         ce_log_probs = torch.log_softmax(ce_logits, dim=-1)
                         re_probs = torch.exp(re_log_probs)
@@ -592,6 +990,7 @@ class SemanticEvaluationCallback(TrainerCallback):
         self,
         *,
         args: TrainingArguments,
+        state: TrainerState,
         model: LTLModel,
         eval_dataloader: DataLoader,
     ) -> dict[str, float]:
@@ -613,7 +1012,7 @@ class SemanticEvaluationCallback(TrainerCallback):
         with torch.no_grad():
             for batch in eval_dataloader:
                 input_ids = batch['input_ids'] 
-                target_embeddings = batch['semantic_embeddings'].to(gen_model.device, non_blocking=True)
+                target_embeddings = batch['encoder_hidden_states'].to(gen_model.device, non_blocking=True)
                 attention_mask = batch['attention_mask']
                 target_formulas = batch.get('target_formulas')
                 target_formula_strs = batch.get('target_formula_strs')
@@ -635,10 +1034,9 @@ class SemanticEvaluationCallback(TrainerCallback):
                 batch_size = target_embeddings.size(0)
 
                 generated_ids = gen_model.generate(
-                    semantic_embeddings=target_embeddings,
+                    encoder_hidden_states=target_embeddings,
                     max_length=gen_model.config.n_positions,
                     num_beams=1,
-                    early_stopping=True,
                     pad_token_id=self.tokenizer.pad_token_id,
                     eos_token_id=self.tokenizer.eos_token_id
                 )
@@ -712,6 +1110,33 @@ class SemanticEvaluationCallback(TrainerCallback):
                      per_sample_generated_depth, 
                      per_sample_generated_length
                  ))
+
+                if self._should_debug_print_step(state):
+                    self._debug_print(
+                        "semantic_eval_gather",
+                        {
+                            "global_step": int(state.global_step),
+                            "epoch": float(state.epoch) if state.epoch is not None else -1.0,
+                            "pregather_numel": {
+                                "per_sample_distance": int(per_sample_distance.numel()),
+                                "per_sample_exact_str_match": int(per_sample_exact_str_match.numel()),
+                                "per_sample_semantic_equivalent": int(per_sample_semantic_equivalent.numel()),
+                                "per_sample_incorrect": int(per_sample_incorrect.numel()),
+                                "per_sample_invalid": int(per_sample_invalid.numel()),
+                                "per_sample_generated_depth": int(per_sample_generated_depth.numel()),
+                                "per_sample_generated_length": int(per_sample_generated_length.numel()),
+                            },
+                            "gathered_numel": {
+                                "gathered_per_sample_distance": int(gathered_per_sample_distance.numel()),
+                                "gathered_per_sample_exact_str_match": int(gathered_per_sample_exact_str_match.numel()),
+                                "gathered_per_sample_semantic_equivalent": int(gathered_per_sample_semantic_equivalent.numel()),
+                                "gathered_per_sample_incorrect": int(gathered_per_sample_incorrect.numel()),
+                                "gathered_per_sample_invalid": int(gathered_per_sample_invalid.numel()),
+                                "gathered_per_sample_generated_depth": int(gathered_per_sample_generated_depth.numel()),
+                                "gathered_per_sample_generated_length": int(gathered_per_sample_generated_length.numel()),
+                            },
+                        },
+                    )
                 
                 total_distance += float(gathered_per_sample_distance.sum().item())
                 exact_string_matches += int(gathered_per_sample_exact_str_match.sum().item())
@@ -762,15 +1187,7 @@ class SemanticEvaluationCallback(TrainerCallback):
         eval_dataloader.collate_fn = lambda batch : self.tokenizer.collate_batch(batch, model.config.n_positions, include_metadata=True)
         prepared_eval_dataloader = self.trainer.accelerator.prepare(eval_dataloader)
 
-        even_batches = getattr(self.trainer.accelerator, 'even_batches', None)
-        if even_batches is not None:
-            if self._is_main_process(args):
-                print(f'even_batches = {self.trainer.accelerator.getattr('even_batches', None)}')
-        else:
-            if self._is_main_process(args):
-                print("There was an issue retreiving the 'even_batches' argument.")    
-
-        metric_values = self._compute_semantic_metrics(args=args, model=model, eval_dataloader=prepared_eval_dataloader)
+        metric_values = self._compute_semantic_metrics(args=args, state=state, model=model, eval_dataloader=prepared_eval_dataloader)
         if not metric_values:
             return
         
@@ -784,6 +1201,15 @@ class SemanticEvaluationCallback(TrainerCallback):
             print(f"\n  Eval @ epoch {state.epoch} / step {state.global_step}:")
             print(f"  eval_semantic_distance: {avg_distance:.4f}")
             print(f"  eval_semantic_equivalent_rate: {semantic_equiv_rate:.4f}")
+            if self.debug_metrics:
+                self._debug_print(
+                    "on_evaluate_metrics",
+                    {
+                        "global_step": int(state.global_step),
+                        "epoch": float(state.epoch) if state.epoch is not None else -1.0,
+                        "metric_values": metric_values,
+                    },
+                )
 
     def on_train_begin(
         self,
@@ -810,8 +1236,15 @@ class SemanticEvaluationCallback(TrainerCallback):
         eval_dataloader.collate_fn = lambda batch : self.tokenizer.collate_batch(batch, model.config.n_positions, include_metadata=True)
         prepared_eval_dataloader = self.trainer.accelerator.prepare(eval_dataloader)
 
-        stage_end_metrics = self._compute_stage_end_metrics(args=args, state=state, model=model, eval_data_loader=prepared_eval_dataloader)
+        stage_end_metrics = self._compute_stage_end_metrics(args=args, state=state, model=model, eval_dataloader=prepared_eval_dataloader)
         if stage_end_metrics:
             self.metrics_logger.set_stage_end_eval_metrics(stage_end_metrics)
-
-
+            if self.debug_metrics:
+                self._debug_print(
+                    "on_train_end_stage_metrics",
+                    {
+                        "global_step": int(state.global_step),
+                        "epoch": float(state.epoch) if state.epoch is not None else -1.0,
+                        "stage_end_metrics": stage_end_metrics,
+                    },
+                )
