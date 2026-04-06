@@ -325,7 +325,6 @@ def main() -> None:
     metrics_logger = UnifiedMetricsLoggerCallback(
         output_dir=args.output_dir,
         stage_name=args.stage_name,
-        trainer_kind=args.rl_trainer,
         debug_metrics=args.callback_debug,
     )
     if semantic_callback is not None:
