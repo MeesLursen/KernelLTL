@@ -15,10 +15,11 @@ class REINFORCETrainerRB(Trainer):
             *args,
             kernel: LTLKernel,
             tokenizer: LTLTokenizer,
+            satisfactions_path: str,
             baseline_momentum: float = 0.9,
             reward_clip: float | None = 1.0,
             semantic_eval_batch_size: int = 10240,
-            satisfactions_path: str | None = None,
+            satisfactions_mmap: bool = False,
             **kwargs,
         ) -> None:
             self.processing_class = kwargs.pop("processing_class", None)
@@ -32,9 +33,10 @@ class REINFORCETrainerRB(Trainer):
             self.reward_clip = reward_clip
             self.semantic_eval_batch_size = semantic_eval_batch_size
             self.satisfactions_path = satisfactions_path
+            self._satisfactions_mmap = satisfactions_mmap
             self._reward_baseline: torch.Tensor | None = None
             self._reward_sq_mean: torch.Tensor | None = None
-            self._satisfactions_mmap: torch.Tensor | None = None
+            self._satisfactions_tensor: torch.Tensor | None = None
             self._last_train_metrics: dict[str, float | torch.Tensor] = {}
             self._last_rl_metrics: dict[str, float | torch.Tensor] = {}
             self._sync_kernel_device(getattr(self.args, "device", None))
@@ -339,8 +341,11 @@ class REINFORCETrainerRB(Trainer):
         if self.satisfactions_path is None:
             return None
 
-        if self._satisfactions_mmap is None:
-            self._satisfactions_mmap = torch.load(self.satisfactions_path, map_location="cpu", mmap=True)
+        if self._satisfactions_tensor is None:
+            if self._satisfactions_mmap:
+                self._satisfactions_tensor = torch.load(self.satisfactions_path, map_location="cpu", mmap=True)
+            else:
+                self._satisfactions_tensor = torch.load(self.satisfactions_path, map_location="cpu")
 
         if formula_ids.ndim == 0:
             formula_ids = formula_ids.unsqueeze(0)
@@ -348,7 +353,7 @@ class REINFORCETrainerRB(Trainer):
             return None
 
         formula_ids_cpu = formula_ids.detach().to(dtype=torch.long, device="cpu")
-        return self._satisfactions_mmap.index_select(0, formula_ids_cpu)
+        return self._satisfactions_tensor.index_select(0, formula_ids_cpu)
     
 
     
@@ -365,10 +370,15 @@ class REINFORCETrainerRB(Trainer):
         target_len = generated_tokens.size(-1)
         teacher_inputs = sequences[:, : prefix_len + target_len].detach()
         shifted_inputs = teacher_inputs[:, :-1]
+        if pad_id is None:
+            shifted_attention_mask = torch.ones_like(shifted_inputs, dtype=torch.long)
+        else:
+            shifted_attention_mask = (shifted_inputs != pad_id).to(dtype=torch.long)
 
         with torch.enable_grad():
             outputs = model(
                 input_ids=shifted_inputs,
+                attention_mask=shifted_attention_mask,
                 encoder_hidden_states=encoder_hidden_states,
             )
             logits = outputs.logits[:, -target_len:, :]
@@ -401,9 +411,10 @@ class REINFORCETrainerGAE(Trainer):
             *args,
             kernel: LTLKernel,
             tokenizer: LTLTokenizer,
+            satisfactions_path: str,
             reward_clip: float | None = 1.0,
             semantic_eval_batch_size: int = 10240,
-            satisfactions_path: str | None = None,
+            satisfactions_mmap: bool = False,
             gae_gamma: float = 1.0,
             gae_lambda: float = 1.0,
             critic_loss_coef: float = 0.5,
@@ -422,12 +433,13 @@ class REINFORCETrainerGAE(Trainer):
             self.reward_clip = reward_clip
             self.semantic_eval_batch_size = semantic_eval_batch_size
             self.satisfactions_path = satisfactions_path
+            self._satisfactions_mmap = satisfactions_mmap
             self.gae_gamma = float(gae_gamma)
             self.gae_lambda = float(gae_lambda)
             self.critic_loss_coef = float(critic_loss_coef)
             self.critic_lr = float(critic_lr) if critic_lr is not None else float(self.args.learning_rate)
             self.critic_weight_decay = float(critic_weight_decay)
-            self._satisfactions_mmap: torch.Tensor | None = None
+            self._satisfactions_tensor: torch.Tensor | None = None
             self._last_train_metrics: dict[str, float | torch.Tensor] = {}
             self._last_rl_metrics: dict[str, float | torch.Tensor] = {}
 
@@ -793,8 +805,11 @@ class REINFORCETrainerGAE(Trainer):
         if self.satisfactions_path is None:
             return None
 
-        if self._satisfactions_mmap is None:
-            self._satisfactions_mmap = torch.load(self.satisfactions_path, map_location="cpu", mmap=True)
+        if self._satisfactions_tensor is None:
+            if self._satisfactions_mmap:
+                self._satisfactions_tensor = torch.load(self.satisfactions_path, map_location="cpu", mmap=True)
+            else:
+                self._satisfactions_tensor = torch.load(self.satisfactions_path, map_location="cpu")
 
         if formula_ids.ndim == 0:
             formula_ids = formula_ids.unsqueeze(0)
@@ -802,7 +817,7 @@ class REINFORCETrainerGAE(Trainer):
             return None
 
         formula_ids_cpu = formula_ids.detach().to(dtype=torch.long, device="cpu")
-        return self._satisfactions_mmap.index_select(0, formula_ids_cpu)
+        return self._satisfactions_tensor.index_select(0, formula_ids_cpu)
     
 
     
@@ -820,11 +835,16 @@ class REINFORCETrainerGAE(Trainer):
         target_len = generated_tokens.size(-1)
         teacher_inputs = sequences[:, : prefix_len + target_len].detach()
         shifted_inputs = teacher_inputs[:, :-1]
+        if pad_id is None:
+            shifted_attention_mask = torch.ones_like(shifted_inputs, dtype=torch.long)
+        else:
+            shifted_attention_mask = (shifted_inputs != pad_id).to(dtype=torch.long)
 
         grad_ctx = torch.enable_grad() if require_grad else torch.no_grad()
         with grad_ctx:
             outputs = model(
                 input_ids=shifted_inputs,
+                attention_mask=shifted_attention_mask,
                 encoder_hidden_states=encoder_hidden_states,
                 output_hidden_states=True,
             )

@@ -130,6 +130,7 @@ def parse_args() -> argparse.Namespace:
         help="RL trainer variant: rb=running baseline REINFORCE, gae=actor-critic with GAE",
     )
     rl_group.add_argument("--reinforce-baseline-momentum", type=float, default=0.9)
+    rl_group.add_argument("--satisfactions-mmap", type=bool, default=False)
     rl_group.add_argument("--reinforce-reward-clip", type=float, default=1.0)
     rl_group.add_argument("--gae-gamma", type=float, default=0.99)
     rl_group.add_argument("--gae-lambda", type=float, default=0.95)
@@ -356,6 +357,7 @@ def main() -> None:
         "reward_clip": args.reinforce_reward_clip,
         "semantic_eval_batch_size": args.semantic_eval_batch_size,
         "satisfactions_path": satisfactions_path,
+        "satisfactions_mmap": args.satisfactions_mmap
     }
 
     if args.rl_trainer == "rb":
