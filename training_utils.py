@@ -935,6 +935,7 @@ class SemanticEvaluationCallback(TrainerCallback):
                     sem_rep = encoder_hidden_states.repeat_interleave(k, dim=0)
                     kl_batches.append({
                         "shifted": shifted.detach().cpu(),
+                        "shifted_attention_mask": (shifted != self.tokenizer.pad_token_id).to(dtype=torch.long).detach().cpu(),
                         "encoder_hidden_states": sem_rep.detach().cpu(),
                         "token_mask_f": token_mask_f.detach().cpu(),
                         "re_log_probs": score_log_probs.detach().cpu().to(dtype=torch.float32),
@@ -955,13 +956,16 @@ class SemanticEvaluationCallback(TrainerCallback):
                 with torch.no_grad():
                     for kl_batch in kl_batches:
                         shifted = kl_batch["shifted"].to(original_device, non_blocking=True)
+                        shifted_attention_mask = kl_batch["shifted_attention_mask"].to(original_device, non_blocking=True)
                         sem_rep = kl_batch["encoder_hidden_states"].to(original_device, non_blocking=True)
                         token_mask_f = kl_batch["token_mask_f"].to(original_device, non_blocking=True)
                         re_log_probs = kl_batch["re_log_probs"].to(original_device, non_blocking=True)
 
                         t_steps = re_log_probs.size(1)
                         ce_logits = reference_model(
-                            input_ids=shifted, encoder_hidden_states=sem_rep
+                            input_ids=shifted,
+                            attention_mask=shifted_attention_mask,
+                            encoder_hidden_states=sem_rep,
                         ).logits[:, -t_steps:, :]
                         ce_log_probs = torch.log_softmax(ce_logits, dim=-1)
                         re_probs = torch.exp(re_log_probs)
