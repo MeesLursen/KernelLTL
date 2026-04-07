@@ -53,6 +53,7 @@ MIXED_PRECISION="--bf16"
 # Evaluation Batch Size
 EVAL_BATCH_SIZE="81920"
 
+# Early Stopping Parameters
 EARLY_STOPPING_PATIENCE=10
 EARLY_STOPPING_THRESHOLD=0.0
 
@@ -65,14 +66,13 @@ EARLY_STOPPING_THRESHOLD=0.0
 # ============================================================================
 
 STAGE_CONFIGS=(
-    
-    "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:100:1e-4"
-    "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts/datasets/stage2/eval:100:5e-5"
-    "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:100:1e-5"
-    "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:100:5e-6" 
-
+    "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:10:1e-4"
 )   
-    # "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:10:1e-4:64"
+    # "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:100:1e-4"
+    # "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts/datasets/stage2/eval:100:5e-5"
+    # "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:100:1e-5"
+    # "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:100:5e-6" 
+
 
 # ============================================================================
 # ENVIRONMENT SETUP

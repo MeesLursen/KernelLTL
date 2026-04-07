@@ -28,12 +28,13 @@ set -e  # Exit on error
 # USER CONFIGURATION
 # ============================================================================
 
-PROJECT_DIR="$HOME/KernelLTL"
+PROJECT_DIR="/projects/prjs2029/KernelLTL"
+HOME_DIR="$HOME/KernelLTL"
 VENV_DIR="$PROJECT_DIR/venv"
 
 # Shared artifacts
-KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
-TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
+KERNEL_DIR="$HOME_DIR/artifacts/kernel"
+TOKENIZER_DIR="$HOME_DIR/artifacts/tokenizer"
 
 # Shared model root with independent RE/CE branches
 BASE_MODELS_ROOT="$PROJECT_DIR/artifacts/models"
@@ -42,7 +43,7 @@ BASE_CE_OUTPUT_DIR="$BASE_MODELS_ROOT/CE"
 
 # Training defaults (can be overridden per stage)
 DEFAULT_LEARNING_RATE=5e-4
-DEFAULT_BATCH_SIZE=64
+DEFAULT_BATCH_SIZE=256
 DEFAULT_WARMUP_RATIO=0.05
 
 # Mixed precision
@@ -51,8 +52,12 @@ MIXED_PRECISION="--bf16"
 # Evaluation Batch Size
 EVAL_BATCH_SIZE="81920"
 
+# Early Stopping Parameters
+EARLY_STOPPING_PATIENCE=15
+EARLY_STOPPING_THRESHOLD=0.0
+
 # RL trainer mode: gae or rb
-DEFAULT_RL_TRAINER="gae"
+DEFAULT_RL_TRAINER="rb"
 
 # Shared RL controls
 DEFAULT_RL_CLIP="1.0"
@@ -76,14 +81,13 @@ DEFAULT_CRITIC_WEIGHT_DECAY="0.0"
 # ============================================================================
 
 STAGE_CONFIGS=(
-    "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:50:5e-4gae"
-    "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:100:5e-4gae"
-   
+    "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:100:1e-4:rb"
+    
 )   
-    # "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts//datasets/stage2/eval:200:5e-4gae"
-    # "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:300:5e-4gae"
-    # "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:400:5e-4gae" 
-
+    # "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:50:5e-4:gae"
+    # "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts//datasets/stage2/eval:100:5e-5:gae"
+    # "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:100:1e-5:gae"
+    # "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:100:5e-6:gae"
 
 # ============================================================================
 # ENVIRONMENT SETUP
@@ -96,7 +100,7 @@ echo "Node: $SLURMD_NODENAME"
 echo "Start time: $(date)"
 echo "=============================================="
 
-mkdir -p "$PROJECT_DIR/logs"
+mkdir -p "$HOME_DIR/logs"
 
 # Load modules
 module purge
@@ -104,7 +108,7 @@ module load 2025
 module load Python/3.13.1-GCCcore-14.2.0
 module load CUDA/12.8.0
 
-cd "$PROJECT_DIR"
+cd "$HOME_DIR"
 
 # Setup virtual environment
 if [ ! -d "$VENV_DIR" ]; then
@@ -117,7 +121,7 @@ else
     source "$VENV_DIR/bin/activate"
 fi
 
-export PYTHONPATH="$PROJECT_DIR:$PYTHONPATH"
+export PYTHONPATH="$HOME_DIR:$PYTHONPATH"
 
 NUM_GPUS=$(nvidia-smi -L | wc -l)
 echo "Number of GPUs: $NUM_GPUS"
@@ -157,6 +161,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     LR=${LR:-$DEFAULT_LEARNING_RATE}
     BATCH_SIZE=${BATCH_SIZE:-$DEFAULT_BATCH_SIZE}
     STAGE_RL_TRAINER=${STAGE_RL_TRAINER:-$DEFAULT_RL_TRAINER}
+    STEP_INTERVAL=$(echo "scale=6; 1/$EPOCHS" | bc -l)
 
     STAGE_OUTPUT_DIR="$BASE_RE_OUTPUT_DIR/$STAGE_NAME"
     STAGE_MODEL_SAVE_DIR="$STAGE_OUTPUT_DIR/final_model"
@@ -223,9 +228,9 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--per-device-train-batch-size" "$BATCH_SIZE"
         "--per-device-eval-batch-size" "$BATCH_SIZE"
         "--warmup-ratio" "$DEFAULT_WARMUP_RATIO"
-        "--logging-steps" 0.02
-        "--eval-steps" 0.02
-        "--save-steps" 0.2
+        "--logging-steps" "$STEP_INTERVAL"
+        "--eval-steps" "$STEP_INTERVAL"
+        "--save-steps" "$STEP_INTERVAL"
         "--dataloader-num-workers" "$((SLURM_CPUS_PER_TASK / NUM_GPUS))"
         "--dataloader-pin-memory"
         $MIXED_PRECISION

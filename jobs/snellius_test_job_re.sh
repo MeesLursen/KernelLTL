@@ -80,7 +80,7 @@ DEFAULT_CRITIC_WEIGHT_DECAY="0.0"
 # ============================================================================
 
 STAGE_CONFIGS=(
-    "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:2:1e-4:rb"
+    "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:1:1e-4:rb"
 )   
     # "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:100:1e-4:rb"    
     # "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts//datasets/stage2/eval:100:5e-5:gae"

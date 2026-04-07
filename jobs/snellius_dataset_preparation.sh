@@ -55,11 +55,12 @@ ADD_EVAL_SATISFACTIONS=0
 # - eval_ratio: fraction for evaluation set (using disjoint split)
 
 STAGES=(
-    "stage4:800000:5:5:0.01 0.4:0.025"
+    "stage0:100000:2:2:0.2 0.5:0.025"
 )
-#    "stage1:100000:2:2:0.2 0.5:0.025"
-#    "stage2:200000:3:3:0.1 0.5:0.025"
-#    "stage3:400000:4:4:0.01 0.5:0.025"
+    # "stage1:100000:2:2:0.2 0.5:0.025"
+    # "stage2:200000:3:3:0.1 0.5:0.025"
+    # "stage3:400000:4:4:0.01 0.5:0.025"
+    # "stage4:800000:5:5:0.01 0.4:0.025"
 
 # Common options
 TRAIN_DEDUPE=""
@@ -135,7 +136,7 @@ echo "=============================================="
 # Track previous stage output for incremental satisfaction computation
 # These are updated at the end of each stage
 # Start with empty for the first stage
-PREV_STAGE_NAME="stage3"
+PREV_STAGE_NAME=""
 
 for stage_def in "${STAGES[@]}"; do
     # Parse stage definition
