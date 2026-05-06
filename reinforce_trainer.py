@@ -1,6 +1,9 @@
 import os
+import math
 import torch
 import torch.nn as nn
+import torch.distributed as dist
+from torch.utils.data import Sampler
 from transformers import Trainer
 
 from formula_utils import str_to_formula
@@ -15,11 +18,16 @@ class REINFORCETrainerRB(Trainer):
             *args,
             kernel: LTLKernel,
             tokenizer: LTLTokenizer,
-            satisfactions_path: str,
             baseline_momentum: float = 0.9,
             reward_clip: float | None = 1.0,
             semantic_eval_batch_size: int = 10240,
             satisfactions_mmap: bool = False,
+            difficulty_sampling: bool = False,
+            difficulty_start_target: float = 0.10,
+            difficulty_temperature: float = 0.80,
+            difficulty_step_size: float = 2.4,
+            difficulty_update_alpha: float = 2.0,
+            difficulty_performance_target: float = 0.80,
             **kwargs,
         ) -> None:
             self.processing_class = kwargs.pop("processing_class", None)
@@ -32,14 +40,105 @@ class REINFORCETrainerRB(Trainer):
             self.baseline_momentum = baseline_momentum
             self.reward_clip = reward_clip
             self.semantic_eval_batch_size = semantic_eval_batch_size
-            self.satisfactions_path = satisfactions_path
-            self._satisfactions_mmap = satisfactions_mmap
+            self.difficulty_sampling = bool(difficulty_sampling)
+            self.difficulty_start_target = float(difficulty_start_target)
+            self.difficulty_temperature = float(difficulty_temperature)
+            self.difficulty_step_size = float(difficulty_step_size)
+            self.difficulty_update_alpha = float(difficulty_update_alpha)
+            self.difficulty_performance_target = float(difficulty_performance_target)
             self._reward_baseline: torch.Tensor | None = None
             self._reward_sq_mean: torch.Tensor | None = None
-            self._satisfactions_tensor: torch.Tensor | None = None
             self._last_train_metrics: dict[str, float | torch.Tensor] = {}
             self._last_rl_metrics: dict[str, float | torch.Tensor] = {}
+            self._difficulty_sampler: AdaptiveDifficultySampler | None = None
+            self._uniform_sampler: UniformRandomSampler | None = None
+            self._active_train_sampler: MutableDelegatingSampler | None = None
+            self._active_sampler_kind: str = "uniform"
+            self._curriculum_warmup_steps: int | None = None
             self._sync_kernel_device(getattr(self.args, "device", None))
+            self._maybe_init_difficulty_sampler()
+            self._maybe_init_uniform_sampler()
+
+
+    def _maybe_init_difficulty_sampler(self) -> None:
+        if not self.difficulty_sampling:
+            return
+        formulas = getattr(self.train_dataset, "formulas", None)
+        if formulas is None or len(formulas) == 0:
+            print("[REINFORCETrainer] Difficulty sampling disabled: formulas unavailable in train dataset.")
+            self.difficulty_sampling = False
+            return
+
+        depths = torch.tensor([int(phi.depth()) for phi in formulas], dtype=torch.float32)
+        min_depth = float(depths.min().item())
+        max_depth = float(depths.max().item())
+        difficulties = depths
+        start_target = min_depth + self.difficulty_start_target * (max_depth - min_depth)
+        start_target = float(min(max(start_target, min_depth), max_depth))
+
+        num_samples = int(len(formulas))
+        base_seed = int(getattr(self.args, "seed", 0) or 0)
+
+        self._difficulty_sampler = AdaptiveDifficultySampler(
+            difficulties=difficulties,
+            num_samples=num_samples,
+            temperature=self.difficulty_temperature,
+            start_target_difficulty=start_target,
+            max_difficulty_step=self.difficulty_step_size,
+            update_alpha=self.difficulty_update_alpha,
+            performance_target=self.difficulty_performance_target,
+            seed=base_seed,
+        )
+
+
+    def _maybe_init_uniform_sampler(self) -> None:
+        if not self.difficulty_sampling:
+            return
+        if self.train_dataset is None:
+            return
+
+        num_samples = int(len(self.train_dataset))
+        base_seed = int(getattr(self.args, "seed", 0) or 0)
+
+        self._uniform_sampler = UniformRandomSampler(
+            dataset_size=num_samples,
+            num_samples=num_samples,
+            seed=base_seed,
+        )
+
+
+    def _resolve_curriculum_warmup_steps(self) -> int:
+        if self._curriculum_warmup_steps is not None:
+            return self._curriculum_warmup_steps
+
+        configured_steps = getattr(self.args, "critic_warmup_steps", None)
+        if configured_steps is not None:
+            self._curriculum_warmup_steps = max(0, int(configured_steps))
+            return self._curriculum_warmup_steps
+
+        max_steps = int(getattr(self.state, "max_steps", 0) or 0)
+        if max_steps > 0:
+            self._curriculum_warmup_steps = max(0, int(self.args.get_warmup_steps(max_steps)))
+        else:
+            self._curriculum_warmup_steps = max(0, int(getattr(self.args, "warmup_steps", 0) or 0))
+        return self._curriculum_warmup_steps
+
+
+    def _is_curriculum_warmup_active(self) -> bool:
+        return int(getattr(self.state, "global_step", 0) or 0) < self._resolve_curriculum_warmup_steps()
+
+
+    def _sync_active_train_sampler(self) -> None:
+        if self._active_train_sampler is None or self._uniform_sampler is None:
+            return
+
+        use_uniform = self._is_curriculum_warmup_active() or self._difficulty_sampler is None
+        target_sampler = self._uniform_sampler if use_uniform else self._difficulty_sampler
+        target_kind = "uniform" if use_uniform else "difficulty"
+
+        if target_sampler is not None and self._active_sampler_kind != target_kind:
+            self._active_train_sampler.set_inner_sampler(target_sampler)
+            self._active_sampler_kind = target_kind
 
     
     
@@ -51,11 +150,13 @@ class REINFORCETrainerRB(Trainer):
         num_items_in_batch: int | None = None,
         return_outputs: bool = False,
     ):
+        if model.training:
+            self._sync_active_train_sampler()
         self._last_rl_metrics = {}
         # ----------- REINFORCE loss -----------
         encoder_hidden_states = inputs.get("encoder_hidden_states")
         attention_mask = inputs.get("attention_mask")
-        batch_formula_ids = inputs.get("formula_ids")
+        batch_target_satisfaction = inputs.get("target_satisfaction")
         generation_max_length: int | None = None
         if encoder_hidden_states is not None:
             if attention_mask is not None:
@@ -74,28 +175,41 @@ class REINFORCETrainerRB(Trainer):
             reinforce_loss, valid_mask = self._compute_reinforce_term(
                 model=model,
                 encoder_hidden_states=encoder_hidden_states,
-                batch_formula_ids=batch_formula_ids,
+                batch_target_satisfaction=batch_target_satisfaction,
                 generation_max_length=generation_max_length,
                 require_grad=model.training,
             )
 
-        # ----------- CE loss (fallback) -----------
-        if reinforce_loss is None or valid_mask is None:
-            outputs = model(**inputs)
-            ce_loss = outputs.loss if hasattr(outputs, "loss") and outputs.loss is not None else outputs[0]
-            zero = ce_loss.detach().new_zeros(())
-            one = ce_loss.detach().new_ones(())
-            self._last_train_metrics = {
-                "train_loss": ce_loss.detach(),
-                "train_valid_ratio": zero,
-                "train_invalid_ratio": one,
-                "train_rl_loss": zero,
-                "train_ce_loss": ce_loss.detach(),
-            }
-            self._last_train_metrics.update(self._last_rl_metrics)
-            if return_outputs:
-                return ce_loss, outputs
-            return ce_loss
+        local_needs_dummy_rl = bool(reinforce_loss is None or valid_mask is None)
+        global_needs_dummy_rl = local_needs_dummy_rl
+        if dist.is_available() and dist.is_initialized():
+            dummy_flag = torch.tensor(
+                [1 if local_needs_dummy_rl else 0],
+                device=torch.device(getattr(self.args, "device", "cpu")),
+                dtype=torch.int32,
+            )
+            dist.all_reduce(dummy_flag, op=dist.ReduceOp.MAX)
+            global_needs_dummy_rl = bool(dummy_flag.item())
+
+        if global_needs_dummy_rl:
+            ref_tensor = next(
+                (value for value in inputs.values() if torch.is_tensor(value) and value.ndim > 0),
+                None,
+            )
+            if ref_tensor is None or ref_tensor.size(0) == 0:
+                raise RuntimeError("Could not build dummy RL anchor because batch tensors are missing or empty.")
+            dummy_mask = torch.zeros(ref_tensor.size(0), dtype=torch.bool, device=ref_tensor.device)
+            dummy_mask[0] = True
+            dummy_inputs = self._slice_inputs_by_mask(inputs, dummy_mask)
+            dummy_outputs = model(**dummy_inputs)
+            dummy_ce_loss = (
+                dummy_outputs.loss
+                if hasattr(dummy_outputs, "loss") and dummy_outputs.loss is not None
+                else dummy_outputs[0]
+            )
+            if local_needs_dummy_rl:
+                reinforce_loss = dummy_ce_loss * 0.0
+                valid_mask = torch.zeros(ref_tensor.size(0), dtype=torch.bool, device=reinforce_loss.device)
 
         # ----------- Combine losses -----------
         valid_mask = valid_mask.to(device=reinforce_loss.device)
@@ -107,16 +221,26 @@ class REINFORCETrainerRB(Trainer):
 
         loss_terms.append(valid_ratio * reinforce_loss)
 
-        if bool(invalid_mask.any()):
+        local_has_invalid = bool(invalid_mask.any())
+        if local_has_invalid:
             invalid_inputs = self._slice_inputs_by_mask(inputs, invalid_mask)
-            invalid_outputs = model(**invalid_inputs)
-            ce_invalid_loss = (
-                invalid_outputs.loss
-                if hasattr(invalid_outputs, "loss") and invalid_outputs.loss is not None
-                else invalid_outputs[0]
-            )
+            invalid_weight = invalid_ratio
+        else:
+            dummy_mask = torch.zeros_like(invalid_mask, dtype=torch.bool)
+            if dummy_mask.numel() > 0:
+                dummy_mask[0] = True
+            invalid_inputs = self._slice_inputs_by_mask(inputs, dummy_mask)
+            invalid_weight = invalid_ratio.detach().new_zeros(())
+
+        invalid_outputs = model(**invalid_inputs)
+        ce_invalid_loss = (
+            invalid_outputs.loss
+            if hasattr(invalid_outputs, "loss") and invalid_outputs.loss is not None
+            else invalid_outputs[0]
+        )
+        if local_has_invalid:
             ce_invalid_metric = ce_invalid_loss.detach()
-            loss_terms.append(invalid_ratio * ce_invalid_loss)
+        loss_terms.append(invalid_weight * ce_invalid_loss)
 
         loss = sum(loss_terms)
 
@@ -135,29 +259,48 @@ class REINFORCETrainerRB(Trainer):
         return loss
 
 
+    def _get_train_sampler(self, train_dataset=None):
+        if self._uniform_sampler is not None:
+            initial_inner = self._uniform_sampler
+            self._active_sampler_kind = "uniform"
+            self._active_train_sampler = MutableDelegatingSampler(initial_inner)
+            return self._active_train_sampler
+
+        if self._difficulty_sampler is not None:
+            initial_inner = self._difficulty_sampler
+            self._active_sampler_kind = "difficulty"
+            self._active_train_sampler = MutableDelegatingSampler(initial_inner)
+            return self._active_train_sampler
+        return super()._get_train_sampler(train_dataset)
+
+
     def _compute_reinforce_term(
         self,
         *,
         model,
         encoder_hidden_states: torch.Tensor,
         generation_max_length: int,
-        batch_formula_ids: torch.Tensor | None = None,
+        batch_target_satisfaction: torch.Tensor | None = None,
         require_grad: bool = False,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         if encoder_hidden_states is None or encoder_hidden_states.ndim < 2:
             print("[REINFORCETrainer] RL: encoder_hidden_states invalid -> returning None")
             return None, None
 
-        if batch_formula_ids is None:
-            print("[REINFORCETrainer] RL: formula_ids missing -> returning None")
+        if batch_target_satisfaction is None:
+            print("[REINFORCETrainer] RL: target_satisfaction missing -> returning None")
             return None, None
 
         device = self.args.device
-        target_satisfactions = self._get_satisfactions_rows(batch_formula_ids)
-        if target_satisfactions is None:
-            print("[REINFORCETrainer] RL: failed to load target satisfactions -> returning None")
+        if not torch.is_tensor(batch_target_satisfaction):
+            print("[REINFORCETrainer] RL: target_satisfaction has unsupported type -> returning None")
             return None, None
-        target_satisfactions = target_satisfactions.to(device=device, non_blocking=True)
+        if batch_target_satisfaction.ndim == 1:
+            batch_target_satisfaction = batch_target_satisfaction.unsqueeze(0)
+        if batch_target_satisfaction.ndim != 2:
+            print("[REINFORCETrainer] RL: target_satisfaction must be rank-2 -> returning None")
+            return None, None
+        target_satisfactions = batch_target_satisfaction.to(device=device, dtype=torch.bool, non_blocking=True)
 
         generation_max_length = max(1, int(generation_max_length))
         pad_id = getattr(self.formula_tokenizer, "pad_token_id", None)
@@ -261,6 +404,8 @@ class REINFORCETrainerRB(Trainer):
                     continue
 
         if not bool(valid_mask.any()):
+            if require_grad:
+                self._update_difficulty_sampler_from_rewards(reward_tensor)
             self._last_rl_metrics = {
                 "token_count_per_sample": token_count_per_sample,
                 "token_entropy_sum": token_entropy_sum,
@@ -269,6 +414,8 @@ class REINFORCETrainerRB(Trainer):
                 "reward_per_sample": reward_tensor.detach(),
                 "advantage_per_sample": torch.zeros_like(reward_tensor),
             }
+            if self._difficulty_sampler is not None:
+                self._last_rl_metrics["curriculum_target_difficulty"] = float(self._difficulty_sampler.target_difficulty)
             return None, valid_mask
 
         valid_idx = valid_mask.nonzero(as_tuple=False).squeeze(-1)
@@ -304,12 +451,8 @@ class REINFORCETrainerRB(Trainer):
         advantage_per_sample[valid_idx] = advantage_valid
 
         reinforce_loss = -(advantage_valid * seq_log_prob).mean()
-
-        """ action_logprob_mean = seq_log_prob.mean().detach()
-        reward_var = reward_tensor.var(unbiased=False).detach()
-        advantage_mean = advantage.mean().detach()
-        advantage_var = advantage.var(unbiased=False).detach()
-        policy_entropy = ((token_entropy * token_mask_f).sum() / token_mask_f.sum().clamp(min=1.0)).detach() """
+        if require_grad:
+            self._update_difficulty_sampler_from_rewards(reward_tensor)
 
         self._last_rl_metrics = {
             "token_count_per_sample": token_count_per_sample,
@@ -319,9 +462,34 @@ class REINFORCETrainerRB(Trainer):
             "reward_per_sample": reward_tensor.detach(),
             "advantage_per_sample": advantage_per_sample.detach(),
         }
+        if self._difficulty_sampler is not None:
+            self._last_rl_metrics["curriculum_target_difficulty"] = float(self._difficulty_sampler.target_difficulty)
     
         
         return reinforce_loss, valid_mask
+
+
+    def _update_difficulty_sampler_from_rewards(self, reward_tensor: torch.Tensor) -> None:
+        if self._difficulty_sampler is None:
+            return
+        if self._is_curriculum_warmup_active():
+            return
+
+        valid_rewards = reward_tensor.detach()
+        local_sum = valid_rewards.sum()
+        local_count = valid_rewards.new_tensor(float(valid_rewards.numel()))
+
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(local_sum, op=dist.ReduceOp.SUM)
+            dist.all_reduce(local_count, op=dist.ReduceOp.SUM)
+
+        global_count = float(local_count.detach().to(dtype=torch.float32).cpu().item())
+        if global_count <= 0.0:
+            return
+
+        global_sum = float(local_sum.detach().to(dtype=torch.float32).cpu().item())
+        batch_performance = global_sum / global_count
+        self._difficulty_sampler.update_from_performance(batch_performance)
 
 
 
@@ -333,30 +501,8 @@ class REINFORCETrainerRB(Trainer):
             else:
                 sliced[key] = value
         return sliced
-    
 
 
-
-    def _get_satisfactions_rows(self, formula_ids: torch.Tensor) -> torch.Tensor | None:
-        if self.satisfactions_path is None:
-            return None
-
-        if self._satisfactions_tensor is None:
-            if self._satisfactions_mmap:
-                self._satisfactions_tensor = torch.load(self.satisfactions_path, map_location="cpu", mmap=True)
-            else:
-                self._satisfactions_tensor = torch.load(self.satisfactions_path, map_location="cpu")
-
-        if formula_ids.ndim == 0:
-            formula_ids = formula_ids.unsqueeze(0)
-        if formula_ids.ndim != 1:
-            return None
-
-        formula_ids_cpu = formula_ids.detach().to(dtype=torch.long, device="cpu")
-        return self._satisfactions_tensor.index_select(0, formula_ids_cpu)
-    
-
-    
     def _recompute_log_probs_with_grad(
         self,
         *,
@@ -411,13 +557,17 @@ class REINFORCETrainerGAE(Trainer):
             *args,
             kernel: LTLKernel,
             tokenizer: LTLTokenizer,
-            satisfactions_path: str,
             reward_clip: float | None = 1.0,
             semantic_eval_batch_size: int = 10240,
             satisfactions_mmap: bool = False,
+            difficulty_sampling: bool = False,
+            difficulty_start_target: float = 0.10,
+            difficulty_temperature: float = 0.80,
+            difficulty_step_size: float = 2.4,
+            difficulty_update_alpha: float = 2.0,
+            difficulty_performance_target: float = 0.80,
             gae_gamma: float = 1.0,
             gae_lambda: float = 1.0,
-            critic_loss_coef: float = 0.5,
             critic_lr: float | None = None,
             critic_hidden_dim: int = 256,
             critic_weight_decay: float = 0.0,
@@ -432,32 +582,140 @@ class REINFORCETrainerGAE(Trainer):
             self.formula_tokenizer = tokenizer
             self.reward_clip = reward_clip
             self.semantic_eval_batch_size = semantic_eval_batch_size
-            self.satisfactions_path = satisfactions_path
-            self._satisfactions_mmap = satisfactions_mmap
+            self.difficulty_sampling = bool(difficulty_sampling)
+            self.difficulty_start_target = float(difficulty_start_target)
+            self.difficulty_temperature = float(difficulty_temperature)
+            self.difficulty_step_size = float(difficulty_step_size)
+            self.difficulty_update_alpha = float(difficulty_update_alpha)
+            self.difficulty_performance_target = float(difficulty_performance_target)
             self.gae_gamma = float(gae_gamma)
             self.gae_lambda = float(gae_lambda)
-            self.critic_loss_coef = float(critic_loss_coef)
             self.critic_lr = float(critic_lr) if critic_lr is not None else float(self.args.learning_rate)
             self.critic_weight_decay = float(critic_weight_decay)
-            self._satisfactions_tensor: torch.Tensor | None = None
             self._last_train_metrics: dict[str, float | torch.Tensor] = {}
             self._last_rl_metrics: dict[str, float | torch.Tensor] = {}
+            self._difficulty_sampler: AdaptiveDifficultySampler | None = None
+            self._uniform_sampler: UniformRandomSampler | None = None
+            self._active_train_sampler: MutableDelegatingSampler | None = None
+            self._active_sampler_kind: str = "uniform"
+            self._actor_frozen: bool = False
+            self._critic_warmup_steps: int | None = None
 
             hidden_dim = int(getattr(self.model.config, "n_embd", 0))
             if hidden_dim <= 0:
                 raise ValueError("Model config must expose positive n_embd for critic construction.")
 
-            semantic_dim = int(getattr(kernel, "m", 0))
-            if semantic_dim <= 0:
-                raise ValueError("Kernel does not have the required m attribute to perform training. Make sure the kernel is initialized properly with a positive semantic embedding dimension.")
-
             self.critic = nn.Sequential(
-                nn.Linear(hidden_dim + semantic_dim, critic_hidden_dim),
+                nn.Linear(hidden_dim, critic_hidden_dim),
                 nn.Tanh(),
                 nn.Linear(critic_hidden_dim, 1),
             )
 
+            self._attach_critic_to_model()
             self._sync_kernel_critic_device(getattr(self.args, "device", None))
+            self._maybe_init_difficulty_sampler()
+            self._maybe_init_uniform_sampler()
+
+
+    def _maybe_init_difficulty_sampler(self) -> None:
+        if not self.difficulty_sampling:
+            return
+        formulas = getattr(self.train_dataset, "formulas", None)
+        if formulas is None or len(formulas) == 0:
+            print("[REINFORCETrainer] Difficulty sampling disabled: formulas unavailable in train dataset.")
+            self.difficulty_sampling = False
+            return
+
+        depths = torch.tensor([int(phi.depth()) for phi in formulas], dtype=torch.float32)
+        min_depth = float(depths.min().item())
+        max_depth = float(depths.max().item())
+        difficulties = depths
+        start_target = min_depth + self.difficulty_start_target * (max_depth - min_depth)
+        start_target = float(min(max(start_target, min_depth), max_depth))
+
+        num_samples = int(len(formulas))
+        base_seed = int(getattr(self.args, "seed", 0) or 0)
+
+        self._difficulty_sampler = AdaptiveDifficultySampler(
+            difficulties=difficulties,
+            num_samples=num_samples,
+            temperature=self.difficulty_temperature,
+            start_target_difficulty=start_target,
+            max_difficulty_step=self.difficulty_step_size,
+            update_alpha=self.difficulty_update_alpha,
+            performance_target=self.difficulty_performance_target,
+            seed=base_seed,
+        )
+
+
+    def _maybe_init_uniform_sampler(self) -> None:
+        if not self.difficulty_sampling:
+            return
+        if self.train_dataset is None:
+            return
+
+        num_samples = int(len(self.train_dataset))
+        base_seed = int(getattr(self.args, "seed", 0) or 0)
+
+        self._uniform_sampler = UniformRandomSampler(
+            dataset_size=num_samples,
+            num_samples=num_samples,
+            seed=base_seed,
+        )
+
+
+    def _resolve_critic_warmup_steps(self) -> int:
+        if self._critic_warmup_steps is not None:
+            return self._critic_warmup_steps
+
+        configured_steps = getattr(self.args, "critic_warmup_steps", None)
+        if configured_steps is not None:
+            self._critic_warmup_steps = max(0, int(configured_steps))
+            return self._critic_warmup_steps
+
+        max_steps = int(getattr(self.state, "max_steps", 0) or 0)
+        if max_steps > 0:
+            self._critic_warmup_steps = max(0, int(self.args.get_warmup_steps(max_steps)))
+        else:
+            self._critic_warmup_steps = max(0, int(getattr(self.args, "warmup_steps", 0) or 0))
+        return self._critic_warmup_steps
+
+
+    def _is_critic_warmup_active(self) -> bool:
+        return int(getattr(self.state, "global_step", 0) or 0) < self._resolve_critic_warmup_steps()
+
+
+    def _set_actor_requires_grad(self, requires_grad: bool) -> None:
+        if self.model is None:
+            return
+        if requires_grad and not self._actor_frozen:
+            return
+        if (not requires_grad) and self._actor_frozen:
+            return
+
+        target_model = self.model.module if hasattr(self.model, "module") else self.model
+        critic = getattr(target_model, "critic", None)
+        critic_param_ids = {id(p) for p in critic.parameters()} if critic is not None else set()
+
+        for p in self.model.parameters():
+            if id(p) in critic_param_ids:
+                p.requires_grad = True
+            else:
+                p.requires_grad = requires_grad
+        self._actor_frozen = not requires_grad
+
+
+    def _sync_active_train_sampler(self) -> None:
+        if self._active_train_sampler is None or self._uniform_sampler is None:
+            return
+
+        use_uniform = self._is_critic_warmup_active() or self._difficulty_sampler is None
+        target_sampler = self._uniform_sampler if use_uniform else self._difficulty_sampler
+        target_kind = "uniform" if use_uniform else "difficulty"
+
+        if target_sampler is not None and self._active_sampler_kind != target_kind:
+            self._active_train_sampler.set_inner_sampler(target_sampler)
+            self._active_sampler_kind = target_kind
 
 
 
@@ -469,11 +727,16 @@ class REINFORCETrainerGAE(Trainer):
         num_items_in_batch: int | None = None,
         return_outputs: bool = False,
     ):
+        critic_warmup = self._is_critic_warmup_active()
+        actor_model = model.module if (critic_warmup and hasattr(model, "module")) else model
+        if model.training:
+            self._sync_active_train_sampler()
+            self._set_actor_requires_grad(not critic_warmup)
         self._last_rl_metrics = {}
         # ----------- REINFORCE loss -----------
         encoder_hidden_states = inputs.get("encoder_hidden_states")
         attention_mask = inputs.get("attention_mask")
-        batch_formula_ids = inputs.get("formula_ids")
+        batch_target_satisfaction = inputs.get("target_satisfaction")
         generation_max_length: int | None = None
         if encoder_hidden_states is not None:
             if attention_mask is not None:
@@ -490,30 +753,47 @@ class REINFORCETrainerGAE(Trainer):
             and generation_max_length is not None
         ):
             reinforce_loss, valid_mask = self._compute_reinforce_term(
-                model=model,
+                model=actor_model,
                 encoder_hidden_states=encoder_hidden_states,
-                batch_formula_ids=batch_formula_ids,
+                batch_target_satisfaction=batch_target_satisfaction,
                 generation_max_length=generation_max_length,
-                require_grad=model.training,
+                require_grad=model.training and not critic_warmup,
             )
 
-        # ----------- CE loss (fallback) -----------
-        if reinforce_loss is None or valid_mask is None:
-            outputs = model(**inputs)
-            ce_loss = outputs.loss if hasattr(outputs, "loss") and outputs.loss is not None else outputs[0]
-            zero = ce_loss.detach().new_zeros(())
-            one = ce_loss.detach().new_ones(())
-            self._last_train_metrics = {
-                "train_loss": ce_loss.detach(),
-                "train_valid_ratio": zero,
-                "train_invalid_ratio": one,
-                "train_rl_loss": zero,
-                "train_ce_loss": ce_loss.detach(),
-            }
-            self._last_train_metrics.update(self._last_rl_metrics)
-            if return_outputs:
-                return ce_loss, outputs
-            return ce_loss
+        local_needs_dummy_rl = bool(reinforce_loss is None or valid_mask is None)
+        global_needs_dummy_rl = local_needs_dummy_rl
+        if dist.is_available() and dist.is_initialized():
+            dummy_flag = torch.tensor(
+                [1 if local_needs_dummy_rl else 0],
+                device=torch.device(getattr(self.args, "device", "cpu")),
+                dtype=torch.int32,
+            )
+            dist.all_reduce(dummy_flag, op=dist.ReduceOp.MAX)
+            global_needs_dummy_rl = bool(dummy_flag.item())
+
+        if global_needs_dummy_rl:
+            ref_tensor = next(
+                (value for value in inputs.values() if torch.is_tensor(value) and value.ndim > 0),
+                None,
+            )
+            if ref_tensor is None or ref_tensor.size(0) == 0:
+                raise RuntimeError("Could not build dummy RL anchor because batch tensors are missing or empty.")
+            dummy_mask = torch.zeros(ref_tensor.size(0), dtype=torch.bool, device=ref_tensor.device)
+            dummy_mask[0] = True
+            dummy_inputs = self._slice_inputs_by_mask(inputs, dummy_mask)
+            if critic_warmup:
+                with torch.no_grad():
+                    dummy_outputs = actor_model(**dummy_inputs)
+            else:
+                dummy_outputs = actor_model(**dummy_inputs)
+            dummy_ce_loss = (
+                dummy_outputs.loss
+                if hasattr(dummy_outputs, "loss") and dummy_outputs.loss is not None
+                else dummy_outputs[0]
+            )
+            if local_needs_dummy_rl:
+                reinforce_loss = dummy_ce_loss * 0.0
+                valid_mask = torch.zeros(ref_tensor.size(0), dtype=torch.bool, device=reinforce_loss.device)
 
         # ----------- Combine losses -----------
         valid_mask = valid_mask.to(device=reinforce_loss.device)
@@ -525,16 +805,30 @@ class REINFORCETrainerGAE(Trainer):
 
         loss_terms.append(valid_ratio * reinforce_loss)
 
-        if bool(invalid_mask.any()):
+        local_has_invalid = bool(invalid_mask.any())
+        if local_has_invalid:
             invalid_inputs = self._slice_inputs_by_mask(inputs, invalid_mask)
-            invalid_outputs = model(**invalid_inputs)
-            ce_invalid_loss = (
-                invalid_outputs.loss
-                if hasattr(invalid_outputs, "loss") and invalid_outputs.loss is not None
-                else invalid_outputs[0]
-            )
+            invalid_weight = invalid_ratio
+        else:
+            dummy_mask = torch.zeros_like(invalid_mask, dtype=torch.bool)
+            if dummy_mask.numel() > 0:
+                dummy_mask[0] = True
+            invalid_inputs = self._slice_inputs_by_mask(inputs, dummy_mask)
+            invalid_weight = invalid_ratio.detach().new_zeros(())
+
+        if critic_warmup:
+            with torch.no_grad():
+                invalid_outputs = actor_model(**invalid_inputs)
+        else:
+            invalid_outputs = actor_model(**invalid_inputs)
+        ce_invalid_loss = (
+            invalid_outputs.loss
+            if hasattr(invalid_outputs, "loss") and invalid_outputs.loss is not None
+            else invalid_outputs[0]
+        )
+        if local_has_invalid:
             ce_invalid_metric = ce_invalid_loss.detach()
-            loss_terms.append(invalid_ratio * ce_invalid_loss)
+        loss_terms.append(invalid_weight * ce_invalid_loss)
 
         loss = sum(loss_terms)
 
@@ -548,9 +842,35 @@ class REINFORCETrainerGAE(Trainer):
         self._last_train_metrics.update(self._last_rl_metrics)
 
         if return_outputs:
-            outputs = model(**inputs)
+            if critic_warmup:
+                with torch.no_grad():
+                    outputs = actor_model(**inputs)
+            else:
+                outputs = actor_model(**inputs)
             return loss, outputs
         return loss
+
+
+    def training_step(self, model, inputs, num_items_in_batch: int | None = None):
+        loss = super().training_step(model, inputs, num_items_in_batch)
+        if self._is_critic_warmup_active():
+            self._sync_critic_gradients()
+        return loss
+
+
+    def _get_train_sampler(self, train_dataset=None):
+        if self._uniform_sampler is not None:
+            initial_inner = self._uniform_sampler
+            self._active_sampler_kind = "uniform"
+            self._active_train_sampler = MutableDelegatingSampler(initial_inner)
+            return self._active_train_sampler
+
+        if self._difficulty_sampler is not None:
+            initial_inner = self._difficulty_sampler
+            self._active_sampler_kind = "difficulty"
+            self._active_train_sampler = MutableDelegatingSampler(initial_inner)
+            return self._active_train_sampler
+        return super()._get_train_sampler(train_dataset)
     
 
 
@@ -560,23 +880,27 @@ class REINFORCETrainerGAE(Trainer):
         model,
         encoder_hidden_states: torch.Tensor,
         generation_max_length: int,
-        batch_formula_ids: torch.Tensor | None = None,
+        batch_target_satisfaction: torch.Tensor | None = None,
         require_grad: bool = False,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         if encoder_hidden_states is None or encoder_hidden_states.ndim < 2:
             print("[REINFORCETrainer] RL: encoder_hidden_states invalid -> returning None")
             return None, None
 
-        if batch_formula_ids is None:
-            print("[REINFORCETrainer] RL: formula_ids missing -> returning None")
+        if batch_target_satisfaction is None:
+            print("[REINFORCETrainer] RL: target_satisfaction missing -> returning None")
             return None, None
 
         device = self.args.device
-        target_satisfactions = self._get_satisfactions_rows(batch_formula_ids)
-        if target_satisfactions is None:
-            print("[REINFORCETrainer] RL: failed to load target satisfactions -> returning None")
+        if not torch.is_tensor(batch_target_satisfaction):
+            print("[REINFORCETrainer] RL: target_satisfaction has unsupported type -> returning None")
             return None, None
-        target_satisfactions = target_satisfactions.to(device=device, non_blocking=True)
+        if batch_target_satisfaction.ndim == 1:
+            batch_target_satisfaction = batch_target_satisfaction.unsqueeze(0)
+        if batch_target_satisfaction.ndim != 2:
+            print("[REINFORCETrainer] RL: target_satisfaction must be rank-2 -> returning None")
+            return None, None
+        target_satisfactions = batch_target_satisfaction.to(device=device, dtype=torch.bool, non_blocking=True)
 
         generation_max_length = max(1, int(generation_max_length))
         pad_id = getattr(self.formula_tokenizer, "pad_token_id", None)
@@ -680,13 +1004,18 @@ class REINFORCETrainerGAE(Trainer):
                     continue
 
         if not bool(valid_mask.any()):
+            if require_grad:
+                self._update_difficulty_sampler_from_rewards(reward_tensor)
             zeros_per_sample = torch.zeros_like(reward_tensor)
+            zero_loss = reward_tensor.new_zeros(())
             self._last_rl_metrics = {
                 "token_count_per_sample": token_count_per_sample,
                 "token_entropy_sum": token_entropy_sum,
                 "train_action_log_prob_sum": train_action_log_prob_sum,
                 "valid_formula_mask_per_sample": valid_mask.detach(),
                 "reward_per_sample": reward_tensor.detach(),
+                "train_actor_loss": zero_loss,
+                "train_critic_loss": zero_loss,
                 "advantage_per_sample": zeros_per_sample,
                 "value_sum_per_sample": zeros_per_sample,
                 "returns_sum": zeros_per_sample,
@@ -694,6 +1023,8 @@ class REINFORCETrainerGAE(Trainer):
                 "value_err_sq_sum": zeros_per_sample,
                 "value_err_sum": zeros_per_sample,
             }
+            if self._difficulty_sampler is not None:
+                self._last_rl_metrics["curriculum_target_difficulty"] = float(self._difficulty_sampler.target_difficulty)
             return None, valid_mask
 
         valid_idx = valid_mask.nonzero(as_tuple=False).squeeze(-1)
@@ -702,15 +1033,12 @@ class REINFORCETrainerGAE(Trainer):
         token_hidden = token_hidden[valid_idx].detach()
         token_mask = token_mask[valid_idx]
         token_mask_f = token_mask_f[valid_idx]
-        semantic_valid = encoder_hidden_states[valid_idx]
         lengths_valid = token_mask.sum(dim=-1).clamp(min=1)
         rewards = torch.zeros_like(token_log_probs)
         rewards.scatter_(1, (lengths_valid - 1).unsqueeze(-1), reward_valid.unsqueeze(-1))
-
+        
         Bv, Tv, _ = token_hidden.shape
-        sem_expanded = semantic_valid.unsqueeze(1).expand(Bv, Tv, semantic_valid.size(-1))
-        critic_in = torch.cat([token_hidden, sem_expanded], dim=-1)
-        values = self.critic(critic_in).squeeze(-1)
+        values = self.critic(token_hidden).squeeze(-1)
 
         values_det = values.detach()
         next_values = torch.zeros_like(values_det)
@@ -732,7 +1060,12 @@ class REINFORCETrainerGAE(Trainer):
         denom = token_mask_f.sum().clamp(min=1.0)
         actor_loss = -((advantages.detach() * token_log_probs) * token_mask_f).sum() / denom
         critic_loss = torch.nn.functional.mse_loss(values * token_mask_f, returns, reduction="sum") / denom
-        reinforce_loss = actor_loss + self.critic_loss_coef * critic_loss
+        if self._is_critic_warmup_active():
+            reinforce_loss = critic_loss
+        else:
+            reinforce_loss = actor_loss + critic_loss
+        if require_grad:
+            self._update_difficulty_sampler_from_rewards(reward_tensor)
 
         advantage_per_sample = torch.zeros_like(reward_tensor)
         advantage_per_sample[valid_idx] = (advantages * token_mask_f).sum(dim=1).detach()
@@ -755,29 +1088,14 @@ class REINFORCETrainerGAE(Trainer):
         value_err_sum = torch.zeros_like(reward_tensor)
         value_err_sum[valid_idx] = value_err_masked.sum(dim=1).detach()
 
-        """ values_mean = (values * token_mask_f).sum() / denom
-        adv_mean = (advantages * token_mask_f).sum() / denom
-        adv_centered = (advantages - adv_mean) * token_mask_f
-        adv_var = (adv_centered * adv_centered).sum() / denom
-
-        returns_masked = returns * token_mask_f
-        ret_mean = returns_masked.sum() / denom
-        ret_centered = (returns_masked - ret_mean) * token_mask_f
-        ret_var = (ret_centered * ret_centered).sum() / denom
-        value_err = (returns - values) * token_mask_f
-        value_err_var = (value_err * value_err).sum() / denom
-        explained_var = 1.0 - (value_err_var / ret_var.clamp(min=1e-8))
-        action_logprob_mean = seq_log_prob.mean().detach()
-        reward_mean = reward_tensor.mean().detach()
-        reward_var = reward_tensor.var(unbiased=False).detach()
-        policy_entropy = ((token_entropy * token_mask_f).sum() / denom).detach() """
-
         self._last_rl_metrics = {
             "token_count_per_sample": token_count_per_sample,
             "token_entropy_sum": token_entropy_sum,
             "train_action_log_prob_sum": train_action_log_prob_sum,
             "valid_formula_mask_per_sample": valid_mask.detach(),
             "reward_per_sample": reward_tensor.detach(),
+            "train_actor_loss": actor_loss.detach(),
+            "train_critic_loss": critic_loss.detach(),
             "advantage_per_sample": advantage_per_sample,
             "value_sum_per_sample": value_sum_per_sample,
             "returns_sum": returns_sum,
@@ -785,8 +1103,33 @@ class REINFORCETrainerGAE(Trainer):
             "value_err_sq_sum": value_err_sq_sum,
             "value_err_sum": value_err_sum,
             }
+        if self._difficulty_sampler is not None:
+            self._last_rl_metrics["curriculum_target_difficulty"] = float(self._difficulty_sampler.target_difficulty)
 
         return reinforce_loss, valid_mask
+
+
+    def _update_difficulty_sampler_from_rewards(self, reward_tensor: torch.Tensor) -> None:
+        if self._difficulty_sampler is None:
+            return
+        if self._is_critic_warmup_active():
+            return
+
+        valid_rewards = reward_tensor.detach()
+        local_sum = valid_rewards.sum()
+        local_count = valid_rewards.new_tensor(float(valid_rewards.numel()))
+
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(local_sum, op=dist.ReduceOp.SUM)
+            dist.all_reduce(local_count, op=dist.ReduceOp.SUM)
+
+        global_count = float(local_count.detach().to(dtype=torch.float32).cpu().item())
+        if global_count <= 0.0:
+            return
+
+        global_sum = float(local_sum.detach().to(dtype=torch.float32).cpu().item())
+        batch_performance = global_sum / global_count
+        self._difficulty_sampler.update_from_performance(batch_performance)
 
 
 
@@ -800,27 +1143,6 @@ class REINFORCETrainerGAE(Trainer):
         return sliced
 
 
-
-    def _get_satisfactions_rows(self, formula_ids: torch.Tensor) -> torch.Tensor | None:
-        if self.satisfactions_path is None:
-            return None
-
-        if self._satisfactions_tensor is None:
-            if self._satisfactions_mmap:
-                self._satisfactions_tensor = torch.load(self.satisfactions_path, map_location="cpu", mmap=True)
-            else:
-                self._satisfactions_tensor = torch.load(self.satisfactions_path, map_location="cpu")
-
-        if formula_ids.ndim == 0:
-            formula_ids = formula_ids.unsqueeze(0)
-        if formula_ids.ndim != 1:
-            return None
-
-        formula_ids_cpu = formula_ids.detach().to(dtype=torch.long, device="cpu")
-        return self._satisfactions_tensor.index_select(0, formula_ids_cpu)
-    
-
-    
     def _recompute_log_probs_and_hidden(
         self,
         *,
@@ -878,7 +1200,6 @@ class REINFORCETrainerGAE(Trainer):
             "critic_weight_decay": self.critic_weight_decay,
             "gae_gamma": self.gae_gamma,
             "gae_lambda": self.gae_lambda,
-            "critic_loss_coef": self.critic_loss_coef,
         }
         torch.save(payload, critic_path)
 
@@ -921,6 +1242,8 @@ class REINFORCETrainerGAE(Trainer):
             else:
                 print(f"[REINFORCETrainer] Optimizer state not found at {opt_path}, skipping load.")
 
+        self._attach_critic_to_model()
+
         return True
 
 
@@ -939,6 +1262,37 @@ class REINFORCETrainerGAE(Trainer):
             return
         self.kernel.set_device(device)
         self.critic.to(device)
+
+    def _sync_critic_gradients(self) -> None:
+        if not (dist.is_available() and dist.is_initialized()):
+            return
+
+        accelerator = getattr(self, "accelerator", None)
+        if accelerator is not None and not accelerator.sync_gradients:
+            return
+
+        world_size = dist.get_world_size()
+        if world_size <= 1:
+            return
+
+        for param in self.critic.parameters():
+            if param.grad is None:
+                continue
+            dist.all_reduce(param.grad, op=dist.ReduceOp.SUM)
+            param.grad.div_(world_size)
+
+        
+
+    def _attach_critic_to_model(self) -> None:
+        if self.model is None or self.critic is None:
+            return
+
+        target_model = self.model.module if hasattr(self.model, "module") else self.model
+        existing = getattr(target_model, "critic", None)
+        if existing is self.critic:
+            return
+
+        target_model.critic = self.critic
 
 
 
@@ -961,3 +1315,150 @@ class REINFORCETrainerGAE(Trainer):
             }
         )
         return optimizer
+
+
+
+class AdaptiveDifficultySampler(Sampler[int]):
+
+    def __init__(
+        self,
+        *,
+        difficulties: torch.Tensor,
+        num_samples: int,
+        temperature: float = 0.20,
+        start_target_difficulty: float = 0.10,
+        max_difficulty_step: float = 0.05,
+        update_alpha: float = 1.0,
+        performance_target: float = 0.80,
+        min_weight: float = 1e-6,
+        seed: int = 0,
+    ) -> None:
+        if difficulties.ndim != 1:
+            raise ValueError("difficulties must be a 1D tensor")
+        if difficulties.numel() == 0:
+            raise ValueError("difficulties cannot be empty")
+        if num_samples <= 0:
+            raise ValueError("num_samples must be positive")
+
+        self.difficulties = difficulties.detach().to(dtype=torch.float32, device="cpu")
+        self.d_min = 2
+        self.d_max = 5
+        self.num_samples = int(num_samples)
+        self.temperature = max(1e-4, float(temperature))
+        self.max_difficulty_step = float(max_difficulty_step)
+        self.update_alpha = float(update_alpha)
+        self.performance_target = float(performance_target)
+        self.min_weight = max(0.0, float(min_weight))
+        self.seed = int(seed)
+        self.target_difficulty = float(min(max(start_target_difficulty, self.d_min), self.d_max))
+
+        self._weights = torch.empty_like(self.difficulties)
+        self._generator = torch.Generator(device="cpu")
+        self._generator.manual_seed(self.seed)
+        self._refresh_weights()
+
+    def __len__(self) -> int:
+        return self.num_samples
+
+    def update_from_performance(self, batch_performance: float) -> float:
+        perf = float(batch_performance)
+        delta = self.max_difficulty_step * math.tanh(self.update_alpha * (perf - self.performance_target))
+        self.target_difficulty = float(min(max(self.target_difficulty + delta, self.d_min), self.d_max))
+        self._refresh_weights()
+        return self.target_difficulty
+
+    def _refresh_weights(self) -> None:
+        variance = max(self.temperature * self.temperature, 1e-8)
+        distance_sq = (self.difficulties - self.target_difficulty).square()
+        weights = torch.exp(-0.5 * distance_sq / variance)
+        if self.min_weight > 0.0:
+            weights = weights + self.min_weight
+        total = float(weights.sum().item())
+        if not math.isfinite(total) or total <= 0.0:
+            weights = torch.ones_like(self.difficulties) / float(self.difficulties.numel())
+        else:
+            weights = weights / total
+        self._weights = weights
+
+    def __iter__(self):
+        for _ in range(self.num_samples):
+            sampled: torch.Tensor = torch.multinomial(
+                self._weights,
+                num_samples=1,
+                replacement=True,
+                generator=self._generator,
+            )
+            yield int(sampled.item())
+
+
+class UniformRandomSampler(Sampler[int]):
+
+    def __init__(self, *, dataset_size: int, num_samples: int, seed: int = 0) -> None:
+        if dataset_size <= 0:
+            raise ValueError("dataset_size must be positive")
+        if num_samples <= 0:
+            raise ValueError("num_samples must be positive")
+        self.dataset_size = int(dataset_size)
+        self.num_samples = int(num_samples)
+        self.seed = int(seed)
+        self._generator = torch.Generator(device="cpu")
+        self._generator.manual_seed(self.seed)
+
+    def __len__(self) -> int:
+        return self.num_samples
+
+    def __iter__(self):
+        sampled = torch.randint(
+            low=0,
+            high=self.dataset_size,
+            size=(self.num_samples,),
+            generator=self._generator,
+        )
+        for idx in sampled.tolist():
+            yield int(idx)
+
+
+class MutableDelegatingSampler(Sampler[int]):
+
+    def __init__(self, inner_sampler: Sampler[int]) -> None:
+        self._inner_sampler = inner_sampler
+        self._version = 0
+
+    def set_inner_sampler(self, inner_sampler: Sampler[int]) -> None:
+        self._inner_sampler = inner_sampler
+        self._version += 1
+
+    def __len__(self) -> int:
+        return len(self._inner_sampler)
+
+    def __iter__(self):
+        return _MutableDelegatingSamplerIterator(self)
+
+
+class _MutableDelegatingSamplerIterator:
+
+    def __init__(self, wrapper: MutableDelegatingSampler) -> None:
+        self._wrapper = wrapper
+        self._seen = 0
+        self._version = wrapper._version
+        self._inner_iter = iter(wrapper._inner_sampler)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._seen >= len(self._wrapper):
+            raise StopIteration
+
+        if self._version != self._wrapper._version:
+            self._version = self._wrapper._version
+            self._inner_iter = iter(self._wrapper._inner_sampler)
+
+        try:
+            idx = next(self._inner_iter)
+        except StopIteration:
+            self._inner_iter = iter(self._wrapper._inner_sampler)
+            idx = next(self._inner_iter)
+
+        self._seen += 1
+        return idx

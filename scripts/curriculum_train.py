@@ -51,6 +51,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-dataset-dir", required=True, help="Directory containing a saved evaluation dataset")
     parser.add_argument("--model-load-dir", help="Directory with a previously saved curriculum checkpoint to resume from")
     parser.add_argument(
+        "--ce-reference-model-dir",
+        default=None,
+        help="Directory of the CE reference model used for stage-end KL metric computation",
+    )
+    parser.add_argument(
         "--output-dir",
         required=True,
         help="Output directory for Trainer artifacts (checkpoints, logs, etc.)",
@@ -318,6 +323,12 @@ def main() -> None:
         kernel=kernel,
         semantic_eval_batch_size=args.semantic_eval_batch_size
     )
+    ce_reference_model_dir = args.ce_reference_model_dir
+    if ce_reference_model_dir is not None and not os.path.isdir(ce_reference_model_dir):
+        raise FileNotFoundError(
+            f"CE reference model directory not found: {ce_reference_model_dir}"
+        )
+    trainer._ce_reference_model_path = ce_reference_model_dir
     metrics_logger_callback.attach_trainer(trainer)
     semantic_callback.attach_trainer(trainer)
 

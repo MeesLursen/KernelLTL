@@ -1,24 +1,25 @@
-#!/bin/bash  
-#SBATCH --job-name=kernelltl_test_job_re
-#SBATCH --output=logs/kernelltl_test_job_re_gae_lambda_1_wu_4_crlr_5e-4_value_test_%j.out
-#SBATCH --error=logs/kernelltl_test_job_re_gae_lambda_1_wu_4_crlr_5e-4_value_test_%j.err
-#SBATCH --time=03:00:00
+#!/bin/bash
+#SBATCH --job-name=kernelltl-finetune-reinforce
+#SBATCH --output=logs/kernelltl_finetune_reinforce_%j.out
+#SBATCH --error=logs/kernelltl_finetune_reinforce_%j.err
+#SBATCH --time=12:00:00
 #SBATCH --partition=gpu_h100
 #SBATCH --constraint=scratch-node
-#SBATCH --gpus=2
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=360G
+#SBATCH --gpus=4
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=720G
 
 # ============================================================================
 # Snellius Multi-Stage Curriculum Training Script for KernelLTL
 # ============================================================================
 #
-# This script runs the specified STAGE_CONFIGS as a test job.
+# This script runs multiple curriculum stages sequentially, automatically
+# loading the model checkpoint from the previous stage.
 #
 # Usage:
 #   1. Configure the STAGE_CONFIGS array below with your stage parameters
-#   2. Submit with: sbatch snellius_test_job.sh
-#   
+#   2. Submit with: sbatch snellius_curriculum.sh
+#
 # ============================================================================
 
 set -e  # Exit on error
@@ -29,7 +30,7 @@ set -e  # Exit on error
 
 PROJECT_DIR="/projects/prjs2029/KernelLTL"
 HOME_DIR="$HOME/KernelLTL"
-VENV_DIR="$HOME_DIR/venv"
+VENV_DIR="$PROJECT_DIR/venv"
 
 # Shared artifacts
 KERNEL_DIR="$HOME_DIR/artifacts/kernel"
@@ -37,20 +38,19 @@ TOKENIZER_DIR="$HOME_DIR/artifacts/tokenizer"
 
 # Shared model root with independent RE/CE branches
 BASE_MODELS_ROOT="$PROJECT_DIR/artifacts/models"
-BASE_RE_OUTPUT_DIR="$BASE_MODELS_ROOT/RE/test"
+BASE_RE_OUTPUT_DIR="$BASE_MODELS_ROOT/RE"
 BASE_CE_OUTPUT_DIR="$BASE_MODELS_ROOT/CE"
 
 # Training defaults (can be overridden per stage)
-DEFAULT_LEARNING_RATE=1e-4
+DEFAULT_LEARNING_RATE=5e-4
 DEFAULT_TRAIN_BATCH_SIZE=256
 DEFAULT_EVAL_BATCH_SIZE=96
-DEFAULT_WARMUP_RATIO=1.0
+DEFAULT_WARMUP_RATIO=0.02
 
 # Mixed precision
 MIXED_PRECISION="--bf16"
 
-# Semantic Eval Callback Settings
-DISABLE_TRAIN_END_SEMANTIC_EVAL=1
+# Evaluation Batch Size
 EVAL_BATCH_SIZE="256000"
 
 # Early Stopping Parameters
@@ -60,12 +60,8 @@ EARLY_STOPPING_THRESHOLD=0.0
 # RL trainer mode: gae or rb
 DEFAULT_RL_TRAINER="rb"
 
-# Train Dataset Satisfaction mmap Loading
-TRAIN_SATS_MMAP=0
-
 # Shared RL controls
 DEFAULT_RL_CLIP="1.0"
-
 
 # RB-specific controls
 DEFAULT_RB_BASELINE_MOMENTUM="0.9"
@@ -76,6 +72,9 @@ DEFAULT_GAE_LAMBDA="1.0"
 DEFAULT_CRITIC_LR="5e-6"
 DEFAULT_CRITIC_HIDDEN_DIM="256"
 DEFAULT_CRITIC_WEIGHT_DECAY="0.0"
+
+# Semantic eval callback controls
+DISABLE_TRAIN_END_SEMANTIC_EVAL=0
 
 # Adaptive Difficulty Sampling controls
 ADAPTIVE_DIFFICULTY_SAMPLING="0"
@@ -89,18 +88,18 @@ DIFFICULTY_PERFORMANCE_TARGET="0.8"
 # STAGE CONFIGURATION
 # ============================================================================
 # Define your curriculum stages here
-# Format: "STAGE_NAME|TRAIN_DIR|EVAL_DIR|EPOCHS|LEARNING_RATE|RL_TRAINER|CRITIC_LR"
+# Format: "STAGE_NAME|TRAIN_DIR|EVAL_DIR|EPOCHS|LEARNING_RATE|RL_TRAINER"
 
 # ============================================================================
 
 STAGE_CONFIGS=(
-    "gae_lambda_1_wu_4_crlr_5e-4_value_test:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:6:5e-8:gae:5e-4"
+    "rb_momentum_09_lr_5e-8:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:50:5e-8:rb"
+    
 )   
-    # "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:100:1e-4:rb"
-    # 
+    # "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:50:5e-4:gae"
     # "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts//datasets/stage2/eval:100:5e-5:gae"
     # "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:100:1e-5:gae"
-    # "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:100:5e-6:rb"
+    # "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:100:5e-6:gae"
 
 # ============================================================================
 # ENVIRONMENT SETUP
@@ -134,8 +133,7 @@ else
     source "$VENV_DIR/bin/activate"
 fi
 
-export PYTHONPATH="$HOME_DIR:$PYTHONPATH"
-
+export PYTHONPATH="$HOME_DIR:${PYTHONPATH:-}"
 
 NUM_GPUS=$(nvidia-smi -L | wc -l)
 echo "Number of GPUs: $NUM_GPUS"
@@ -156,7 +154,7 @@ esac
 
 SCRATCH_ROOT="$TMPDIR/KernelLTL"
 mkdir -p "$SCRATCH_ROOT"
-SCRATCH_RE_OUTPUT_ROOT="$SCRATCH_ROOT/models/RE/test"
+SCRATCH_RE_OUTPUT_ROOT="$SCRATCH_ROOT/models/RE"
 mkdir -p "$SCRATCH_RE_OUTPUT_ROOT"
 
 # ============================================================================
@@ -169,13 +167,14 @@ DEBUG_OPTION=""
 
 for i in "${!STAGE_CONFIGS[@]}"; do
     # Parse stage configuration
-    IFS=':' read -r STAGE_NAME TRAIN_DIR EVAL_DIR EPOCHS LR STAGE_RL_TRAINER CRITIC_LR <<< "${STAGE_CONFIGS[$i]}"
+    IFS=':' read -r STAGE_NAME TRAIN_DIR EVAL_DIR EPOCHS LR STAGE_RL_TRAINER <<< "${STAGE_CONFIGS[$i]}"
     
     # Use defaults if not specified
     LR=${LR:-$DEFAULT_LEARNING_RATE}
+    BATCH_SIZE="$DEFAULT_TRAIN_BATCH_SIZE"
     STAGE_RL_TRAINER=${STAGE_RL_TRAINER:-$DEFAULT_RL_TRAINER}
     STEP_INTERVAL=$(echo "scale=6; 1/$EPOCHS" | bc -l)
-    PRETRAIN_STEP_INTERVAL=$(echo "scale=6; 4/$EPOCHS" | bc -l)
+    PRETRAIN_STEP_INTERVAL=$(echo "scale=6; 2/$EPOCHS" | bc -l)
 
     STAGE_OUTPUT_DIR="$BASE_RE_OUTPUT_DIR/$STAGE_NAME"
     STAGE_MODEL_SAVE_DIR="$STAGE_OUTPUT_DIR/final_model"
@@ -208,7 +207,8 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     fi
 
     if [ ! -d "$CE_REFERENCE_MODEL_DIR" ]; then
-        echo "Missing CE reference model directory for $STAGE_NAME: $CE_REFERENCE_MODEL_DIR".
+        echo "Missing CE reference model directory for $STAGE_NAME: $CE_REFERENCE_MODEL_DIR"
+        echo "Expected CE and RE to share root '$BASE_MODELS_ROOT' but use different subdirectories (CE vs RE)."
         exit 1
     fi
 
@@ -248,10 +248,13 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--dataloader-pin-memory"
         $MIXED_PRECISION
         "--semantic-eval-batch-size" "$EVAL_BATCH_SIZE"
+        "--metric-for-best-model"        "eval_semantic_distance"
+        "--greater-is-better"            "false"
         "--rl-trainer" "$STAGE_RL_TRAINER"
         "--reinforce-reward-clip" "$DEFAULT_RL_CLIP"
         "--ce-reference-model-dir" "$CE_REFERENCE_MODEL_DIR"
-
+        "--early-stopping-patience" "$EARLY_STOPPING_PATIENCE"
+        "--early-stopping-threshold" "$EARLY_STOPPING_THRESHOLD"
     )
 
     if [ "$STAGE_RL_TRAINER" = "rb" ]; then
@@ -260,7 +263,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         CMD_ARGS+=(
             "--gae-gamma" "$DEFAULT_GAE_GAMMA"
             "--gae-lambda" "$DEFAULT_GAE_LAMBDA"
-            "--critic-lr" "$CRITIC_LR"
+            "--critic-lr" "$DEFAULT_CRITIC_LR"
             "--critic-hidden-dim" "$DEFAULT_CRITIC_HIDDEN_DIM"
             "--critic-weight-decay" "$DEFAULT_CRITIC_WEIGHT_DECAY"
         )
@@ -285,23 +288,13 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     if [ -n "$PREV_TRAINING_ARGS_DIR" ] && [ -d "$PREV_TRAINING_ARGS_DIR" ]; then
         CMD_ARGS+=("--training-args-load-dir" "$PREV_TRAINING_ARGS_DIR")
     fi
-    
-    # Train sats mmap storage
-    if [ "$TRAIN_SATS_MMAP" = "1" ]; then
-        echo "  Training dataset satisfactions will be loaded as mmap."
-        CMD_ARGS+=(
-            "--satisfactions-mmap"
-        )
-    fi
 
-    # Train sats mmap storage
+    # Semantic evaluation callback final-model evaluation
     if [ "$DISABLE_TRAIN_END_SEMANTIC_EVAL" = "1" ]; then
         echo "  Disabled final model evaluation in the SemanticEvaluationCallback."
-        CMD_ARGS+=(
-            "--disable-train-end-semantic-eval"
-        )
+        CMD_ARGS+=("--disable-train-end-semantic-eval")
     fi
-    
+
     # Adaptive Difficulty Sampling
     if [ "$ADAPTIVE_DIFFICULTY_SAMPLING" = "1" ]; then
         echo "  This run will use ADS"
@@ -335,6 +328,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     rsync -a --delete "$SCRATCH_STAGE_OUTPUT_DIR/" "$STAGE_OUTPUT_DIR/"
     
     echo "$STAGE_NAME completed in $((STAGE_DURATION / 3600))h $(((STAGE_DURATION % 3600) / 60))m $((STAGE_DURATION % 60))s"
+    
 done
 
 echo ""

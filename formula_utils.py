@@ -168,6 +168,328 @@ def sample_traces_correlated(n_traces: int,
 
 
 
+# ------------------------- formula mutation utilities -------------------------
+def _children(formula: Formula) -> list[Formula]:
+    if isinstance(formula, (Atom,)):
+        return []
+    if isinstance(formula, (Not, Next, Eventually, Globally)):
+        return [formula.child]
+    if isinstance(formula, (And, Or, Implies, Until)):
+        return [formula.left, formula.right]
+    raise TypeError(f"Unsupported formula node type: {type(formula)}")
+
+
+def _rebuild_with_children(formula: Formula, children: list[Formula]) -> Formula:
+    if isinstance(formula, Atom):
+        if len(children) != 0:
+            raise ValueError("Atom expects zero children")
+        return formula
+    if isinstance(formula, Not):
+        if len(children) != 1:
+            raise ValueError("Not expects one child")
+        return Not(children[0])
+    if isinstance(formula, Next):
+        if len(children) != 1:
+            raise ValueError("Next expects one child")
+        return Next(children[0])
+    if isinstance(formula, Eventually):
+        if len(children) != 1:
+            raise ValueError("Eventually expects one child")
+        return Eventually(children[0])
+    if isinstance(formula, Globally):
+        if len(children) != 1:
+            raise ValueError("Globally expects one child")
+        return Globally(children[0])
+    if isinstance(formula, And):
+        if len(children) != 2:
+            raise ValueError("And expects two children")
+        return And(children[0], children[1])
+    if isinstance(formula, Or):
+        if len(children) != 2:
+            raise ValueError("Or expects two children")
+        return Or(children[0], children[1])
+    if isinstance(formula, Implies):
+        if len(children) != 2:
+            raise ValueError("Implies expects two children")
+        return Implies(children[0], children[1])
+    if isinstance(formula, Until):
+        if len(children) != 2:
+            raise ValueError("Until expects two children")
+        return Until(children[0], children[1])
+    raise TypeError(f"Unsupported formula node type: {type(formula)}")
+
+
+def _iter_paths(formula: Formula, prefix: tuple[int, ...] = ()):
+    yield prefix
+    for idx, child in enumerate(_children(formula)):
+        yield from _iter_paths(child, prefix + (idx,))
+
+
+def _subformula_at_path(formula: Formula, path: tuple[int, ...]) -> Formula:
+    node = formula
+    for child_idx in path:
+        kids = _children(node)
+        if child_idx < 0 or child_idx >= len(kids):
+            raise IndexError(f"Invalid child index {child_idx} in path {path}")
+        node = kids[child_idx]
+    return node
+
+
+def _replace_subformula(formula: Formula, path: tuple[int, ...], replacement: Formula) -> Formula:
+    if len(path) == 0:
+        return replacement
+    child_idx = path[0]
+    kids = _children(formula)
+    if child_idx < 0 or child_idx >= len(kids):
+        raise IndexError(f"Invalid child index {child_idx} in path {path}")
+    new_children = list(kids)
+    new_children[child_idx] = _replace_subformula(kids[child_idx], path[1:], replacement)
+    return _rebuild_with_children(formula, new_children)
+
+
+def _common_factor_in_and(lhs: And, rhs: And) -> tuple[Formula, Formula, Formula] | None:
+    lhs_pairs = [(lhs.left, lhs.right), (lhs.right, lhs.left)]
+    rhs_pairs = [(rhs.left, rhs.right), (rhs.right, rhs.left)]
+    for shared_l, other_l in lhs_pairs:
+        for shared_r, other_r in rhs_pairs:
+            if shared_l == shared_r:
+                return shared_l, other_l, other_r
+    return None
+
+
+def _common_factor_in_or(lhs: Or, rhs: Or) -> tuple[Formula, Formula, Formula] | None:
+    lhs_pairs = [(lhs.left, lhs.right), (lhs.right, lhs.left)]
+    rhs_pairs = [(rhs.left, rhs.right), (rhs.right, rhs.left)]
+    for shared_l, other_l in lhs_pairs:
+        for shared_r, other_r in rhs_pairs:
+            if shared_l == shared_r:
+                return shared_l, other_l, other_r
+    return None
+
+
+def _local_semantic_equivalent_rewrites(formula: Formula) -> list[Formula]:
+    rewrites: list[Formula] = []
+
+    if isinstance(formula, Not):
+        if isinstance(formula.child, Not):
+            rewrites.append(formula.child.child)
+        if isinstance(formula.child, And):
+            if not isinstance(formula.child.left, Not):
+                if not isinstance(formula.child.right, Not):
+                    rewrites.append(Or(Not(formula.child.left), Not(formula.child.right)))
+                else:
+                    rewrites.append(Or(Not(formula.child.left), formula.child.right.child))
+            if isinstance(formula.child.left, Not):
+                if not isinstance(formula.child.right, Not):
+                    rewrites.append(Or(formula.child.left.child, Not(formula.child.right)))
+                else:
+                    rewrites.append(Or(formula.child.left.child, formula.child.right.child))
+        if isinstance(formula.child, Or):
+            if not isinstance(formula.child.left, Not):
+                if not isinstance(formula.child.right, Not):
+                    rewrites.append(And(Not(formula.child.left), Not(formula.child.right)))
+                if isinstance(formula.child.right, Not):
+                    rewrites.append(And(Not(formula.child.left), formula.child.right.child))
+            if isinstance(formula.child.left, Not):
+                if not isinstance(formula.child.right, Not):
+                    rewrites.append(And(formula.child.left.child, Not(formula.child.right)))
+                if isinstance(formula.child.right, Not):
+                    rewrites.append(And(formula.child.left.child, formula.child.right.child))
+        if isinstance(formula.child, Eventually):
+            rewrites.append(Globally(Not(formula.child.child)))
+        if isinstance(formula.child, Globally):
+            rewrites.append(Eventually(Not(formula.child.child)))
+
+    if isinstance(formula, And):
+        if formula.left != formula.right:
+            rewrites.append(And(formula.right, formula.left))
+
+        # Distributivity: a AND (b OR c) -> (a AND b) OR (a AND c)
+        if isinstance(formula.left, Or):
+            rewrites.append(Or(And(formula.left.left, formula.right), And(formula.left.right, formula.right)))
+        if isinstance(formula.right, Or):
+            rewrites.append(Or(And(formula.left, formula.right.left), And(formula.left, formula.right.right)))
+
+        # Reverse De Morgan: (~a AND ~b) -> ~(a OR b)
+        if isinstance(formula.left, Not) and isinstance(formula.right, Not):
+            rewrites.append(Not(Or(formula.left.child, formula.right.child)))
+
+        # Factoring: (a OR b) AND (a OR c) -> a OR (b AND c)
+        if isinstance(formula.left, Or) and isinstance(formula.right, Or):
+            shared = _common_factor_in_or(formula.left, formula.right)
+            if shared is not None:
+                common, rem_l, rem_r = shared
+                rewrites.append(Or(common, And(rem_l, rem_r)))
+
+    if isinstance(formula, Or):
+        if formula.left != formula.right:
+            rewrites.append(Or(formula.right, formula.left))
+
+        # Distributivity: a OR (b AND c) -> (a OR b) AND (a OR c)
+        if isinstance(formula.left, And):
+            rewrites.append(And(Or(formula.left.left, formula.right), Or(formula.left.right, formula.right)))
+        if isinstance(formula.right, And):
+            rewrites.append(And(Or(formula.left, formula.right.left), Or(formula.left, formula.right.right)))
+
+        # Reverse De Morgan: (~a OR ~b) -> ~(a AND b)
+        if isinstance(formula.left, Not) and isinstance(formula.right, Not):
+            rewrites.append(Not(And(formula.left.child, formula.right.child)))
+
+        # Implication elimination/inversion.
+        if isinstance(formula.left, Not):
+            rewrites.append(Implies(formula.left.child, formula.right))
+        if isinstance(formula.right, Not):
+            rewrites.append(Implies(formula.right.child, formula.left))
+        if not isinstance(formula.left, Not):
+            rewrites.append(Implies(Not(formula.left), formula.right))
+        if not isinstance(formula.right, Not):
+            rewrites.append(Implies(Not(formula.right), formula.left))
+
+        # Factoring: (a AND b) OR (a AND c) -> a AND (b OR c)
+        if isinstance(formula.left, And) and isinstance(formula.right, And):
+            shared = _common_factor_in_and(formula.left, formula.right)
+            if shared is not None:
+                common, rem_l, rem_r = shared
+                rewrites.append(And(common, Or(rem_l, rem_r)))
+
+    if isinstance(formula, Implies):
+        if not isinstance(formula.left, Not):
+            # Material Implication
+            rewrites.append(Or(Not(formula.left), formula.right))
+            if not isinstance(formula.right, Not):
+                # Contraposition: (a -> b) <-> (~b -> ~a)
+                rewrites.append(Implies(Not(formula.right), Not(formula.left)))
+            if isinstance(formula.right, Not):
+                rewrites.append(Implies(formula.right.child, Not(formula.left)))
+        if isinstance(formula.left, Not):
+            rewrites.append(Or(formula.left.child, formula.right))
+            if not isinstance(formula.right, Not):
+                rewrites.append(Implies(Not(formula.right), formula.left.child))
+            if isinstance(formula.right, Not):
+                rewrites.append(Implies(formula.right.child, formula.left.child))
+
+    if isinstance(formula, Next):
+        if isinstance(formula.child, And):
+            rewrites.append(And(Next(formula.child.left), Next(formula.child.right)))
+        if isinstance(formula.child, Or):
+            rewrites.append(Or(Next(formula.child.left), Next(formula.child.right)))
+        if isinstance(formula.child, Eventually):
+            rewrites.append(Eventually(Next(formula.child.child)))
+        if isinstance(formula.child, Until):
+            rewrites.append(Until(Next(formula.child.left), Next(formula.child.right))) # TODO: suspicious rewrite because of strong next semantics
+
+    if isinstance(formula, Eventually):
+        if isinstance(formula.child, Not):
+            # F(~phi) <-> ~(G(phi))
+            rewrites.append(Not(Globally(formula.child.child)))
+        if not isinstance(formula.child, Not):
+            # F(phi) <-> ~(G(~phi))
+            rewrites.append(Not(Globally(Not(formula.child))))
+        if isinstance(formula.child, Next):
+            # F(X phi) <-> X(F phi)
+            rewrites.append(Next(Eventually(formula.child.child)))
+
+    if isinstance(formula, Globally):
+        # G(phi) <-> ~(F(~phi))
+        if isinstance(formula.child, Not):
+            # G(~phi) <-> ~(F(phi))
+            rewrites.append(Not(Eventually(formula.child.child)))
+        if not isinstance(formula.child, Not):
+            rewrites.append(Not(Eventually(Not(formula.child))))
+
+    if isinstance(formula, Until):
+        rewrites.append(Or(formula.right, And(formula.left, Next(formula))))
+
+        if isinstance(formula.right, Or):
+            rewrites.append(Or(Until(formula.left, formula.right.left), Until(formula.left, formula.right.right))) # TODO: suspicious rewrite because of strong next semantics
+        if isinstance(formula.left, And):
+            rewrites.append(And(Until(formula.left.left, formula.right), Until(formula.left.right, formula.right))) # TODO: suspicious rewrite because of strong next semantics
+        if isinstance(formula.left, Next) and isinstance(formula.right, Next):
+            rewrites.append(Next(Until(formula.left.child, formula.right.child))) # TODO: suspicious rewrite because of strong next semantics
+
+    unique: list[Formula] = []
+    seen: set[str] = set()
+    for candidate in rewrites:
+        cand_str = str(candidate)
+        if cand_str in seen:
+            continue
+        seen.add(cand_str)
+        unique.append(candidate)
+    return unique
+
+
+def list_semantically_equivalent_transformations(formula: Formula) -> list[Formula]:
+    """Enumerate one-step semantic-equivalent rewrites of a formula.
+
+    The list contains full-formula variants obtained by applying one local rewrite
+    at exactly one AST node.
+    """
+
+    transformed_formulas: list[Formula] = []
+    seen: set[str] = {str(formula)}
+
+    for path in _iter_paths(formula):
+        local = _subformula_at_path(formula, path)
+        for local_rewrite in _local_semantic_equivalent_rewrites(local):
+            if local_rewrite == local:
+                continue
+            candidate = _replace_subformula(formula, path, local_rewrite)
+            candidate_str = str(candidate)
+            if candidate_str in seen:
+                continue
+            seen.add(candidate_str)
+            transformed_formulas.append(candidate)
+
+    return transformed_formulas
+
+
+def sample_random_semantically_equivalent_transformation(
+    formula: Formula,
+    num_samples: int,
+    rng: torch.Generator,
+    device: str = "cpu",
+) -> List[Formula]:
+    """Sample semantic-equivalent one-step rewrites uniformly without replacement."""
+
+    candidates = list_semantically_equivalent_transformations(formula)
+    if num_samples <= 0 or len(candidates) == 0:
+        return []
+    draw_count = min(int(num_samples), len(candidates))
+    ids = torch.randperm(len(candidates), generator=rng)[:draw_count].tolist()
+    return [candidates[idx] for idx in ids]
+
+
+def list_negation_insertions(formula: Formula) -> list[Formula]:
+    """Enumerate unique one-step formulas formed by inserting one negation at one AST node."""
+
+    candidates: list[Formula] = []
+    seen: set[str] = set()
+    for path in _iter_paths(formula):
+        selected_subformula = _subformula_at_path(formula, path)
+        candidate = _replace_subformula(formula, path, Not(selected_subformula))
+        candidate_str = str(candidate)
+        if candidate_str in seen:
+            continue
+        seen.add(candidate_str)
+        candidates.append(candidate)
+    return candidates
+
+
+def add_random_negation(
+    formula: Formula,
+    rng: torch.Generator,
+    device: str = "cpu",
+) -> Formula:
+    """Insert a negation at a uniformly sampled AST node."""
+
+    candidates = list_negation_insertions(formula)
+    if len(candidates) == 0:
+        return Not(formula)
+    idx = int(torch.randint(0, len(candidates), (), generator=rng, device=device).item())
+    return candidates[idx]
+
+
+
 # ------------------------- formula string parser -------------------------
 # helper functions
 def _simple_tokenize(s: str) -> List[str]:

@@ -10,7 +10,11 @@ import torch
 from torch.utils.data import Dataset
 
 from formula_class import Formula
-from formula_utils import str_to_formula
+from formula_utils import (
+    str_to_formula,
+    list_semantically_equivalent_transformations,
+    list_negation_insertions,
+)
 from kernel_class import LTLKernel
 
 class LTLDataset(Dataset):
@@ -181,6 +185,193 @@ class LTLDataset(Dataset):
             emb = kernel.compute_embedding_from_satisfaction(phi_sats, move_to_cpu=True)
             sats_to_store = phi_sats.clone().to('cpu') if self.store_satisfaction else None
             self._append_entry(phi, emb, sats_to_store)
+
+
+    @staticmethod
+    def construct_dataset_from_kernel_excluding(
+        kernel: LTLKernel,
+        k: int,
+        p_leaf_range: tuple[float, float],
+        max_depth: int,
+        min_depth: int | None = None,
+        depth_targets: dict[int, int] | None = None,
+        exclude_formula_strs: set[str] | None = None,
+        dedupe: bool = True,
+        store_formula_str: bool = True,
+        store_satisfaction: bool = True,
+        satisfaction_batch_size: int = 10240,
+        satisfaction_time_index: int = 0,
+        max_sampling_attempts: int = 100,
+    ) -> LTLDataset:
+        """
+        Sample a dataset from kernel while excluding formulas by canonical string.
+
+        If depth_targets is provided, enforce exact per-depth counts by repeatedly
+        sampling and only accepting formulas from depths that are still missing.
+        """
+
+        if k <= 0:
+            raise ValueError("k must be > 0")
+        if max_sampling_attempts <= 0:
+            raise ValueError("max_sampling_attempts must be > 0")
+        if depth_targets is not None and not dedupe:
+            raise ValueError("depth_targets requires dedupe=True")
+
+        validated_depth_targets: dict[int, int] | None = None
+        if depth_targets is not None:
+            if len(depth_targets) == 0:
+                raise ValueError("depth_targets must not be empty when provided")
+            validated_depth_targets = {}
+            for depth, target_count in depth_targets.items():
+                depth_i = int(depth)
+                target_i = int(target_count)
+                if target_i <= 0:
+                    raise ValueError(f"depth_targets[{depth_i}] must be > 0")
+                if min_depth is not None and depth_i < min_depth:
+                    raise ValueError(
+                        f"depth_targets contains depth {depth_i} smaller than min_depth={min_depth}"
+                    )
+                if depth_i > max_depth:
+                    raise ValueError(
+                        f"depth_targets contains depth {depth_i} larger than max_depth={max_depth}"
+                    )
+                validated_depth_targets[depth_i] = target_i
+
+            target_total = sum(validated_depth_targets.values())
+            if target_total != k:
+                raise ValueError(
+                    f"k ({k}) must equal sum(depth_targets) ({target_total}) when depth_targets is set"
+                )
+
+        exclude = set(exclude_formula_strs) if exclude_formula_strs is not None else set()
+        selected_formulas: list[Formula] = []
+        selected_strs: set[str] = set() if dedupe else set()
+        rejected_excluded = 0
+        rejected_depth = 0
+        rejected_duplicate = 0
+        rejected_filled_depth = 0
+
+        per_depth_selected: dict[int, list[Formula]] = {}
+        per_depth_counts: dict[int, int] = {}
+        if validated_depth_targets is not None:
+            per_depth_selected = {depth: [] for depth in validated_depth_targets}
+            per_depth_counts = {depth: 0 for depth in validated_depth_targets}
+
+        attempts = 0
+        while attempts < max_sampling_attempts:
+            if validated_depth_targets is None:
+                if len(selected_formulas) >= k:
+                    break
+                remaining = k - len(selected_formulas)
+            else:
+                remaining = sum(
+                    max(0, validated_depth_targets[d] - per_depth_counts[d])
+                    for d in validated_depth_targets
+                )
+                if remaining <= 0:
+                    break
+
+            attempts += 1
+            sample_batch_size = 51200
+            sampled = kernel.sample_dataset_formulas_kernel(
+                k=sample_batch_size,
+                p_leaf_range=p_leaf_range,
+                max_depth=max_depth,
+                force_tree=False,
+            )
+
+            for phi in sampled:
+                if validated_depth_targets is None:
+                    if len(selected_formulas) >= k:
+                        break
+                else:
+                    outstanding = any(
+                        per_depth_counts[d] < validated_depth_targets[d]
+                        for d in validated_depth_targets
+                    )
+                    if not outstanding:
+                        break
+
+                phi_depth = phi.depth()
+                if min_depth is not None and phi_depth < min_depth:
+                    rejected_depth += 1
+                    continue
+
+                if validated_depth_targets is not None:
+                    if phi_depth not in validated_depth_targets:
+                        rejected_depth += 1
+                        continue
+                    if per_depth_counts[phi_depth] >= validated_depth_targets[phi_depth]:
+                        rejected_filled_depth += 1
+                        continue
+
+                phi_str = str(phi)
+                if phi_str in exclude:
+                    rejected_excluded += 1
+                    continue
+
+                if dedupe and phi_str in selected_strs:
+                    rejected_duplicate += 1
+                    continue
+
+                if validated_depth_targets is None:
+                    selected_formulas.append(phi)
+                else:
+                    per_depth_selected[phi_depth].append(phi)
+                    per_depth_counts[phi_depth] += 1
+
+                if dedupe:
+                    selected_strs.add(phi_str)
+
+        if validated_depth_targets is not None:
+            for depth in sorted(validated_depth_targets.keys()):
+                selected_formulas.extend(per_depth_selected[depth])
+
+        if len(selected_formulas) < k:
+            missing_by_depth: dict[int, int] | None = None
+            if validated_depth_targets is not None:
+                missing_by_depth = {
+                    depth: max(0, validated_depth_targets[depth] - per_depth_counts[depth])
+                    for depth in sorted(validated_depth_targets.keys())
+                }
+            raise ValueError(
+                "Could not sample enough validation formulas after applying exclusions. "
+                f"Requested={k}, sampled={len(selected_formulas)}, attempts={attempts}, "
+                f"rejected_excluded={rejected_excluded}, rejected_depth={rejected_depth}, "
+                f"rejected_duplicate={rejected_duplicate}, "
+                f"rejected_filled_depth={rejected_filled_depth}, "
+                f"missing_by_depth={missing_by_depth}."
+            )
+
+        dataset = LTLDataset(
+            store_formula_str=store_formula_str,
+            store_satisfaction=store_satisfaction,
+            satisfaction_batch_size=satisfaction_batch_size,
+            satisfaction_time_index=satisfaction_time_index,
+        )
+        dataset.construct_dataset_from_list(selected_formulas, kernel)
+        dataset.metadata.update({
+            "source": "kernel_excluding",
+            "requested_k": k,
+            "sampled_k": len(dataset),
+            "p_leaf_range": p_leaf_range,
+            "max_depth": max_depth,
+            "min_depth": min_depth,
+            "depth_targets": validated_depth_targets,
+            "sampled_per_depth": per_depth_counts if validated_depth_targets is not None else None,
+            "dedupe": dedupe,
+            "exclude_count": len(exclude),
+            "max_sampling_attempts": max_sampling_attempts,
+            "sampling_attempts_used": attempts,
+            "rejected_excluded": rejected_excluded,
+            "rejected_depth": rejected_depth,
+            "rejected_duplicate": rejected_duplicate,
+            "rejected_filled_depth": rejected_filled_depth,
+            "kernel_T": kernel.T,
+            "kernel_AP": kernel.AP,
+            "kernel_seed": kernel.seed,
+        })
+        return dataset
 
 
 
@@ -396,123 +587,288 @@ class LTLDataset(Dataset):
         return train_dataset, eval_dataset
 
 
-    
-    def __len__(self):
-        return len(self.formulas)
-    
+    @staticmethod
+    def construct_finetuning_mutation_dataset(
+        kernel: LTLKernel,
+        stage_train_dirs: list[str],
+        sample_count: int = 20000,
+        equivalent_mutations_per_formula: int = 2,
+        near_miss_mutations_per_formula: int = 1,
+        exclude_formula_strs: set[str] | None = None,
+        store_formula_str: bool = True,
+        store_satisfaction: bool = True,
+        satisfaction_batch_size: int = 10240,
+        satisfaction_time_index: int = 0,
+        seed: int | None = None,
+    ) -> LTLDataset:
+        """
+        Build a fine-tuning dataset from cumulative curriculum stages.
 
+        Sampling strategy:
+        - Each path in `stage_train_dirs` is expected to be a cumulative stage dataset
+          (stage i contains stage i-1 + newly sampled formulas).
+        - The method derives per-stage "new" slices by length differences and samples
+          approximately equally from each stage's new slice, matching the requested
+          base-2/logarithmic balancing across doubling stage sizes.
 
-    def __getitem__(self, idx):
-        item = {
-            "formula": self.formulas[idx],
-            "embedding": self.embeddings[idx] if self.embeddings is not None else None,
-            "formula_id": idx,
-        }
+        Mutation strategy per sampled base formula:
+        - apply `equivalent_mutations_per_formula` random semantic-equivalent rewrites,
+          each chosen uniformly among rewrites available for the current formula;
+        - then create `near_miss_mutations_per_formula` variants by adding one random
+          negation at a random AST location.
+        """
+        if len(stage_train_dirs) == 0:
+            raise ValueError("stage_train_dirs must contain at least one cumulative stage directory")
+        if sample_count <= 0:
+            raise ValueError("sample_count must be > 0")
+        if equivalent_mutations_per_formula < 0:
+            raise ValueError("equivalent_mutations_per_formula must be >= 0")
+        if near_miss_mutations_per_formula < 0:
+            raise ValueError("near_miss_mutations_per_formula must be >= 0")
 
-        if self.store_formula_str and self.formula_strs is not None:
-            item["formula_str"] = self.formula_strs[idx]
+        exclude = set(exclude_formula_strs) if exclude_formula_strs is not None else set()
+        print('Loaded `exclude` set.')
+        stage_datasets = [LTLDataset.load(path, load_satisfactions=False) for path in stage_train_dirs]
+        print('Loaded stage datasets.')
 
-        if self.store_satisfaction and self.satisfactions is not None:
-            item["satisfaction"] = self.satisfactions[idx]
+        stage_new_pools: list[list[Formula]] = []
+        stage_new_sizes: list[int] = []
+        prev_len = 0
+        for stage_idx, dataset in enumerate(stage_datasets):
+            curr_len = len(dataset)
+            if curr_len < prev_len:
+                raise ValueError(
+                    f"Stage dataset at index {stage_idx} is smaller than previous stage "
+                    f"({curr_len} < {prev_len}). Expected cumulative stage datasets."
+                )
+            stage_new = [
+                phi for phi in dataset.formulas[prev_len:curr_len]
+                if str(phi) not in exclude
+            ]
+            stage_new_pools.append(stage_new)
+            stage_new_sizes.append(len(stage_new))
+            prev_len = curr_len
 
-        return item
+        total_available = sum(stage_new_sizes)
+        if total_available < sample_count:
+            raise ValueError(
+                f"Unable to sample {sample_count} base formulas after exclusions; "
+                f"only {total_available} are available."
+            )
 
-    
-    
-    def _delitem(self, idx):
-        del self.formulas[idx]
-        if self.embeddings is not None:
-            self.embeddings = torch.cat([self.embeddings[:idx], self.embeddings[idx+1:]], dim=0)
-        if self.store_formula_str and self.formula_strs is not None:
-            del self.formula_strs[idx]
-        if self.store_satisfaction and self.satisfactions is not None:
-            self.satisfactions = torch.cat([self.satisfactions[:idx], self.satisfactions[idx+1:]], dim=0)
+        n_stages = len(stage_new_pools)
+        base_quota = sample_count // n_stages
+        quotas = [base_quota for _ in range(n_stages)]
+        for i in range(sample_count % n_stages):
+            quotas[i] += 1
 
+        sampled_per_stage = [min(quotas[i], stage_new_sizes[i]) for i in range(n_stages)]
+        remaining = sample_count - sum(sampled_per_stage)
+        capacities = [stage_new_sizes[i] - sampled_per_stage[i] for i in range(n_stages)]
+        while remaining > 0 and sum(capacities) > 0:
+            for i in range(n_stages):
+                if remaining == 0:
+                    break
+                if capacities[i] <= 0:
+                    continue
+                sampled_per_stage[i] += 1
+                capacities[i] -= 1
+                remaining -= 1
 
-    # ----------- Persistence -----------
-    def save(self, dirpath: str) -> None:
-        os.makedirs(dirpath, exist_ok=True)
+        if remaining > 0:
+            raise ValueError(
+                f"Unable to sample {sample_count} formulas without replacement from stage pools; "
+                f"maximum available is {sum(stage_new_sizes)}"
+            )
+        print(f'Produced stage new pools. Their sizes are {stage_new_sizes} and number of samples that will end up in the final dataset are {sampled_per_stage}')
 
-        num_examples = len(self.formulas)
-        embedding_dim = self.embeddings.shape[1] if self.embeddings is not None and self.embeddings.ndim > 1 else 0
+        seed_value = int(seed) if seed is not None else int(getattr(kernel, "seed", 0) or 0)
+        rng = torch.Generator(device="cpu")
+        rng.manual_seed(seed_value)
 
-        metadata: dict[str, Any] = {
-            "store_formula_str": self.store_formula_str,
-            "store_satisfaction": self.store_satisfaction,
-            "satisfaction_batch_size": self.satisfaction_batch_size,
-            "satisfaction_time_index": self.satisfaction_time_index,
-            "size": num_examples,
-            "embedding_dim": embedding_dim,
-            "has_satisfactions": self.store_satisfaction and self.satisfactions is not None and self.satisfactions.shape[0] == num_examples,
-            "extra_metadata": self.metadata,
-        }
+        stage_perms: list[list[int]] = [
+            torch.randperm(len(pool), generator=rng).tolist()
+            for pool in stage_new_pools
+        ]
+        stage_drawn_counts = [0 for _ in stage_new_pools]
+        print('Produced stage perms.')
 
-        metadata_path = os.path.join(dirpath, "metadata.json")
-        formulas_path = os.path.join(dirpath, "formulas.jsonl")
-        embeddings_path = os.path.join(dirpath, "embeddings.pt")
-        satisfactions_path = os.path.join(dirpath, "satisfactions.pt")
+        def _draw_from_stage(stage_idx: int, n_draw: int) -> list[Formula]:
+            if n_draw <= 0:
+                return []
+            perm = stage_perms[stage_idx]
+            ptr = stage_drawn_counts[stage_idx]
+            available = len(perm) - ptr
+            take = min(n_draw, available)
+            if take <= 0:
+                return []
 
-        with open(formulas_path, "w", encoding="utf-8") as fp:
-            for formula in self.formulas:
-                fp.write(str(formula) + "\n")
+            picked_indices = perm[ptr : ptr + take]
+            stage_drawn_counts[stage_idx] += take
+            pool = stage_new_pools[stage_idx]
+            return [pool[i] for i in picked_indices]
 
-        if self.embeddings is not None and num_examples > 0:
-            embeddings_tensor = self.embeddings.to(dtype=torch.float32, device="cpu")
-        else:
-            embeddings_tensor = torch.empty((0, embedding_dim), dtype=torch.float32)
-        torch.save(embeddings_tensor, embeddings_path)
+        def _sample_without_replacement(candidates: list[Formula], n_take: int) -> list[Formula]:
+            if n_take <= 0 or len(candidates) == 0:
+                return []
+            if n_take >= len(candidates):
+                return list(candidates)
+            ids = torch.randperm(len(candidates), generator=rng)[:n_take].tolist()
+            return [candidates[i] for i in ids]
 
-        if metadata["has_satisfactions"] and self.satisfactions is not None:
-            sats_tensor = self.satisfactions.to(dtype=torch.bool, device="cpu")
-            torch.save(sats_tensor, satisfactions_path)
+        def _sample_excluding_with_oversampling(
+            candidates: list[Formula],
+            n_take: int,
+            oversample_factor: int = 4,
+        ) -> list[Formula]:
+            """
+            Sample candidates without replacement, then filter excluded formulas.
+            This avoids calling str(phi) for every candidate when candidate pools are large.
+            """
+            if n_take <= 0 or len(candidates) == 0:
+                return []
+            n_draw = min(len(candidates), max(n_take, n_take * oversample_factor))
+            proposed = _sample_without_replacement(candidates, n_draw)
+            selected: list[Formula] = []
+            for phi in proposed:
+                if str(phi) in exclude:
+                    continue
+                selected.append(phi)
+                if len(selected) >= n_take:
+                    break
+            return selected
 
-        with open(metadata_path, "w", encoding="utf-8") as fp:
-            json.dump(metadata, fp, indent=2)
+        sampled_base_formulas: list[Formula] = []
+        for stage_idx, n_pick in enumerate(sampled_per_stage):
+            sampled_base_formulas.extend(_draw_from_stage(stage_idx, n_pick))
+            print(f'Finished sampling formulas for stage{stage_idx+1}.')
 
+        total_sampled = len(sampled_base_formulas)
+        if total_sampled != sample_count:
+            raise ValueError(
+                f"Unexpected sampled base count {total_sampled}; expected exactly {sample_count}."
+            )
 
-    @classmethod
-    def load(cls, dirpath: str, load_satisfactions: bool = True) -> "LTLDataset":
-        metadata_path = os.path.join(dirpath, "metadata.json")
-        if not os.path.exists(metadata_path):
-            raise FileNotFoundError(f"Dataset metadata not found in {dirpath}")
+        target_equivalent = sample_count * equivalent_mutations_per_formula
+        target_near_miss = sample_count * near_miss_mutations_per_formula
 
-        with open(metadata_path, "r", encoding="utf-8") as fp:
-            metadata = json.load(fp)
+        mutated_formulas: list[Formula] = []
+        equivalent_formulas: list[Formula] = []
+        near_miss_formulas: list[Formula] = []
+        equivalent_success = 0
+        near_miss_success = 0
+        base_formulas_processed = 0
 
-        dataset = cls(
-            store_formula_str=metadata.get("store_formula_str", False),
-            store_satisfaction=metadata.get("store_satisfaction", False),
-            satisfaction_batch_size=metadata.get("satisfaction_batch_size", 512),
-            satisfaction_time_index=metadata.get("satisfaction_time_index", 0)
+        def _process_base_formula(base_formula: Formula) -> None:
+            nonlocal equivalent_success, near_miss_success
+
+            remaining_eq = target_equivalent - len(equivalent_formulas)
+            if equivalent_mutations_per_formula > 0 and remaining_eq > 0:
+                eq_budget = min(equivalent_mutations_per_formula, remaining_eq)
+                eq_candidates = list_semantically_equivalent_transformations(base_formula)
+                eq_selected = _sample_excluding_with_oversampling(eq_candidates, eq_budget)
+                equivalent_formulas.extend(eq_selected)
+                mutated_formulas.extend(eq_selected) 
+                equivalent_success += len(eq_selected)
+
+            remaining_nm = target_near_miss - len(near_miss_formulas)
+            if near_miss_mutations_per_formula > 0 and remaining_nm > 0:
+                nm_budget = min(near_miss_mutations_per_formula, remaining_nm)
+                nm_candidates = list_negation_insertions(base_formula)
+                nm_selected = _sample_excluding_with_oversampling(nm_candidates, nm_budget)
+                near_miss_formulas.extend(nm_selected)
+                mutated_formulas.extend(nm_selected)
+                near_miss_success += len(nm_selected)
+
+        for base_formula in sampled_base_formulas:
+            _process_base_formula(base_formula)
+            base_formulas_processed += 1
+            if base_formulas_processed >= 20000:
+                print(f'The number of processed formulas is: {base_formulas_processed}')
+            if len(equivalent_formulas) >= target_equivalent and len(near_miss_formulas) >= target_near_miss:
+                print(f'Breaking out of the initial base_formula processing loop with n_equiv={len(equivalent_formulas)} and n_near_miss={len(near_miss_formulas)}')
+                break
+
+        stage_cursor = 0
+        while len(equivalent_formulas) < target_equivalent or len(near_miss_formulas) < target_near_miss:
+            print(f'Sampling extra formulas since {len(equivalent_formulas)}<{target_equivalent} OR {len(near_miss_formulas)}<{target_near_miss}.')
+            picked_extra: Formula | None = None
+            for _ in range(n_stages):
+                stage_idx = stage_cursor
+                stage_cursor = (stage_cursor + 1) % n_stages
+                drawn = _draw_from_stage(stage_idx, 1)
+                if drawn:
+                    picked_extra = drawn[0]
+                    break
+
+            if picked_extra is None:
+                break
+
+            _process_base_formula(picked_extra)
+            base_formulas_processed += 1
+            print(f'The number of processed formulas is: {base_formulas_processed}')
+
+        missing_eq = target_equivalent - len(equivalent_formulas)
+        missing_nm = target_near_miss - len(near_miss_formulas)
+        if missing_eq > 0 or missing_nm > 0:
+            raise ValueError(
+                "Could not satisfy requested mutation counts after applying exclusions. "
+                f"Missing equivalent={missing_eq}, near_miss={missing_nm}. "
+                "Consider relaxing exclusions, increasing stage pools, or reducing mutation counts."
+            )
+
+        dataset = LTLDataset(
+            store_formula_str=store_formula_str,
+            store_satisfaction=store_satisfaction,
+            satisfaction_batch_size=satisfaction_batch_size,
+            satisfaction_time_index=satisfaction_time_index,
         )
+        dataset._reset_storage()
 
-        formulas_path = os.path.join(dirpath, "formulas.jsonl")
-        embeddings_path = os.path.join(dirpath, "embeddings.pt")
-        satisfactions_path = os.path.join(dirpath, "satisfactions.pt")
+        print('started evaluating')
+        embedding_cache: dict[str, torch.Tensor] = {}
+        satisfaction_cache: dict[str, torch.Tensor] = {}
+        for i, phi in enumerate(mutated_formulas):
+            phi_str = str(phi)
+            if phi_str not in embedding_cache:
+                phi_sats = kernel._evaluate_formula_on_traces(
+                    formula=phi,
+                    batch_size=satisfaction_batch_size,
+                    time_index=satisfaction_time_index,
+                )
+                embedding_cache[phi_str] = kernel.compute_embedding_from_satisfaction(phi_sats, move_to_cpu=True)
+                if store_satisfaction:
+                    satisfaction_cache[phi_str] = phi_sats.clone().to("cpu")
 
-        formulas: list[Formula] = []
-        if os.path.exists(formulas_path):
-            with open(formulas_path, "r", encoding="utf-8") as fp:
-                for line in fp:
-                    text = line.strip()
-                    if text:
-                        formulas.append(str_to_formula(text))
-        dataset.formulas = formulas
+            emb = embedding_cache[phi_str]
+            sats_to_store = satisfaction_cache.get(phi_str) if store_satisfaction else None
+            dataset._append_entry(phi, emb, sats_to_store)
+            if (i+1) % 1000 == 1:
+                print(f'Number of formulas evaluated={i+1}')
 
-        if os.path.exists(embeddings_path):
-            dataset.embeddings = torch.load(embeddings_path, map_location="cpu")
-        else:
-            dataset.embeddings = None
+        dataset.metadata.update({
+            "source": "finetune_mutation",
+            "stage_train_dirs": stage_train_dirs,
+            "sample_count_requested": sample_count,
+            "sample_count_actual": total_sampled,
+            "sampled_per_stage_initial": sampled_per_stage,
+            "sampled_per_stage_total": stage_drawn_counts,
+            "base_formulas_processed": base_formulas_processed,
+            "extra_base_samples_drawn": max(0, base_formulas_processed - sample_count),
+            "equivalent_mutations_per_formula": equivalent_mutations_per_formula,
+            "near_miss_mutations_per_formula": near_miss_mutations_per_formula,
+            "equivalent_target": target_equivalent,
+            "near_miss_target": target_near_miss,
+            "equivalent_mutations_generated": equivalent_success,
+            "near_miss_mutations_generated": near_miss_success,
+            "mutated_count": len(mutated_formulas),
+            "excluded_formula_count": len(exclude),
+            "kernel_T": kernel.T,
+            "kernel_AP": kernel.AP,
+            "kernel_seed": kernel.seed,
+            "seed": seed_value,
+        })
 
-        if dataset.store_formula_str and dataset.formula_strs is not None:
-            dataset.formula_strs = [str(f) for f in formulas]
-
-        if load_satisfactions and metadata.get("has_satisfactions") and os.path.exists(satisfactions_path):
-            dataset.satisfactions = torch.load(satisfactions_path, map_location="cpu")
-        else:
-            dataset.satisfactions = None
-
-        dataset.metadata = metadata.get("extra_metadata", {})
         return dataset
 
 
@@ -670,3 +1026,131 @@ class LTLDataset(Dataset):
 
             with open(metadata_path, "w", encoding="utf-8") as fp:
                 json.dump(metadata, fp, indent=2)
+
+
+    
+    def __len__(self):
+        return len(self.formulas)
+    
+
+
+    def __getitem__(self, idx):
+        item = {
+            "formula": self.formulas[idx],
+            "embedding": self.embeddings[idx] if self.embeddings is not None else None,
+            "formula_id": idx,
+        }
+
+        if self.store_formula_str and self.formula_strs is not None:
+            item["formula_str"] = self.formula_strs[idx]
+
+        if self.store_satisfaction and self.satisfactions is not None:
+            item["satisfaction"] = self.satisfactions[idx]
+
+        return item
+
+    
+    
+    def _delitem(self, idx):
+        del self.formulas[idx]
+        if self.embeddings is not None:
+            self.embeddings = torch.cat([self.embeddings[:idx], self.embeddings[idx+1:]], dim=0)
+        if self.store_formula_str and self.formula_strs is not None:
+            del self.formula_strs[idx]
+        if self.store_satisfaction and self.satisfactions is not None:
+            self.satisfactions = torch.cat([self.satisfactions[:idx], self.satisfactions[idx+1:]], dim=0)
+
+
+    # ----------- Persistence -----------
+    def save(self, dirpath: str) -> None:
+        os.makedirs(dirpath, exist_ok=True)
+
+        num_examples = len(self.formulas)
+        embedding_dim = self.embeddings.shape[1] if self.embeddings is not None and self.embeddings.ndim > 1 else 0
+
+        metadata: dict[str, Any] = {
+            "store_formula_str": self.store_formula_str,
+            "store_satisfaction": self.store_satisfaction,
+            "satisfaction_batch_size": self.satisfaction_batch_size,
+            "satisfaction_time_index": self.satisfaction_time_index,
+            "size": num_examples,
+            "embedding_dim": embedding_dim,
+            "has_satisfactions": self.store_satisfaction and self.satisfactions is not None and self.satisfactions.shape[0] == num_examples,
+            "extra_metadata": self.metadata,
+        }
+
+        metadata_path = os.path.join(dirpath, "metadata.json")
+        formulas_path = os.path.join(dirpath, "formulas.jsonl")
+        embeddings_path = os.path.join(dirpath, "embeddings.pt")
+        satisfactions_path = os.path.join(dirpath, "satisfactions.pt")
+
+        with open(formulas_path, "w", encoding="utf-8") as fp:
+            for formula in self.formulas:
+                fp.write(str(formula) + "\n")
+
+        if self.embeddings is not None and num_examples > 0:
+            embeddings_tensor = self.embeddings.to(dtype=torch.float32, device="cpu")
+        else:
+            embeddings_tensor = torch.empty((0, embedding_dim), dtype=torch.float32)
+        torch.save(embeddings_tensor, embeddings_path)
+
+        if metadata["has_satisfactions"] and self.satisfactions is not None:
+            sats_tensor = self.satisfactions.to(dtype=torch.bool, device="cpu")
+            torch.save(sats_tensor, satisfactions_path)
+
+        with open(metadata_path, "w", encoding="utf-8") as fp:
+            json.dump(metadata, fp, indent=2)
+
+
+    @classmethod
+    def load(
+        cls,
+        dirpath: str,
+        load_satisfactions: bool = True,
+        satisfactions_mmap: bool = False,
+    ) -> "LTLDataset":
+        metadata_path = os.path.join(dirpath, "metadata.json")
+        if not os.path.exists(metadata_path):
+            raise FileNotFoundError(f"Dataset metadata not found in {dirpath}")
+
+        with open(metadata_path, "r", encoding="utf-8") as fp:
+            metadata = json.load(fp)
+
+        dataset = cls(
+            store_formula_str=metadata.get("store_formula_str", False),
+            store_satisfaction=metadata.get("store_satisfaction", False),
+            satisfaction_batch_size=metadata.get("satisfaction_batch_size", 512),
+            satisfaction_time_index=metadata.get("satisfaction_time_index", 0)
+        )
+
+        formulas_path = os.path.join(dirpath, "formulas.jsonl")
+        embeddings_path = os.path.join(dirpath, "embeddings.pt")
+        satisfactions_path = os.path.join(dirpath, "satisfactions.pt")
+
+        formulas: list[Formula] = []
+        if os.path.exists(formulas_path):
+            with open(formulas_path, "r", encoding="utf-8") as fp:
+                for line in fp:
+                    text = line.strip()
+                    if text:
+                        formulas.append(str_to_formula(text))
+        dataset.formulas = formulas
+
+        if os.path.exists(embeddings_path):
+            dataset.embeddings = torch.load(embeddings_path, map_location="cpu")
+        else:
+            dataset.embeddings = None
+
+        if dataset.store_formula_str and dataset.formula_strs is not None:
+            dataset.formula_strs = [str(f) for f in formulas]
+
+        if load_satisfactions and metadata.get("has_satisfactions") and os.path.exists(satisfactions_path):
+            load_kwargs = {"map_location": "cpu"}
+            if satisfactions_mmap:
+                load_kwargs["mmap"] = True
+            dataset.satisfactions = torch.load(satisfactions_path, **load_kwargs)
+        else:
+            dataset.satisfactions = None
+
+        dataset.metadata = metadata.get("extra_metadata", {})
+        return dataset

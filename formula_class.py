@@ -78,7 +78,7 @@ class And(Formula):
         return f"({self.left} AND {self.right})"
     
     def __eq__(self, other) -> bool:
-        return isinstance(other, And) and ((self.left == other.left and self.right == other.right) or (self.left == other.right and self.right == other.left))
+        return isinstance(other, And) and self.left == other.left and self.right == other.right
     
     def eval_trace(self, trace: torch.Tensor) -> torch.Tensor:
         L = self.left.eval_trace(trace)
@@ -102,7 +102,7 @@ class Or(Formula):
         return f"({self.left} OR {self.right})"
     
     def __eq__(self, other) -> bool:
-        return isinstance(other, Or) and ((self.left == other.left and self.right == other.right) or (self.left == other.right and self.right == other.left))
+        return isinstance(other, Or) and self.left == other.left and self.right == other.right
     
     def eval_trace(self, trace: torch.Tensor) -> torch.Tensor:
         L = self.left.eval_trace(trace)
@@ -301,16 +301,16 @@ def eval_traces_batch(formula: Formula, traces_batch: torch.Tensor) -> torch.Ten
 
     if isinstance(formula, Globally):
         child = eval_traces_batch(formula.child, traces_batch)  # (B,T)
-        rev = torch.flip(child, [1]).to(torch.uint8)  # (B,T)
-        cum = torch.cumprod(rev, dim=1, dtype=torch.uint8)
-        out = torch.flip(cum, [1]).to(torch.bool)
+        rev = torch.flip(child, [1])  # (B,T)
+        cum = torch.cummin(rev, dim=1).values
+        out = torch.flip(cum, [1])
         return out
 
     if isinstance(formula, Eventually):
         child = eval_traces_batch(formula.child, traces_batch)  # (B,T)
-        rev = torch.flip(child, [1]).to(torch.uint8)  # (B,T)
+        rev = torch.flip(child, [1])  # (B,T)
         cum = torch.cummax(rev, dim=1).values
-        out = torch.flip(cum, [1]).to(torch.bool)
+        out = torch.flip(cum, [1])
         return out
 
     # temporal-2ary

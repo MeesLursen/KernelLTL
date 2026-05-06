@@ -17,7 +17,7 @@ from transformers import EarlyStoppingCallback, TrainingArguments
 from transformers.trainer import TRAINING_ARGS_NAME
 
 from config_class import LTLConfig
-from reinforce_trainer import REINFORCETrainerRB, REINFORCETrainerGAE
+from reinforce_trainer_test import REINFORCETrainerRB, REINFORCETrainerGAE
 from dataset_class import LTLDataset
 from kernel_class import LTLKernel
 from model_class import LTLModel
@@ -89,7 +89,7 @@ def parse_args() -> argparse.Namespace:
     train_group.add_argument("--learning-rate", type=float, default=None)
     train_group.add_argument("--per-device-train-batch-size", type=_positive_int, default=None)
     train_group.add_argument("--per-device-eval-batch-size", type=_positive_int, default=None)
-    train_group.add_argument("--warmup-ratio", type=float, default=None)
+    train_group.add_argument("--warmup-ratio", type=float, default=0)
     train_group.add_argument("--weight-decay", type=float, default=None)
     train_group.add_argument("--logging-steps", type=float, default=None)
     train_group.add_argument("--eval-steps", type=float, default=None)
@@ -116,6 +116,11 @@ def parse_args() -> argparse.Namespace:
     callback_group.add_argument("--disable-semantic-callback", action="store_true")
     callback_group.add_argument("--semantic-eval-batch-size", type=_positive_int, default=10240)
     callback_group.add_argument(
+        "--disable-train-end-semantic-eval",
+        action="store_true",
+        help="Skip SemanticEvaluationCallback.on_train_end computations (useful for faster HPO trials)",
+    )
+    callback_group.add_argument(
         "--callback-debug",
         action="store_true",
         help="Enable detailed debug prints for metrics gathering/aggregation in callbacks",
@@ -130,14 +135,55 @@ def parse_args() -> argparse.Namespace:
         help="RL trainer variant: rb=running baseline REINFORCE, gae=actor-critic with GAE",
     )
     rl_group.add_argument("--reinforce-baseline-momentum", type=float, default=0.9)
-    rl_group.add_argument("--satisfactions-mmap", type=bool, default=False)
+    rl_group.add_argument(
+        "--satisfactions-mmap", 
+        action="store_true", 
+        help="Enable mmap loading of train dataset satisfactions"
+    )
     rl_group.add_argument("--reinforce-reward-clip", type=float, default=1.0)
-    rl_group.add_argument("--gae-gamma", type=float, default=0.99)
-    rl_group.add_argument("--gae-lambda", type=float, default=0.95)
-    rl_group.add_argument("--critic-loss-coef", type=float, default=0.5)
+    rl_group.add_argument(
+        "--difficulty-sampling",
+        action="store_true",
+        help="Enable adaptive difficulty sampling that starts easy and increases target difficulty with batch reward.",
+    )
+    rl_group.add_argument(
+        "--difficulty-start-target",
+        type=float,
+        default=0.10,
+        help="Initial target difficulty as fraction of depth range: min_depth + frac*(max_depth-min_depth).",
+    )
+    rl_group.add_argument(
+        "--difficulty-temperature",
+        type=float,
+        default=0.8,
+        help="Sampling temperature controlling spread around the current target difficulty.",
+    )
+    rl_group.add_argument(
+        "--difficulty-step-size",
+        type=float,
+        default=2.4,
+        help="Update step eta in T' = clip(T + eta*tanh(alpha*(Ravg-beta)), d_min, d_max).",
+    )
+    rl_group.add_argument(
+        "--difficulty-update-alpha",
+        type=float,
+        default=2.0,
+        help="Slope alpha in T' = clip(T + eta*tanh(alpha*(Ravg-beta)), d_min, d_max).",
+    )
+    rl_group.add_argument(
+        "--difficulty-performance-target",
+        type=float,
+        default=0.80,
+        help="Target beta in T' = clip(T + eta*tanh(alpha*(Ravg-beta)), d_min, d_max).",
+    )
+    rl_group.add_argument("--gae-gamma", type=float, default=0.0)
+    rl_group.add_argument("--gae-lambda", type=float, default=1.0)
     rl_group.add_argument("--critic-lr", type=float, default=None)
     rl_group.add_argument("--critic-hidden-dim", type=_positive_int, default=256)
     rl_group.add_argument("--critic-weight-decay", type=float, default=0.0)
+    rl_group.add_argument("--critic-pretraining-steps", type=int, default=0)
+    rl_group.add_argument("--critic-pretraining-ratio", type=float, default=0.0)
+
 
     return parser.parse_args()
 
@@ -151,8 +197,12 @@ def _load_kernel(kernel_dir: str) -> LTLKernel:
     return kernel
 
 
-def _load_dataset(path: str, load_satisfactions: bool) -> LTLDataset:
-    dataset = LTLDataset.load(path, load_satisfactions=load_satisfactions)
+def _load_dataset(path: str, load_satisfactions: bool, satisfactions_mmap: bool = False) -> LTLDataset:
+    dataset = LTLDataset.load(
+        path,
+        load_satisfactions=load_satisfactions,
+        satisfactions_mmap=satisfactions_mmap,
+    )
     if len(dataset) == 0:
         raise ValueError(f"Dataset at {path} is empty")
     return dataset
@@ -160,15 +210,6 @@ def _load_dataset(path: str, load_satisfactions: bool) -> LTLDataset:
 
 def _load_tokenizer(path: str) -> LTLTokenizer:
     return LTLTokenizer.from_pretrained(path)
-
-
-def _resolve_satisfactions_path(args: argparse.Namespace) -> str:
-    default_path = os.path.join(args.train_dataset_dir, "satisfactions.pt")
-    if not os.path.exists(default_path):
-        raise FileNotFoundError(
-            f"Could not find satisfactions.pt in train dataset directory: {default_path}"
-        )
-    return default_path
 
 
 def _load_training_args(args: argparse.Namespace) -> TrainingArguments:
@@ -192,7 +233,7 @@ def _load_training_args(args: argparse.Namespace) -> TrainingArguments:
             "learning_rate": 5e-4,
             "per_device_train_batch_size": 32,
             "per_device_eval_batch_size": 32,
-            "warmup_ratio": 500,
+            "warmup_ratio": 0,
             "weight_decay": 0.01,
             "logging_strategy": "steps",
             "logging_steps": 0.02,
@@ -303,13 +344,15 @@ def main() -> None:
 
     kernel = _load_kernel(args.kernel_dir)
     tokenizer = _load_tokenizer(args.tokenizer_dir)
-    train_dataset = _load_dataset(args.train_dataset_dir, load_satisfactions=False)
+    train_dataset = _load_dataset(
+        args.train_dataset_dir,
+        load_satisfactions=True,
+        satisfactions_mmap=args.satisfactions_mmap,
+    )
     eval_dataset = _load_dataset(args.eval_dataset_dir, load_satisfactions=True) if args.eval_dataset_dir else None
 
     training_args = _load_training_args(args)
     model = _build_model(args, kernel, tokenizer)
-    satisfactions_path = _resolve_satisfactions_path(args)
-
     max_length_hint = getattr(model.config, "n_positions", None)
     if isinstance(max_length_hint, int) and max_length_hint > 0:
         tokenizer.model_max_length = max_length_hint
@@ -347,7 +390,11 @@ def main() -> None:
     trainer_common_kwargs = {
         "model": model,
         "args": training_args,
-        "data_collator": lambda batch: tokenizer.collate_batch(batch, model.config.n_positions),
+        "data_collator": lambda batch: tokenizer.collate_batch(
+            batch,
+            model.config.n_positions,
+            include_metadata=True,
+        ),
         "train_dataset": train_dataset,
         "eval_dataset": eval_dataset,
         "callbacks": callbacks,
@@ -356,8 +403,12 @@ def main() -> None:
         "tokenizer": tokenizer,
         "reward_clip": args.reinforce_reward_clip,
         "semantic_eval_batch_size": args.semantic_eval_batch_size,
-        "satisfactions_path": satisfactions_path,
-        "satisfactions_mmap": args.satisfactions_mmap
+        "difficulty_sampling": args.difficulty_sampling,
+        "difficulty_start_target": args.difficulty_start_target,
+        "difficulty_temperature": args.difficulty_temperature,
+        "difficulty_step_size": args.difficulty_step_size,
+        "difficulty_update_alpha": args.difficulty_update_alpha,
+        "difficulty_performance_target": args.difficulty_performance_target,
     }
 
     if args.rl_trainer == "rb":
@@ -372,10 +423,11 @@ def main() -> None:
             **trainer_common_kwargs,
             gae_gamma=args.gae_gamma,
             gae_lambda=args.gae_lambda,
-            critic_loss_coef=args.critic_loss_coef,
             critic_lr=args.critic_lr,
             critic_hidden_dim=args.critic_hidden_dim,
             critic_weight_decay=args.critic_weight_decay,
+            critic_pretraining_steps=args.critic_pretraining_steps,
+            critic_pretraining_ratio=args.critic_pretraining_ratio,
         )
 
     if args.model_load_dir is not None and hasattr(trainer, "load_trainer_state"):

@@ -47,14 +47,14 @@ SCRATCH_BASE="/scratch-local/$USER/KernelLTL"
 SCRATCH_OUTPUT_BASE="$SCRATCH_BASE/models/CE/test"
 
 # Dataset for stage0 (same for all runs)
-TRAIN_DIR="$PROJECT_DIR/artifacts/datasets/stage0/train"
-EVAL_DIR="$PROJECT_DIR/artifacts/datasets/stage0/eval"
+TRAIN_DIR="$PROJECT_DIR/artifacts/datasets/stage1/train"
+EVAL_DIR="$PROJECT_DIR/artifacts/datasets/stage1/eval"
 
 LR="1e-4"
 
 # Max epochs per run. Early stopping will cut this short in practice.
 # Keep this high enough that well-behaved runs have time to converge.
-EPOCHS=2
+EPOCHS=100
 
 # Early stopping patience (in eval steps, not epochs).
 # Given the oscillatory semantic_distance behaviour observed in stage1 run3,

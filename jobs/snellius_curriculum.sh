@@ -2,11 +2,11 @@
 #SBATCH --job-name=kernelltl-curriculum
 #SBATCH --output=logs/kernelltl_curriculum_%j.out
 #SBATCH --error=logs/kernelltl_curriculum_%j.err
-#SBATCH --time=48:00:00
+#SBATCH --time=00:59:00
 #SBATCH --partition=gpu_h100
-#SBATCH --gpus=4
-#SBATCH --cpus-per-task=64
-#SBATCH --mem=720G
+#SBATCH --gpus=2
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=360G
 
 # ============================================================================
 # Snellius Multi-Stage Curriculum Training Script for KernelLTL
@@ -38,6 +38,7 @@ TOKENIZER_DIR="$HOME_DIR/artifacts/tokenizer"
 # Home output directory (for persisted copies)
 PROJECT_OUTPUT_DIR="$PROJECT_DIR/artifacts/models/CE"
 
+
 # Scratch (fast) storage
 SCRATCH_BASE="/scratch-local/$USER/KernelLTL"
 SCRATCH_OUTPUT_BASE="$SCRATCH_BASE/models/CE"
@@ -51,7 +52,7 @@ DEFAULT_WARMUP_RATIO=0.05
 MIXED_PRECISION="--bf16"
 
 # Evaluation Batch Size
-EVAL_BATCH_SIZE="81920"
+EVAL_BATCH_SIZE="256000"
 
 # Early Stopping Parameters
 EARLY_STOPPING_PATIENCE=10
@@ -66,13 +67,13 @@ EARLY_STOPPING_THRESHOLD=0.0
 # ============================================================================
 
 STAGE_CONFIGS=(
-    "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:10:1e-4"
+    "finetune:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:25:5e-6"
 )   
+    # "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:10:1e-4"
     # "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:100:1e-4"
     # "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts/datasets/stage2/eval:100:5e-5"
     # "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:100:1e-5"
     # "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:100:5e-6" 
-
 
 # ============================================================================
 # ENVIRONMENT SETUP
@@ -114,9 +115,9 @@ echo "Number of GPUs: $NUM_GPUS"
 # ============================================================================
 # RUN CURRICULUM STAGES
 # ============================================================================
-PREV_MODEL_PROJECT_DIR=""
-PREV_MODEL_DIR=""
-PREV_TRAINING_ARGS_DIR=""
+PREV_MODEL_PROJECT_DIR="$PROJECT_OUTPUT_DIR/run2/stage4/final_model"
+PREV_MODEL_DIR="$SCRATCH_OUTPUT_BASE/run2/stage4/final_model"
+PREV_TRAINING_ARGS_DIR="$SCRATCH_OUTPUT_BASE/run2/stage4/final_model"
 
 if [ -n "$PREV_MODEL_PROJECT_DIR" ] && [ -d "$PREV_MODEL_PROJECT_DIR" ]; then
     # Copy previous model dir from home to scratch-local
@@ -127,15 +128,14 @@ if [ -n "$PREV_MODEL_PROJECT_DIR" ] && [ -d "$PREV_MODEL_PROJECT_DIR" ]; then
     fi
 fi
 
-DEBUG_OPTION="underflow_overflow"
+DEBUG_OPTION=""
 
 for i in "${!STAGE_CONFIGS[@]}"; do
     # Parse stage configuration
-    IFS=':' read -r STAGE_NAME TRAIN_DIR EVAL_DIR EPOCHS LR BATCH_SIZE <<< "${STAGE_CONFIGS[$i]}"
+    IFS=':' read -r STAGE_NAME TRAIN_DIR EVAL_DIR EPOCHS LR <<< "${STAGE_CONFIGS[$i]}"
     
     # Use defaults if not specified
     LR=${LR:-$DEFAULT_LEARNING_RATE}
-    BATCH_SIZE=${BATCH_SIZE:-$DEFAULT_BATCH_SIZE}
     STEP_INTERVAL=$(echo "scale=6; 1/$EPOCHS" | bc -l)
     
     STAGE_OUTPUT_DIR="$SCRATCH_OUTPUT_BASE/$STAGE_NAME"
@@ -194,7 +194,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--dataloader-pin-memory"
         $MIXED_PRECISION
         "--semantic-eval-batch-size" "$EVAL_BATCH_SIZE"
-        "--metric-for-best-model"        "eval_semantic_distance"
+        "--metric-for-best-model"        "eval_loss"
         "--greater-is-better"            "false"
         "--early-stopping-patience" "$EARLY_STOPPING_PATIENCE"
         "--early-stopping-threshold" "$EARLY_STOPPING_THRESHOLD"

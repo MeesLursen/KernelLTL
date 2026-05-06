@@ -112,6 +112,11 @@ def parse_args() -> argparse.Namespace:
 
     callback_group = parser.add_argument_group("Semantic evaluation callback")
     callback_group.add_argument("--disable-semantic-callback", action="store_true")
+    callback_group.add_argument(
+        "--disable-train-end-semantic-eval",
+        action="store_true",
+        help="Skip SemanticEvaluationCallback.on_train_end computations (useful for faster HPO trials)",
+    )
     callback_group.add_argument("--semantic-eval-batch-size", type=_positive_int, default=10240)
 
     hpo_group = parser.add_argument_group("HPO controls")
@@ -329,7 +334,10 @@ def main() -> None:
     callbacks = []
     semantic_callback = None
     if not args.disable_semantic_callback:
-        semantic_callback = SemanticEvaluationCallback(tokenizer=tokenizer)
+        semantic_callback = SemanticEvaluationCallback(
+            tokenizer=tokenizer,
+            enable_train_end_eval=not args.disable_train_end_semantic_eval,
+        )
         callbacks.append(semantic_callback)
 
     metrics_logger_callback = UnifiedMetricsLoggerCallback(
