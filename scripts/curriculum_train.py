@@ -113,6 +113,11 @@ def parse_args() -> argparse.Namespace:
     callback_group.add_argument("--disable-semantic-callback", action="store_true")
     callback_group.add_argument("--semantic-eval-batch-size", type=_positive_int, default=10240)
     callback_group.add_argument(
+        "--disable-train-end-semantic-eval",
+        action="store_true",
+        help="Skip SemanticEvaluationCallback.on_train_end computations (useful for faster HPO trials)",
+    )
+    callback_group.add_argument(
         "--callback-debug",
         action="store_true",
         help="Enable detailed debug prints for metrics gathering/aggregation in callbacks",
@@ -289,6 +294,7 @@ def main() -> None:
     if not args.disable_semantic_callback and eval_dataset is not None:
         semantic_callback = SemanticEvaluationCallback(
             tokenizer=tokenizer,
+            enable_train_end_eval=not args.disable_train_end_semantic_eval,
             debug_metrics=args.callback_debug,
         )
         callbacks.append(semantic_callback)

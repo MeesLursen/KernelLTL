@@ -328,6 +328,7 @@ def main() -> None:
     if not args.disable_semantic_callback and eval_dataset is not None:
         semantic_callback = SemanticEvaluationCallback(
             tokenizer=tokenizer,
+            enable_train_end_eval=not args.disable_train_end_semantic_eval,
             debug_metrics=args.callback_debug,
         )
         callbacks.append(semantic_callback)
