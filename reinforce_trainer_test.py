@@ -712,6 +712,9 @@ class REINFORCETrainerGAE(Trainer):
                 if max_steps > 0:
                     import math
                     steps = math.ceil(max_steps * ratio)
+                else:
+                    # max_steps not yet known; don't cache so we retry later.
+                    return 0
 
         self._critic_pretraining_steps = steps
         return self._critic_pretraining_steps
