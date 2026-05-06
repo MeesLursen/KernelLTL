@@ -399,7 +399,8 @@ def main() -> None:
         )
     trainer._ce_reference_model_path = ce_reference_model_dir
     metrics_logger.attach_trainer(trainer)
-    semantic_callback.attach_trainer(trainer)
+    if semantic_callback is not None:
+        semantic_callback.attach_trainer(trainer)
     
     train_result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
     print(train_result)
