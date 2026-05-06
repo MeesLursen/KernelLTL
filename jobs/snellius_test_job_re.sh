@@ -88,9 +88,12 @@ DEFAULT_CRITIC_WEIGHT_DECAY="0.0"
 # ============================================================================
 
 STAGE_CONFIGS=(
-    "critic_lr_1e-1_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:1e-1"
-    "critic_lr_5e-2_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:5e-2"
     "critic_lr_1e-2_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:1e-2"
+    "critic_lr_5e-3_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:5e-3"
+    "critic_lr_1e-3_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:1e-3"
+    "critic_lr_5e-4_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:5e-4"
+    "critic_lr_1e-4_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:1e-4"
+    
 )   
     # "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:100:1e-4:rb"
     # 
@@ -131,6 +134,13 @@ else
 fi
 
 export PYTHONPATH="$HOME_DIR:$PYTHONPATH"
+# export PYTHONFAULTHANDLER=1
+# export PYTHONUNBUFFERED=1
+# export TORCH_DISTRIBUTED_DEBUG=DETAIL
+# export TORCH_SHOW_CPP_STACKTRACES=1
+# export NCCL_DEBUG=INFO
+# export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+# export TORCH_NCCL_BLOCKING_WAIT=1
 
 
 NUM_GPUS=$(nvidia-smi -L | wc -l)

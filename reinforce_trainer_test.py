@@ -568,8 +568,8 @@ class REINFORCETrainerGAE(Trainer):
             device = self.args.device
             entry = self._critic_cache[self._critic_cache_idx % len(self._critic_cache)]
             self._critic_cache_idx += 1
-            token_hidden, rewards, token_mask_f = [t.to(device) for t in entry]
-            loss, cache_rl_metrics = self._critic_loss_from_cache(token_hidden, rewards, token_mask_f)
+            token_hidden, rewards, token_mask_f, valid_mask, reward_tensor_full = [t.to(device) for t in entry]
+            loss, cache_rl_metrics = self._critic_loss_from_cache(token_hidden, rewards, token_mask_f, valid_mask, reward_tensor_full)
             self._last_rl_metrics = cache_rl_metrics
             self._last_train_metrics = {
                 "train_loss": loss.detach(),
@@ -880,6 +880,8 @@ class REINFORCETrainerGAE(Trainer):
                 token_hidden.cpu(),
                 rewards.detach().cpu(),
                 token_mask_f.detach().cpu(),
+                valid_mask.cpu(),
+                reward_tensor.detach().cpu(),
             ))
 
         Bv, Tv, _ = token_hidden.shape
@@ -966,8 +968,13 @@ class REINFORCETrainerGAE(Trainer):
         token_hidden: torch.Tensor,
         rewards: torch.Tensor,
         token_mask_f: torch.Tensor,
+        valid_mask: torch.Tensor,
+        reward_tensor_full: torch.Tensor,
     ) -> tuple[torch.Tensor, dict]:
         Bv, Tv, _ = token_hidden.shape
+        B = valid_mask.size(0)
+        valid_idx = valid_mask.nonzero(as_tuple=False).squeeze(-1)
+
         values = self.critic(token_hidden).squeeze(-1)
         values_det = values.detach()
 
@@ -989,17 +996,42 @@ class REINFORCETrainerGAE(Trainer):
             values * token_mask_f, returns, reduction="sum"
         ) / denom
 
+        # Scatter valid-sample stats back to full-batch [B] tensors to match
+        # the shape emitted by the non-replay path (required for distributed gather).
         value_err_masked = (returns - values) * token_mask_f
+        zeros = reward_tensor_full.new_zeros(B)
+
+        token_count = zeros.clone()
+        token_count[valid_idx] = token_mask_f.sum(dim=1).detach()
+
+        advantage_per_sample = zeros.clone()
+        advantage_per_sample[valid_idx] = (advantages * token_mask_f).sum(dim=1).detach()
+
+        value_sum_per_sample = zeros.clone()
+        value_sum_per_sample[valid_idx] = (values_det * token_mask_f).sum(dim=1).detach()
+
+        returns_sum = zeros.clone()
+        returns_sum[valid_idx] = returns.sum(dim=1).detach()
+
+        returns_sq_sum = zeros.clone()
+        returns_sq_sum[valid_idx] = (returns * returns).sum(dim=1).detach()
+
+        value_err_sum = zeros.clone()
+        value_err_sum[valid_idx] = value_err_masked.sum(dim=1).detach()
+
+        value_err_sq_sum = zeros.clone()
+        value_err_sq_sum[valid_idx] = (value_err_masked * value_err_masked).sum(dim=1).detach()
+
         rl_metrics = {
-            "token_count_per_sample": token_mask_f.sum(dim=1).detach(),
-            "valid_formula_mask_per_sample": torch.ones(Bv, dtype=torch.bool, device=token_mask_f.device),
-            "reward_per_sample": rewards.sum(dim=1).detach(),
-            "advantage_per_sample": (advantages * token_mask_f).sum(dim=1).detach(),
-            "value_sum_per_sample": (values_det * token_mask_f).sum(dim=1).detach(),
-            "returns_sum": returns.sum(dim=1).detach(),
-            "returns_sq_sum": (returns * returns).sum(dim=1).detach(),
-            "value_err_sum": value_err_masked.sum(dim=1).detach(),
-            "value_err_sq_sum": (value_err_masked * value_err_masked).sum(dim=1).detach(),
+            "token_count_per_sample": token_count,
+            "valid_formula_mask_per_sample": valid_mask,
+            "reward_per_sample": reward_tensor_full,
+            "advantage_per_sample": advantage_per_sample,
+            "value_sum_per_sample": value_sum_per_sample,
+            "returns_sum": returns_sum,
+            "returns_sq_sum": returns_sq_sum,
+            "value_err_sum": value_err_sum,
+            "value_err_sq_sum": value_err_sq_sum,
         }
         return loss, rl_metrics
 
