@@ -2,7 +2,7 @@
 #SBATCH --job-name=kernelltl_test_job_re
 #SBATCH --output=logs/kernelltl_test_job_re_gae_lambda_1_wu_4_crlr_5e-4_value_test_%j.out
 #SBATCH --error=logs/kernelltl_test_job_re_gae_lambda_1_wu_4_crlr_5e-4_value_test_%j.err
-#SBATCH --time=03:00:00
+#SBATCH --time=10:00:00
 #SBATCH --partition=gpu_h100
 #SBATCH --constraint=scratch-node
 #SBATCH --gpus=2
@@ -50,7 +50,8 @@ DEFAULT_WARMUP_RATIO=1.0
 MIXED_PRECISION="--bf16"
 
 # Semantic Eval Callback Settings
-DISABLE_TRAIN_END_SEMANTIC_EVAL=1
+DISABLE_SEMANTIC_CALLBACK=1
+DISABLE_TRAIN_END_SEMANTIC_EVAL=0
 EVAL_BATCH_SIZE="256000"
 
 # Early Stopping Parameters
@@ -66,7 +67,6 @@ TRAIN_SATS_MMAP=0
 # Shared RL controls
 DEFAULT_RL_CLIP="1.0"
 
-
 # RB-specific controls
 DEFAULT_RB_BASELINE_MOMENTUM="0.9"
 
@@ -77,14 +77,6 @@ DEFAULT_CRITIC_LR="5e-6"
 DEFAULT_CRITIC_HIDDEN_DIM="256"
 DEFAULT_CRITIC_WEIGHT_DECAY="0.0"
 
-# Adaptive Difficulty Sampling controls
-ADAPTIVE_DIFFICULTY_SAMPLING="0"
-DIFFICULTY_START_TARGET="0.1"
-DIFFICULTY_TEMPERATURE="0.8"
-DIFFICULTY_STEP_SIZE="2.4"
-DIFFICULTY_UPDATE_ALPHA="2.0"
-DIFFICULTY_PERFORMANCE_TARGET="0.8"
-
 # ============================================================================
 # STAGE CONFIGURATION
 # ============================================================================
@@ -94,7 +86,14 @@ DIFFICULTY_PERFORMANCE_TARGET="0.8"
 # ============================================================================
 
 STAGE_CONFIGS=(
-    "gae_lambda_1_wu_4_crlr_5e-4_value_test:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:6:5e-8:gae:5e-4"
+    "critic_lr_5e-3_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:5e-3"
+    "critic_lr_1e-3_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:1e-3"
+    "critic_lr_5e-4_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:5e-4"
+    "critic_lr_1e-4_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:1e-4"
+    "critic_lr_5e-5_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:5e-5"
+    "critic_lr_1e-5_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:1e-5"
+    "critic_lr_5e-6_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:5e-6"
+    "critic_lr_1e-6_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:1e-6"
 )   
     # "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:100:1e-4:rb"
     # 
@@ -175,7 +174,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     LR=${LR:-$DEFAULT_LEARNING_RATE}
     STAGE_RL_TRAINER=${STAGE_RL_TRAINER:-$DEFAULT_RL_TRAINER}
     STEP_INTERVAL=$(echo "scale=6; 1/$EPOCHS" | bc -l)
-    PRETRAIN_STEP_INTERVAL=$(echo "scale=6; 4/$EPOCHS" | bc -l)
+    PRETRAIN_STEP_INTERVAL=$(echo "scale=6; 5/$EPOCHS" | bc -l)
 
     STAGE_OUTPUT_DIR="$BASE_RE_OUTPUT_DIR/$STAGE_NAME"
     STAGE_MODEL_SAVE_DIR="$STAGE_OUTPUT_DIR/final_model"
@@ -294,24 +293,18 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         )
     fi
 
-    # Train sats mmap storage
+    # Disable Eval Controls
+    if [ "$DISABLE_SEMANTIC_CALLBACK" = "1" ]; then
+        echo "  Disabled Semantic Evaluation Callback."
+        CMD_ARGS+=(
+            "--disable-semantic-callback"
+        )
+    fi
+
     if [ "$DISABLE_TRAIN_END_SEMANTIC_EVAL" = "1" ]; then
         echo "  Disabled final model evaluation in the SemanticEvaluationCallback."
         CMD_ARGS+=(
             "--disable-train-end-semantic-eval"
-        )
-    fi
-    
-    # Adaptive Difficulty Sampling
-    if [ "$ADAPTIVE_DIFFICULTY_SAMPLING" = "1" ]; then
-        echo "  This run will use ADS"
-        CMD_ARGS+=(
-            "--difficulty-sampling"
-            "--difficulty-start-target" "$DIFFICULTY_START_TARGET"
-            "--difficulty-temperature" "$DIFFICULTY_TEMPERATURE"
-            "--difficulty-step-size" "$DIFFICULTY_STEP_SIZE"
-            "--difficulty-update-alpha" "$DIFFICULTY_UPDATE_ALPHA"
-            "--difficulty-performance-target" "$DIFFICULTY_PERFORMANCE_TARGET"
         )
     fi
 
