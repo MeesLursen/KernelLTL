@@ -459,6 +459,9 @@ class REINFORCETrainerGAE(Trainer):
             self._last_train_metrics: dict[str, float | torch.Tensor] = {}
             self._last_rl_metrics: dict[str, float | torch.Tensor] = {}
             self._actor_frozen: bool = False
+            self._critic_cache: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = []
+            self._critic_cache_full: bool = False
+            self._critic_cache_idx: int = 0
             self._critic_pretraining_steps: int | None = None
             self._critic_pretraining_steps_arg: int = max(0, int(critic_pretraining_steps))
             self._critic_pretraining_ratio_arg: float = max(0.0, float(critic_pretraining_ratio))
@@ -552,6 +555,28 @@ class REINFORCETrainerGAE(Trainer):
                 print(f"  param_group[{i}]: {overlap} critic params")
                 
         critic_warmup = self._is_critic_pretraining_active()
+
+        # Seal the cache after the first full epoch of collection
+        if critic_warmup and not self._critic_cache_full and self.state.epoch >= 1.0 and self._critic_cache:
+            self._critic_cache_full = True
+
+        # Replay mode: critic pretraining is still active but the cache is ready.
+        # Skip generation entirely — sample a cached entry and train the critic from it.
+        if critic_warmup and self._critic_cache_full:
+            if model.training:
+                self._set_actor_requires_grad(False)
+            device = self.args.device
+            entry = self._critic_cache[self._critic_cache_idx % len(self._critic_cache)]
+            self._critic_cache_idx += 1
+            token_hidden, rewards, token_mask_f = [t.to(device) for t in entry]
+            loss = self._critic_loss_from_cache(token_hidden, rewards, token_mask_f)
+            if return_outputs:
+                actor_model = model.module if hasattr(model, "module") else model
+                with torch.no_grad():
+                    outputs = actor_model(**inputs)
+                return loss, outputs
+            return loss
+
         actor_model = model.module if (critic_warmup and hasattr(model, "module")) else model
         if model.training:
             self._set_actor_requires_grad(not critic_warmup)
@@ -840,7 +865,16 @@ class REINFORCETrainerGAE(Trainer):
         lengths_valid = token_mask.sum(dim=-1).clamp(min=1)
         rewards = torch.zeros_like(token_log_probs)
         rewards.scatter_(1, (lengths_valid - 1).unsqueeze(-1), reward_valid.unsqueeze(-1))
-        
+
+        # Collect (hidden, rewards, mask) during the first epoch of critic pretraining.
+        # token_hidden is already detached; rewards has no grad (derived from no_grad reward_tensor).
+        if self._is_critic_pretraining_active() and not self._critic_cache_full:
+            self._critic_cache.append((
+                token_hidden.cpu(),
+                rewards.detach().cpu(),
+                token_mask_f.detach().cpu(),
+            ))
+
         Bv, Tv, _ = token_hidden.shape
         values = self.critic(token_hidden).squeeze(-1)
 
@@ -918,6 +952,35 @@ class REINFORCETrainerGAE(Trainer):
 
         return reinforce_loss, valid_mask
 
+
+
+    def _critic_loss_from_cache(
+        self,
+        token_hidden: torch.Tensor,
+        rewards: torch.Tensor,
+        token_mask_f: torch.Tensor,
+    ) -> torch.Tensor:
+        Bv, Tv, _ = token_hidden.shape
+        values = self.critic(token_hidden).squeeze(-1)
+        values_det = values.detach()
+
+        next_values = torch.zeros_like(values_det)
+        next_values[:, :-1] = values_det[:, 1:]
+        next_mask = torch.zeros_like(token_mask_f)
+        next_mask[:, :-1] = token_mask_f[:, 1:]
+
+        deltas = rewards + self.gae_gamma * next_values * next_mask - values_det
+        advantages = torch.zeros_like(deltas)
+        gae_acc = torch.zeros(Bv, dtype=deltas.dtype, device=deltas.device)
+        for t in range(Tv - 1, -1, -1):
+            gae_acc = deltas[:, t] + self.gae_gamma * self.gae_lambda * next_mask[:, t] * gae_acc
+            advantages[:, t] = gae_acc
+
+        returns = (advantages + values_det) * token_mask_f
+        denom = token_mask_f.sum().clamp(min=1.0)
+        return torch.nn.functional.mse_loss(
+            values * token_mask_f, returns, reduction="sum"
+        ) / denom
 
 
     def _slice_inputs_by_mask(self, inputs: dict, mask: torch.Tensor) -> dict:
