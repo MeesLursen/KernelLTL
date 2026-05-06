@@ -59,10 +59,7 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
         "value_err_sum",
     }
 
-    # This value is already synchronized in the trainer, so we log it directly on main process.
-    _RL_LOCAL_SCALAR_KEYS = {
-        "curriculum_target_difficulty",
-    }
+    _RL_LOCAL_SCALAR_KEYS = set()
 
     _RL_LOCAL_VECTOR_KEYS = {
         "advantage_pos_mean",

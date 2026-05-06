@@ -141,41 +141,6 @@ def parse_args() -> argparse.Namespace:
         help="Enable mmap loading of train dataset satisfactions"
     )
     rl_group.add_argument("--reinforce-reward-clip", type=float, default=1.0)
-    rl_group.add_argument(
-        "--difficulty-sampling",
-        action="store_true",
-        help="Enable adaptive difficulty sampling that starts easy and increases target difficulty with batch reward.",
-    )
-    rl_group.add_argument(
-        "--difficulty-start-target",
-        type=float,
-        default=0.10,
-        help="Initial target difficulty as fraction of depth range: min_depth + frac*(max_depth-min_depth).",
-    )
-    rl_group.add_argument(
-        "--difficulty-temperature",
-        type=float,
-        default=0.8,
-        help="Sampling temperature controlling spread around the current target difficulty.",
-    )
-    rl_group.add_argument(
-        "--difficulty-step-size",
-        type=float,
-        default=2.4,
-        help="Update step eta in T' = clip(T + eta*tanh(alpha*(Ravg-beta)), d_min, d_max).",
-    )
-    rl_group.add_argument(
-        "--difficulty-update-alpha",
-        type=float,
-        default=2.0,
-        help="Slope alpha in T' = clip(T + eta*tanh(alpha*(Ravg-beta)), d_min, d_max).",
-    )
-    rl_group.add_argument(
-        "--difficulty-performance-target",
-        type=float,
-        default=0.80,
-        help="Target beta in T' = clip(T + eta*tanh(alpha*(Ravg-beta)), d_min, d_max).",
-    )
     rl_group.add_argument("--gae-gamma", type=float, default=0.0)
     rl_group.add_argument("--gae-lambda", type=float, default=1.0)
     rl_group.add_argument("--critic-lr", type=float, default=None)
@@ -403,12 +368,6 @@ def main() -> None:
         "tokenizer": tokenizer,
         "reward_clip": args.reinforce_reward_clip,
         "semantic_eval_batch_size": args.semantic_eval_batch_size,
-        "difficulty_sampling": args.difficulty_sampling,
-        "difficulty_start_target": args.difficulty_start_target,
-        "difficulty_temperature": args.difficulty_temperature,
-        "difficulty_step_size": args.difficulty_step_size,
-        "difficulty_update_alpha": args.difficulty_update_alpha,
-        "difficulty_performance_target": args.difficulty_performance_target,
     }
 
     if args.rl_trainer == "rb":

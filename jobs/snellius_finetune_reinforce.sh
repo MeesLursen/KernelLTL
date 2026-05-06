@@ -76,14 +76,6 @@ DEFAULT_CRITIC_WEIGHT_DECAY="0.0"
 # Semantic eval callback controls
 DISABLE_TRAIN_END_SEMANTIC_EVAL=0
 
-# Adaptive Difficulty Sampling controls
-ADAPTIVE_DIFFICULTY_SAMPLING="0"
-DIFFICULTY_START_TARGET="0.1"
-DIFFICULTY_TEMPERATURE="0.8"
-DIFFICULTY_STEP_SIZE="2.4"
-DIFFICULTY_UPDATE_ALPHA="2.0"
-DIFFICULTY_PERFORMANCE_TARGET="0.8"
-
 # ============================================================================
 # STAGE CONFIGURATION
 # ============================================================================
@@ -293,19 +285,6 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     if [ "$DISABLE_TRAIN_END_SEMANTIC_EVAL" = "1" ]; then
         echo "  Disabled final model evaluation in the SemanticEvaluationCallback."
         CMD_ARGS+=("--disable-train-end-semantic-eval")
-    fi
-
-    # Adaptive Difficulty Sampling
-    if [ "$ADAPTIVE_DIFFICULTY_SAMPLING" = "1" ]; then
-        echo "  This run will use ADS"
-        CMD_ARGS+=(
-            "--difficulty-sampling"
-            "--difficulty-start-target" "$DIFFICULTY_START_TARGET"
-            "--difficulty-temperature" "$DIFFICULTY_TEMPERATURE"
-            "--difficulty-step-size" "$DIFFICULTY_STEP_SIZE"
-            "--difficulty-update-alpha" "$DIFFICULTY_UPDATE_ALPHA"
-            "--difficulty-performance-target" "$DIFFICULTY_PERFORMANCE_TARGET"
-        )
     fi
 
     # Run training

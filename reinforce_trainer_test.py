@@ -3,7 +3,6 @@ import math
 import torch
 import torch.nn as nn
 import torch.distributed as dist
-from torch.utils.data import Sampler
 from transformers import Trainer
 
 from formula_utils import str_to_formula
@@ -22,12 +21,6 @@ class REINFORCETrainerRB(Trainer):
             reward_clip: float | None = 1.0,
             semantic_eval_batch_size: int = 10240,
             satisfactions_mmap: bool = False,
-            difficulty_sampling: bool = False,
-            difficulty_start_target: float = 0.10,
-            difficulty_temperature: float = 0.80,
-            difficulty_step_size: float = 2.4,
-            difficulty_update_alpha: float = 2.0,
-            difficulty_performance_target: float = 0.80,
             **kwargs,
         ) -> None:
             self.processing_class = kwargs.pop("processing_class", None)
@@ -40,108 +33,14 @@ class REINFORCETrainerRB(Trainer):
             self.baseline_momentum = baseline_momentum
             self.reward_clip = reward_clip
             self.semantic_eval_batch_size = semantic_eval_batch_size
-            self.difficulty_sampling = bool(difficulty_sampling)
-            self.difficulty_start_target = float(difficulty_start_target)
-            self.difficulty_temperature = float(difficulty_temperature)
-            self.difficulty_step_size = float(difficulty_step_size)
-            self.difficulty_update_alpha = float(difficulty_update_alpha)
-            self.difficulty_performance_target = float(difficulty_performance_target)
             self._reward_baseline: torch.Tensor | None = None
             self._reward_sq_mean: torch.Tensor | None = None
             self._last_train_metrics: dict[str, float | torch.Tensor] = {}
             self._last_rl_metrics: dict[str, float | torch.Tensor] = {}
-            self._difficulty_sampler: AdaptiveDifficultySampler | None = None
-            self._uniform_sampler: UniformRandomSampler | None = None
-            self._active_train_sampler: MutableDelegatingSampler | None = None
-            self._active_sampler_kind: str = "uniform"
-            self._curriculum_warmup_steps: int | None = None
             self._sync_kernel_device(getattr(self.args, "device", None))
-            self._maybe_init_difficulty_sampler()
-            self._maybe_init_uniform_sampler()
 
 
-    def _maybe_init_difficulty_sampler(self) -> None:
-        if not self.difficulty_sampling:
-            return
-        formulas = getattr(self.train_dataset, "formulas", None)
-        if formulas is None or len(formulas) == 0:
-            print("[REINFORCETrainer] Difficulty sampling disabled: formulas unavailable in train dataset.")
-            self.difficulty_sampling = False
-            return
 
-        depths = torch.tensor([int(phi.depth()) for phi in formulas], dtype=torch.float32)
-        min_depth = float(depths.min().item())
-        max_depth = float(depths.max().item())
-        difficulties = depths
-        start_target = min_depth + self.difficulty_start_target * (max_depth - min_depth)
-        start_target = float(min(max(start_target, min_depth), max_depth))
-
-        num_samples = int(len(formulas))
-        base_seed = int(getattr(self.args, "seed", 0) or 0)
-
-        self._difficulty_sampler = AdaptiveDifficultySampler(
-            difficulties=difficulties,
-            num_samples=num_samples,
-            temperature=self.difficulty_temperature,
-            start_target_difficulty=start_target,
-            max_difficulty_step=self.difficulty_step_size,
-            update_alpha=self.difficulty_update_alpha,
-            performance_target=self.difficulty_performance_target,
-            seed=base_seed,
-        )
-
-
-    def _maybe_init_uniform_sampler(self) -> None:
-        if not self.difficulty_sampling:
-            return
-        if self.train_dataset is None:
-            return
-
-        num_samples = int(len(self.train_dataset))
-        base_seed = int(getattr(self.args, "seed", 0) or 0)
-
-        self._uniform_sampler = UniformRandomSampler(
-            dataset_size=num_samples,
-            num_samples=num_samples,
-            seed=base_seed,
-        )
-
-
-    def _resolve_curriculum_warmup_steps(self) -> int:
-        if self._curriculum_warmup_steps is not None:
-            return self._curriculum_warmup_steps
-
-        configured_steps = getattr(self.args, "critic_warmup_steps", None)
-        if configured_steps is not None:
-            self._curriculum_warmup_steps = max(0, int(configured_steps))
-            return self._curriculum_warmup_steps
-
-        max_steps = int(getattr(self.state, "max_steps", 0) or 0)
-        if max_steps > 0:
-            self._curriculum_warmup_steps = max(0, int(self.args.get_warmup_steps(max_steps)))
-        else:
-            self._curriculum_warmup_steps = max(0, int(getattr(self.args, "warmup_steps", 0) or 0))
-        return self._curriculum_warmup_steps
-
-
-    def _is_curriculum_warmup_active(self) -> bool:
-        return int(getattr(self.state, "global_step", 0) or 0) < self._resolve_curriculum_warmup_steps()
-
-
-    def _sync_active_train_sampler(self) -> None:
-        if self._active_train_sampler is None or self._uniform_sampler is None:
-            return
-
-        use_uniform = self._is_curriculum_warmup_active() or self._difficulty_sampler is None
-        target_sampler = self._uniform_sampler if use_uniform else self._difficulty_sampler
-        target_kind = "uniform" if use_uniform else "difficulty"
-
-        if target_sampler is not None and self._active_sampler_kind != target_kind:
-            self._active_train_sampler.set_inner_sampler(target_sampler)
-            self._active_sampler_kind = target_kind
-
-    
-    
     # ------------------------------- CORE LOSS METHODS -------------------------------
     def compute_loss(
         self,
@@ -150,8 +49,6 @@ class REINFORCETrainerRB(Trainer):
         num_items_in_batch: int | None = None,
         return_outputs: bool = False,
     ):
-        if model.training:
-            self._sync_active_train_sampler()
         self._last_rl_metrics = {}
         # ----------- REINFORCE loss -----------
         encoder_hidden_states = inputs.get("encoder_hidden_states")
@@ -257,21 +154,6 @@ class REINFORCETrainerRB(Trainer):
             outputs = model(**inputs)
             return loss, outputs
         return loss
-
-
-    def _get_train_sampler(self, train_dataset=None):
-        if self._uniform_sampler is not None:
-            initial_inner = self._uniform_sampler
-            self._active_sampler_kind = "uniform"
-            self._active_train_sampler = MutableDelegatingSampler(initial_inner)
-            return self._active_train_sampler
-
-        if self._difficulty_sampler is not None:
-            initial_inner = self._difficulty_sampler
-            self._active_sampler_kind = "difficulty"
-            self._active_train_sampler = MutableDelegatingSampler(initial_inner)
-            return self._active_train_sampler
-        return super()._get_train_sampler(train_dataset)
 
 
     def _compute_reinforce_term(
@@ -421,8 +303,6 @@ class REINFORCETrainerRB(Trainer):
                 )
 
         if not bool(valid_mask.any()):
-            if require_grad:
-                self._update_difficulty_sampler_from_rewards(reward_tensor)
             self._last_rl_metrics = {
                 "token_count_per_sample": token_count_per_sample,
                 "token_entropy_sum": token_entropy_sum,
@@ -431,8 +311,6 @@ class REINFORCETrainerRB(Trainer):
                 "reward_per_sample": reward_tensor.detach(),
                 "advantage_per_sample": torch.zeros_like(reward_tensor),
             }
-            if self._difficulty_sampler is not None:
-                self._last_rl_metrics["curriculum_target_difficulty"] = float(self._difficulty_sampler.target_difficulty)
             return None, valid_mask
 
         valid_idx = valid_mask.nonzero(as_tuple=False).squeeze(-1)
@@ -451,8 +329,6 @@ class REINFORCETrainerRB(Trainer):
         advantage_per_sample[valid_idx] = advantage_valid
 
         reinforce_loss = -(advantage_valid * seq_log_prob).mean()
-        if require_grad:
-            self._update_difficulty_sampler_from_rewards(reward_tensor)
 
         self._last_rl_metrics = {
             "token_count_per_sample": token_count_per_sample,
@@ -462,10 +338,7 @@ class REINFORCETrainerRB(Trainer):
             "reward_per_sample": reward_tensor.detach(),
             "advantage_per_sample": advantage_per_sample.detach(),
         }
-        if self._difficulty_sampler is not None:
-            self._last_rl_metrics["curriculum_target_difficulty"] = float(self._difficulty_sampler.target_difficulty)
-    
-        
+
         return reinforce_loss, valid_mask
 
 
@@ -491,29 +364,6 @@ class REINFORCETrainerRB(Trainer):
         reward_mean = (local_sum / local_count).detach()
         reward_sq_mean = (local_sq_sum / local_count).detach()
         return reward_mean, reward_sq_mean
-
-
-    def _update_difficulty_sampler_from_rewards(self, reward_tensor: torch.Tensor) -> None:
-        if self._difficulty_sampler is None:
-            return
-        if self._is_curriculum_warmup_active():
-            return
-
-        valid_rewards = reward_tensor.detach()
-        local_sum = valid_rewards.sum()
-        local_count = valid_rewards.new_tensor(float(valid_rewards.numel()))
-
-        if dist.is_available() and dist.is_initialized():
-            dist.all_reduce(local_sum, op=dist.ReduceOp.SUM)
-            dist.all_reduce(local_count, op=dist.ReduceOp.SUM)
-
-        global_count = float(local_count.detach().to(dtype=torch.float32).cpu().item())
-        if global_count <= 0.0:
-            return
-
-        global_sum = float(local_sum.detach().to(dtype=torch.float32).cpu().item())
-        batch_performance = global_sum / global_count
-        self._difficulty_sampler.update_from_performance(batch_performance)
 
 
 
@@ -584,12 +434,6 @@ class REINFORCETrainerGAE(Trainer):
             reward_clip: float | None = 1.0,
             semantic_eval_batch_size: int = 10240,
             satisfactions_mmap: bool = False,
-            difficulty_sampling: bool = False,
-            difficulty_start_target: float = 0.10,
-            difficulty_temperature: float = 0.80,
-            difficulty_step_size: float = 2.4,
-            difficulty_update_alpha: float = 2.0,
-            difficulty_performance_target: float = 0.80,
             gae_gamma: float = 1.0,
             gae_lambda: float = 1.0,
             critic_lr: float | None = None,
@@ -608,22 +452,12 @@ class REINFORCETrainerGAE(Trainer):
             self.formula_tokenizer = tokenizer
             self.reward_clip = reward_clip
             self.semantic_eval_batch_size = semantic_eval_batch_size
-            self.difficulty_sampling = bool(difficulty_sampling)
-            self.difficulty_start_target = float(difficulty_start_target)
-            self.difficulty_temperature = float(difficulty_temperature)
-            self.difficulty_step_size = float(difficulty_step_size)
-            self.difficulty_update_alpha = float(difficulty_update_alpha)
-            self.difficulty_performance_target = float(difficulty_performance_target)
             self.gae_gamma = float(gae_gamma)
             self.gae_lambda = float(gae_lambda)
             self.critic_lr = float(critic_lr) if critic_lr is not None else float(self.args.learning_rate)
             self.critic_weight_decay = float(critic_weight_decay)
             self._last_train_metrics: dict[str, float | torch.Tensor] = {}
             self._last_rl_metrics: dict[str, float | torch.Tensor] = {}
-            self._difficulty_sampler: AdaptiveDifficultySampler | None = None
-            self._uniform_sampler: UniformRandomSampler | None = None
-            self._active_train_sampler: MutableDelegatingSampler | None = None
-            self._active_sampler_kind: str = "uniform"
             self._actor_frozen: bool = False
             self._critic_pretraining_steps: int | None = None
             self._critic_pretraining_steps_arg: int = max(0, int(critic_pretraining_steps))
@@ -641,55 +475,6 @@ class REINFORCETrainerGAE(Trainer):
 
             self._attach_critic_to_model()
             self._sync_kernel_critic_device(getattr(self.args, "device", None))
-            self._maybe_init_difficulty_sampler()
-            self._maybe_init_uniform_sampler()
-
-
-    def _maybe_init_difficulty_sampler(self) -> None:
-        if not self.difficulty_sampling:
-            return
-        formulas = getattr(self.train_dataset, "formulas", None)
-        if formulas is None or len(formulas) == 0:
-            print("[REINFORCETrainer] Difficulty sampling disabled: formulas unavailable in train dataset.")
-            self.difficulty_sampling = False
-            return
-
-        depths = torch.tensor([int(phi.depth()) for phi in formulas], dtype=torch.float32)
-        min_depth = float(depths.min().item())
-        max_depth = float(depths.max().item())
-        difficulties = depths
-        start_target = min_depth + self.difficulty_start_target * (max_depth - min_depth)
-        start_target = float(min(max(start_target, min_depth), max_depth))
-
-        num_samples = int(len(formulas))
-        base_seed = int(getattr(self.args, "seed", 0) or 0)
-
-        self._difficulty_sampler = AdaptiveDifficultySampler(
-            difficulties=difficulties,
-            num_samples=num_samples,
-            temperature=self.difficulty_temperature,
-            start_target_difficulty=start_target,
-            max_difficulty_step=self.difficulty_step_size,
-            update_alpha=self.difficulty_update_alpha,
-            performance_target=self.difficulty_performance_target,
-            seed=base_seed,
-        )
-
-
-    def _maybe_init_uniform_sampler(self) -> None:
-        if not self.difficulty_sampling:
-            return
-        if self.train_dataset is None:
-            return
-
-        num_samples = int(len(self.train_dataset))
-        base_seed = int(getattr(self.args, "seed", 0) or 0)
-
-        self._uniform_sampler = UniformRandomSampler(
-            dataset_size=num_samples,
-            num_samples=num_samples,
-            seed=base_seed,
-        )
 
 
     def _resolve_critic_pretraining_steps(self) -> int:
@@ -744,18 +529,6 @@ class REINFORCETrainerGAE(Trainer):
         self._actor_frozen = not requires_grad
 
 
-    def _sync_active_train_sampler(self) -> None:
-        if self._active_train_sampler is None or self._uniform_sampler is None:
-            return
-
-        use_uniform = self._is_critic_pretraining_active() or self._difficulty_sampler is None
-        target_sampler = self._uniform_sampler if use_uniform else self._difficulty_sampler
-        target_kind = "uniform" if use_uniform else "difficulty"
-
-        if target_sampler is not None and self._active_sampler_kind != target_kind:
-            self._active_train_sampler.set_inner_sampler(target_sampler)
-            self._active_sampler_kind = target_kind
-
 
 
     # ------------------------------- CORE LOSS METHODS -------------------------------
@@ -781,7 +554,6 @@ class REINFORCETrainerGAE(Trainer):
         critic_warmup = self._is_critic_pretraining_active()
         actor_model = model.module if (critic_warmup and hasattr(model, "module")) else model
         if model.training:
-            self._sync_active_train_sampler()
             self._set_actor_requires_grad(not critic_warmup)
         self._last_rl_metrics = {}
         # ----------- REINFORCE loss -----------
@@ -908,21 +680,6 @@ class REINFORCETrainerGAE(Trainer):
             self._sync_critic_gradients()
         return loss
 
-
-    def _get_train_sampler(self, train_dataset=None):
-        if self._uniform_sampler is not None:
-            initial_inner = self._uniform_sampler
-            self._active_sampler_kind = "uniform"
-            self._active_train_sampler = MutableDelegatingSampler(initial_inner)
-            return self._active_train_sampler
-
-        if self._difficulty_sampler is not None:
-            initial_inner = self._difficulty_sampler
-            self._active_sampler_kind = "difficulty"
-            self._active_train_sampler = MutableDelegatingSampler(initial_inner)
-            return self._active_train_sampler
-        return super()._get_train_sampler(train_dataset)
-    
 
 
     def _compute_reinforce_term(
@@ -1055,8 +812,6 @@ class REINFORCETrainerGAE(Trainer):
                     continue
 
         if not bool(valid_mask.any()):
-            if require_grad:
-                self._update_difficulty_sampler_from_rewards(reward_tensor)
             zeros_per_sample = torch.zeros_like(reward_tensor)
             zero_loss = reward_tensor.new_zeros(())
             self._last_rl_metrics = {
@@ -1074,8 +829,6 @@ class REINFORCETrainerGAE(Trainer):
                 "value_err_sq_sum": zeros_per_sample,
                 "value_err_sum": zeros_per_sample,
             }
-            if self._difficulty_sampler is not None:
-                self._last_rl_metrics["curriculum_target_difficulty"] = float(self._difficulty_sampler.target_difficulty)
             return None, valid_mask
 
         valid_idx = valid_mask.nonzero(as_tuple=False).squeeze(-1)
@@ -1121,8 +874,6 @@ class REINFORCETrainerGAE(Trainer):
             reinforce_loss = critic_loss
         else:
             reinforce_loss = actor_loss + critic_loss
-        if require_grad:
-            self._update_difficulty_sampler_from_rewards(reward_tensor)
 
         advantage_per_sample = torch.zeros_like(reward_tensor)
         advantage_per_sample[valid_idx] = (advantages * token_mask_f).sum(dim=1).detach()
@@ -1164,33 +915,8 @@ class REINFORCETrainerGAE(Trainer):
             "returns_pos_mean": returns_pos_mean,
             "pos_counts": pos_counts.detach(),
             }
-        if self._difficulty_sampler is not None:
-            self._last_rl_metrics["curriculum_target_difficulty"] = float(self._difficulty_sampler.target_difficulty)
 
         return reinforce_loss, valid_mask
-
-
-    def _update_difficulty_sampler_from_rewards(self, reward_tensor: torch.Tensor) -> None:
-        if self._difficulty_sampler is None:
-            return
-        if self._is_critic_pretraining_active():
-            return
-
-        valid_rewards = reward_tensor.detach()
-        local_sum = valid_rewards.sum()
-        local_count = valid_rewards.new_tensor(float(valid_rewards.numel()))
-
-        if dist.is_available() and dist.is_initialized():
-            dist.all_reduce(local_sum, op=dist.ReduceOp.SUM)
-            dist.all_reduce(local_count, op=dist.ReduceOp.SUM)
-
-        global_count = float(local_count.detach().to(dtype=torch.float32).cpu().item())
-        if global_count <= 0.0:
-            return
-
-        global_sum = float(local_sum.detach().to(dtype=torch.float32).cpu().item())
-        batch_performance = global_sum / global_count
-        self._difficulty_sampler.update_from_performance(batch_performance)
 
 
 
@@ -1405,149 +1131,3 @@ class REINFORCETrainerGAE(Trainer):
         self.lr_scheduler = LambdaLR(optimizer, lambdas)
         return self.lr_scheduler
 
-
-
-class AdaptiveDifficultySampler(Sampler[int]):
-
-    def __init__(
-        self,
-        *,
-        difficulties: torch.Tensor,
-        num_samples: int,
-        temperature: float = 0.20,
-        start_target_difficulty: float = 0.10,
-        max_difficulty_step: float = 0.05,
-        update_alpha: float = 1.0,
-        performance_target: float = 0.80,
-        min_weight: float = 1e-6,
-        seed: int = 0,
-    ) -> None:
-        if difficulties.ndim != 1:
-            raise ValueError("difficulties must be a 1D tensor")
-        if difficulties.numel() == 0:
-            raise ValueError("difficulties cannot be empty")
-        if num_samples <= 0:
-            raise ValueError("num_samples must be positive")
-
-        self.difficulties = difficulties.detach().to(dtype=torch.float32, device="cpu")
-        self.d_min = 2
-        self.d_max = 5
-        self.num_samples = int(num_samples)
-        self.temperature = max(1e-4, float(temperature))
-        self.max_difficulty_step = float(max_difficulty_step)
-        self.update_alpha = float(update_alpha)
-        self.performance_target = float(performance_target)
-        self.min_weight = max(0.0, float(min_weight))
-        self.seed = int(seed)
-        self.target_difficulty = float(min(max(start_target_difficulty, self.d_min), self.d_max))
-
-        self._weights = torch.empty_like(self.difficulties)
-        self._generator = torch.Generator(device="cpu")
-        self._generator.manual_seed(self.seed)
-        self._refresh_weights()
-
-    def __len__(self) -> int:
-        return self.num_samples
-
-    def update_from_performance(self, batch_performance: float) -> float:
-        perf = float(batch_performance)
-        delta = self.max_difficulty_step * math.tanh(self.update_alpha * (perf - self.performance_target))
-        self.target_difficulty = float(min(max(self.target_difficulty + delta, self.d_min), self.d_max))
-        self._refresh_weights()
-        return self.target_difficulty
-
-    def _refresh_weights(self) -> None:
-        variance = max(self.temperature * self.temperature, 1e-8)
-        distance_sq = (self.difficulties - self.target_difficulty).square()
-        weights = torch.exp(-0.5 * distance_sq / variance)
-        if self.min_weight > 0.0:
-            weights = weights + self.min_weight
-        total = float(weights.sum().item())
-        if not math.isfinite(total) or total <= 0.0:
-            weights = torch.ones_like(self.difficulties) / float(self.difficulties.numel())
-        else:
-            weights = weights / total
-        self._weights = weights
-
-    def __iter__(self):
-        for _ in range(self.num_samples):
-            sampled: torch.Tensor = torch.multinomial(
-                self._weights,
-                num_samples=1,
-                replacement=True,
-                generator=self._generator,
-            )
-            yield int(sampled.item())
-
-
-class UniformRandomSampler(Sampler[int]):
-
-    def __init__(self, *, dataset_size: int, num_samples: int, seed: int = 0) -> None:
-        if dataset_size <= 0:
-            raise ValueError("dataset_size must be positive")
-        if num_samples <= 0:
-            raise ValueError("num_samples must be positive")
-        self.dataset_size = int(dataset_size)
-        self.num_samples = int(num_samples)
-        self.seed = int(seed)
-        self._generator = torch.Generator(device="cpu")
-        self._generator.manual_seed(self.seed)
-
-    def __len__(self) -> int:
-        return self.num_samples
-
-    def __iter__(self):
-        sampled = torch.randint(
-            low=0,
-            high=self.dataset_size,
-            size=(self.num_samples,),
-            generator=self._generator,
-        )
-        for idx in sampled.tolist():
-            yield int(idx)
-
-
-class MutableDelegatingSampler(Sampler[int]):
-
-    def __init__(self, inner_sampler: Sampler[int]) -> None:
-        self._inner_sampler = inner_sampler
-        self._version = 0
-
-    def set_inner_sampler(self, inner_sampler: Sampler[int]) -> None:
-        self._inner_sampler = inner_sampler
-        self._version += 1
-
-    def __len__(self) -> int:
-        return len(self._inner_sampler)
-
-    def __iter__(self):
-        return _MutableDelegatingSamplerIterator(self)
-
-
-class _MutableDelegatingSamplerIterator:
-
-    def __init__(self, wrapper: MutableDelegatingSampler) -> None:
-        self._wrapper = wrapper
-        self._seen = 0
-        self._version = wrapper._version
-        self._inner_iter = iter(wrapper._inner_sampler)
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        if self._seen >= len(self._wrapper):
-            raise StopIteration
-
-        if self._version != self._wrapper._version:
-            self._version = self._wrapper._version
-            self._inner_iter = iter(self._wrapper._inner_sampler)
-
-        try:
-            idx = next(self._inner_iter)
-        except StopIteration:
-            self._inner_iter = iter(self._wrapper._inner_sampler)
-            idx = next(self._inner_iter)
-
-        self._seen += 1
-        return idx
