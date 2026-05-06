@@ -53,6 +53,8 @@ MIXED_PRECISION="--bf16"
 DISABLE_SEMANTIC_CALLBACK=1
 DISABLE_TRAIN_END_SEMANTIC_EVAL=0
 EVAL_BATCH_SIZE="256000"
+METRIC_FOR_BEST_MODEL="eval_loss"
+GREATER_IS_BETTER="false"
 
 # Early Stopping Parameters
 EARLY_STOPPING_PATIENCE=15
@@ -290,6 +292,15 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         echo "  Training dataset satisfactions will be loaded as mmap."
         CMD_ARGS+=(
             "--satisfactions-mmap"
+        )
+    fi
+
+    # Eval Overrides
+    if [ -n "$METRIC_FOR_BEST_MODEL" ]; then
+        echo "  Set metric_for_best_model to: $METRIC_FOR_BEST_MODEL, and set greater_is_better to $GREATER_IS_BETTER"
+        CMD_ARGS+=(
+            "--metric-for-best-model" "$METRIC_FOR_BEST_MODEL"
+            "--greater-is-better" "$GREATER_IS_BETTER"
         )
     fi
 
