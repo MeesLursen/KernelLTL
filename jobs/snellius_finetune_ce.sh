@@ -45,7 +45,8 @@ SCRATCH_OUTPUT_BASE="$SCRATCH_BASE/models/CE"
 
 # Training defaults (can be overridden per stage)
 DEFAULT_LEARNING_RATE=1e-4
-DEFAULT_BATCH_SIZE=256
+DEFAULT_TRAIN_BATCH_SIZE=256
+DEFAULT_EVAL_BATCH_SIZE=96
 DEFAULT_WARMUP_RATIO=0.05
 
 # Optional override for stage-end KL reference model (empty uses previous stage model)
@@ -192,8 +193,8 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--model-save-dir" "$STAGE_MODEL_SAVE_DIR"
         "--num-train-epochs" "$EPOCHS"
         "--learning-rate" "$LR"
-        "--per-device-train-batch-size" "$DEFAULT_BATCH_SIZE"
-        "--per-device-eval-batch-size" "$DEFAULT_BATCH_SIZE"
+        "--per-device-train-batch-size" "$DEFAULT_TRAIN_BATCH_SIZE"
+        "--per-device-eval-batch-size" "$DEFAULT_EVAL_BATCH_SIZE"
         "--warmup-ratio" "$DEFAULT_WARMUP_RATIO"
         "--logging-steps" "$STEP_INTERVAL"
         "--eval-steps" "$STEP_INTERVAL"
