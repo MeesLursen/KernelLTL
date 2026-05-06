@@ -2,7 +2,7 @@
 #SBATCH --job-name=kernelltl_test_job_re
 #SBATCH --output=logs/kernelltl_gae_lambda_1_critic_lr_tests_%j.out
 #SBATCH --error=logs/kernelltl_gae_lambda_1_critic_lr_tests_%j.err
-#SBATCH --time=10:00:00
+#SBATCH --time=00:59:00
 #SBATCH --partition=gpu_h100
 #SBATCH --constraint=scratch-node
 #SBATCH --gpus=2
@@ -88,14 +88,9 @@ DEFAULT_CRITIC_WEIGHT_DECAY="0.0"
 # ============================================================================
 
 STAGE_CONFIGS=(
-    "critic_lr_5e-3_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:5e-3"
-    "critic_lr_1e-3_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:1e-3"
-    "critic_lr_5e-4_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:5e-4"
-    "critic_lr_1e-4_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:1e-4"
-    "critic_lr_5e-5_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:5e-5"
-    "critic_lr_1e-5_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:1e-5"
-    "critic_lr_5e-6_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:5e-6"
-    "critic_lr_1e-6_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:1e-6"
+    "critic_lr_1e-1_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:1e-1"
+    "critic_lr_5e-2_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:5e-2"
+    "critic_lr_1e-2_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:1e-2"
 )   
     # "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:100:1e-4:rb"
     # 

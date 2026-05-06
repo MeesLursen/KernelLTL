@@ -569,7 +569,14 @@ class REINFORCETrainerGAE(Trainer):
             entry = self._critic_cache[self._critic_cache_idx % len(self._critic_cache)]
             self._critic_cache_idx += 1
             token_hidden, rewards, token_mask_f = [t.to(device) for t in entry]
-            loss = self._critic_loss_from_cache(token_hidden, rewards, token_mask_f)
+            loss, cache_rl_metrics = self._critic_loss_from_cache(token_hidden, rewards, token_mask_f)
+            self._last_rl_metrics = cache_rl_metrics
+            self._last_train_metrics = {
+                "train_loss": loss.detach(),
+                "train_critic_loss": loss.detach(),
+                "train_actor_loss": loss.detach().new_zeros(()),
+            }
+            self._last_train_metrics.update(cache_rl_metrics)
             if return_outputs:
                 actor_model = model.module if hasattr(model, "module") else model
                 with torch.no_grad():
@@ -959,7 +966,7 @@ class REINFORCETrainerGAE(Trainer):
         token_hidden: torch.Tensor,
         rewards: torch.Tensor,
         token_mask_f: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, dict]:
         Bv, Tv, _ = token_hidden.shape
         values = self.critic(token_hidden).squeeze(-1)
         values_det = values.detach()
@@ -978,9 +985,23 @@ class REINFORCETrainerGAE(Trainer):
 
         returns = (advantages + values_det) * token_mask_f
         denom = token_mask_f.sum().clamp(min=1.0)
-        return torch.nn.functional.mse_loss(
+        loss = torch.nn.functional.mse_loss(
             values * token_mask_f, returns, reduction="sum"
         ) / denom
+
+        value_err_masked = (returns - values) * token_mask_f
+        rl_metrics = {
+            "token_count_per_sample": token_mask_f.sum(dim=1).detach(),
+            "valid_formula_mask_per_sample": torch.ones(Bv, dtype=torch.bool, device=token_mask_f.device),
+            "reward_per_sample": rewards.sum(dim=1).detach(),
+            "advantage_per_sample": (advantages * token_mask_f).sum(dim=1).detach(),
+            "value_sum_per_sample": (values_det * token_mask_f).sum(dim=1).detach(),
+            "returns_sum": returns.sum(dim=1).detach(),
+            "returns_sq_sum": (returns * returns).sum(dim=1).detach(),
+            "value_err_sum": value_err_masked.sum(dim=1).detach(),
+            "value_err_sq_sum": (value_err_masked * value_err_masked).sum(dim=1).detach(),
+        }
+        return loss, rl_metrics
 
 
     def _slice_inputs_by_mask(self, inputs: dict, mask: torch.Tensor) -> dict:
