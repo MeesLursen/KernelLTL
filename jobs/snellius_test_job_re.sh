@@ -1,7 +1,7 @@
 #!/bin/bash  
 #SBATCH --job-name=kernelltl_test_job_re
-#SBATCH --output=logs/kernelltl_test_job_re_gae_lambda_1_wu_4_crlr_5e-4_value_test_%j.out
-#SBATCH --error=logs/kernelltl_test_job_re_gae_lambda_1_wu_4_crlr_5e-4_value_test_%j.err
+#SBATCH --output=logs/kernelltl_gae_lambda_1_critic_lr_tests_%j.out
+#SBATCH --error=logs/kernelltl_gae_lambda_1_critic_lr_tests_%j.err
 #SBATCH --time=10:00:00
 #SBATCH --partition=gpu_h100
 #SBATCH --constraint=scratch-node
