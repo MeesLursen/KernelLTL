@@ -542,18 +542,6 @@ class REINFORCETrainerGAE(Trainer):
         num_items_in_batch: int | None = None,
         return_outputs: bool = False,
     ):
-        if self.state.global_step == 0:
-            actor_lr = self.args.learning_rate
-            for i, group in enumerate(self.optimizer.param_groups):
-                n = len(group["params"])
-                lr = group["lr"]
-                print(f"  param_group[{i}]: n_params={n}, lr={lr:.2e}")
-            
-            critic_ids = {id(p) for p in self.critic.parameters()}
-            for i, group in enumerate(self.optimizer.param_groups):
-                overlap = sum(1 for p in group["params"] if id(p) in critic_ids)
-                print(f"  param_group[{i}]: {overlap} critic params")
-                
         critic_warmup = self._is_critic_pretraining_active()
 
         # Seal the cache after the first full epoch of collection
