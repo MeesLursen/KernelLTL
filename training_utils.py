@@ -356,6 +356,15 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
             value_mean_per_sample = value_sum.detach().to(dtype=torch.float32)[valid_with_tokens] / token_count_f[valid_with_tokens]
             self._accumulate_sum_sq_count("value", value_mean_per_sample)
 
+        mc_value_sum = gathered_vectors.get("value_sum_per_sample")
+        mc_reward = gathered_vectors.get("reward_per_sample")
+        if mc_value_sum is not None and mc_reward is not None and valid_with_tokens.any():
+            vwt_count = token_count_f[valid_with_tokens]
+            v_mean = mc_value_sum.detach().to(dtype=torch.float32)[valid_with_tokens] / vwt_count
+            r = mc_reward.detach().to(dtype=torch.float32)[valid_with_tokens]
+            self._accumulate_sum_sq_count("mc_value_err", v_mean - r)
+            self._accumulate_sum_sq_count("mc_reward", r)
+
         returns_sum = gathered_vectors.get("returns_sum")
         returns_sq_sum = gathered_vectors.get("returns_sq_sum")
         value_err_sum = gathered_vectors.get("value_err_sum")
@@ -584,6 +593,14 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
             payload["train_value_centered_residual_var"] = value_err_centered_var
             payload["train_value_explained_variance"] = 1.0 - (value_err_centered_var / max(returns_var, 1e-8))
 
+        mc_n = self._rl_stats.get("mc_reward_count", 0.0)
+        if mc_n > 0.0:
+            mc_err_mean = self._rl_stats.get("mc_value_err_sum", 0.0) / mc_n
+            mc_err_var = max(0.0, self._rl_stats.get("mc_value_err_sq_sum", 0.0) / mc_n - mc_err_mean * mc_err_mean)
+            mc_r_mean = self._rl_stats.get("mc_reward_sum", 0.0) / mc_n
+            mc_r_var = max(0.0, self._rl_stats.get("mc_reward_sq_sum", 0.0) / mc_n - mc_r_mean * mc_r_mean)
+            payload["train_mc_value_ev"] = 1.0 - (mc_err_var / max(mc_r_var, 1e-8))
+
         adv_pos_mean, pos_counts = self._position_means_from_stats("advantage_pos")
         if adv_pos_mean is not None:
             payload["train_advantage_pos_mean"] = adv_pos_mean
@@ -607,7 +624,9 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
             record.update(payload)
             self._append_record(record)
             if self._is_main_process(args) and self.trainer.trainer_kind == 'gae':
-                print(f'EV = {payload["train_value_explained_variance"]} and critic_loss = {payload["train_critic_loss_mean"]}')
+                ev = payload.get("train_value_explained_variance", "N/A")
+                mc_ev = payload.get("train_mc_value_ev", "N/A")
+                print(f'EV = {ev}, MC_EV = {mc_ev}, critic_loss = {payload["train_critic_loss_mean"]}')
 
         if self.debug_metrics:
             self._debug_print(
