@@ -604,7 +604,7 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
             record = self._base_record("train_epoch_end", "train", state)
             record.update(payload)
             self._append_record(record)
-            if self._is_main_process(args):
+            if self._is_main_process(args) and self.trainer.trainer_kind == 'gae':
                 print(f'EV = {payload["train_value_explained_variance"]} and critic_loss = {payload["train_critic_loss_mean"]}')
 
         if self.debug_metrics:
