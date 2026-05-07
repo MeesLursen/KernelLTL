@@ -17,7 +17,7 @@ from transformers import EarlyStoppingCallback, TrainingArguments
 from transformers.trainer import TRAINING_ARGS_NAME
 
 from config_class import LTLConfig
-from reinforce_trainer_test import REINFORCETrainerRB, REINFORCETrainerGAE
+from reinforce_trainer import REINFORCETrainerRB, REINFORCETrainerGAE
 from dataset_class import LTLDataset
 from kernel_class import LTLKernel
 from model_class import LTLModel
