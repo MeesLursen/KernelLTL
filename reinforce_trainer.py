@@ -867,6 +867,9 @@ class REINFORCETrainerGAE(Trainer):
                 "returns_sq_sum": zeros_per_sample,
                 "value_err_sq_sum": zeros_per_sample,
                 "value_err_sum": zeros_per_sample,
+                "mc_reward_err_sq_sum_per_sample": zeros_per_sample,
+                "mc_returns_sum_per_sample": zeros_per_sample,
+                "mc_returns_sq_sum_per_sample": zeros_per_sample,
             }
             return None, valid_mask
 
@@ -946,6 +949,19 @@ class REINFORCETrainerGAE(Trainer):
         value_err_sum = torch.zeros_like(reward_tensor)
         value_err_sum[valid_idx] = value_err_masked.sum(dim=1).detach()
 
+        t_idx = torch.arange(Tv, dtype=token_mask_f.dtype, device=token_mask_f.device)
+        time_to_terminal = (lengths_valid.float().unsqueeze(1) - 1.0 - t_idx.unsqueeze(0)).clamp(min=0.0)
+        gamma_weights = self.gae_gamma ** time_to_terminal
+        mc_returns_vwt = gamma_weights * reward_valid.unsqueeze(1) * token_mask_f
+        mc_err_vwt = mc_returns_vwt - values_det * token_mask_f
+
+        mc_reward_err_sq_sum_per_sample = torch.zeros_like(reward_tensor)
+        mc_reward_err_sq_sum_per_sample[valid_idx] = (mc_err_vwt * mc_err_vwt).sum(dim=1).detach()
+        mc_returns_sum_per_sample = torch.zeros_like(reward_tensor)
+        mc_returns_sum_per_sample[valid_idx] = mc_returns_vwt.sum(dim=1).detach()
+        mc_returns_sq_sum_per_sample = torch.zeros_like(reward_tensor)
+        mc_returns_sq_sum_per_sample[valid_idx] = (mc_returns_vwt * mc_returns_vwt).sum(dim=1).detach()
+
         self._last_rl_metrics = {
             "token_count_per_sample": token_count_per_sample,
             "token_entropy_sum": token_entropy_sum,
@@ -960,6 +976,9 @@ class REINFORCETrainerGAE(Trainer):
             "returns_sq_sum": returns_sq_sum,
             "value_err_sq_sum": value_err_sq_sum,
             "value_err_sum": value_err_sum,
+            "mc_reward_err_sq_sum_per_sample": mc_reward_err_sq_sum_per_sample,
+            "mc_returns_sum_per_sample": mc_returns_sum_per_sample,
+            "mc_returns_sq_sum_per_sample": mc_returns_sq_sum_per_sample,
             "advantage_pos_mean": advantage_pos_mean,
             "value_pos_mean": value_pos_mean,
             "returns_pos_mean": returns_pos_mean,
@@ -1029,6 +1048,21 @@ class REINFORCETrainerGAE(Trainer):
         value_err_sq_sum = zeros.clone()
         value_err_sq_sum[valid_idx] = (value_err_masked * value_err_masked).sum(dim=1).detach()
 
+        lengths_valid = token_mask_f.sum(dim=-1).clamp(min=1)
+        t_idx = torch.arange(Tv, dtype=token_mask_f.dtype, device=token_mask_f.device)
+        time_to_terminal = (lengths_valid.float().unsqueeze(1) - 1.0 - t_idx.unsqueeze(0)).clamp(min=0.0)
+        gamma_weights = self.gae_gamma ** time_to_terminal
+        reward_valid_fc = reward_tensor_full[valid_idx]
+        mc_returns_vwt = gamma_weights * reward_valid_fc.unsqueeze(1) * token_mask_f
+        mc_err_vwt = mc_returns_vwt - values_det * token_mask_f
+
+        mc_reward_err_sq_sum = zeros.clone()
+        mc_reward_err_sq_sum[valid_idx] = (mc_err_vwt * mc_err_vwt).sum(dim=1).detach()
+        mc_returns_sum = zeros.clone()
+        mc_returns_sum[valid_idx] = mc_returns_vwt.sum(dim=1).detach()
+        mc_returns_sq_sum = zeros.clone()
+        mc_returns_sq_sum[valid_idx] = (mc_returns_vwt * mc_returns_vwt).sum(dim=1).detach()
+
         rl_metrics = {
             "token_count_per_sample": token_count,
             "valid_formula_mask_per_sample": valid_mask,
@@ -1039,6 +1073,9 @@ class REINFORCETrainerGAE(Trainer):
             "returns_sq_sum": returns_sq_sum,
             "value_err_sum": value_err_sum,
             "value_err_sq_sum": value_err_sq_sum,
+            "mc_reward_err_sq_sum_per_sample": mc_reward_err_sq_sum,
+            "mc_returns_sum_per_sample": mc_returns_sum,
+            "mc_returns_sq_sum_per_sample": mc_returns_sq_sum,
         }
         return loss, rl_metrics
 

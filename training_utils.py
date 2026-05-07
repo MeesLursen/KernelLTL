@@ -59,6 +59,9 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
         "returns_sq_sum",
         "value_err_sq_sum",
         "value_err_sum",
+        "mc_reward_err_sq_sum_per_sample",
+        "mc_returns_sum_per_sample",
+        "mc_returns_sq_sum_per_sample",
     }
 
     _RL_LOCAL_SCALAR_KEYS = set()
@@ -356,14 +359,17 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
             value_mean_per_sample = value_sum.detach().to(dtype=torch.float32)[valid_with_tokens] / token_count_f[valid_with_tokens]
             self._accumulate_sum_sq_count("value", value_mean_per_sample)
 
-        mc_value_sum = gathered_vectors.get("value_sum_per_sample")
-        mc_reward = gathered_vectors.get("reward_per_sample")
-        if mc_value_sum is not None and mc_reward is not None and valid_with_tokens.any():
-            vwt_count = token_count_f[valid_with_tokens]
-            v_mean = mc_value_sum.detach().to(dtype=torch.float32)[valid_with_tokens] / vwt_count
-            r = mc_reward.detach().to(dtype=torch.float32)[valid_with_tokens]
-            self._accumulate_sum_sq_count("mc_value_err", v_mean - r)
-            self._accumulate_sum_sq_count("mc_reward", r)
+        mc_err_sq_vec = gathered_vectors.get("mc_reward_err_sq_sum_per_sample")
+        mc_ret_sum_vec = gathered_vectors.get("mc_returns_sum_per_sample")
+        mc_ret_sq_vec = gathered_vectors.get("mc_returns_sq_sum_per_sample")
+        if mc_err_sq_vec is not None and mc_ret_sum_vec is not None and mc_ret_sq_vec is not None and valid_with_tokens.any():
+            vwt = valid_with_tokens
+            self._rl_stats["mc_token_count_total"] += float(token_count_f[vwt].sum().cpu().item())
+            self._rl_stats["mc_err_sq_sum_total"] += float(mc_err_sq_vec.detach().to(dtype=torch.float32)[vwt].sum().cpu().item())
+            self._rl_stats["mc_ret_sum_total"] += float(mc_ret_sum_vec.detach().to(dtype=torch.float32)[vwt].sum().cpu().item())
+            self._rl_stats["mc_ret_sq_sum_total"] += float(mc_ret_sq_vec.detach().to(dtype=torch.float32)[vwt].sum().cpu().item())
+            if value_sum is not None:
+                self._rl_stats["mc_value_sum_total"] += float(value_sum.detach().to(dtype=torch.float32)[vwt].sum().cpu().item())
 
         returns_sum = gathered_vectors.get("returns_sum")
         returns_sq_sum = gathered_vectors.get("returns_sq_sum")
@@ -593,13 +599,20 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
             payload["train_value_centered_residual_var"] = value_err_centered_var
             payload["train_value_explained_variance"] = 1.0 - (value_err_centered_var / max(returns_var, 1e-8))
 
-        mc_n = self._rl_stats.get("mc_reward_count", 0.0)
-        if mc_n > 0.0:
-            mc_err_mean = self._rl_stats.get("mc_value_err_sum", 0.0) / mc_n
-            mc_err_var = max(0.0, self._rl_stats.get("mc_value_err_sq_sum", 0.0) / mc_n - mc_err_mean * mc_err_mean)
-            mc_r_mean = self._rl_stats.get("mc_reward_sum", 0.0) / mc_n
-            mc_r_var = max(0.0, self._rl_stats.get("mc_reward_sq_sum", 0.0) / mc_n - mc_r_mean * mc_r_mean)
-            payload["train_mc_value_ev"] = 1.0 - (mc_err_var / max(mc_r_var, 1e-8))
+        mc_token_count = self._rl_stats.get("mc_token_count_total", 0.0)
+        if mc_token_count > 0.0:
+            mc_err_sq_sum = self._rl_stats.get("mc_err_sq_sum_total", 0.0)
+            mc_ret_sum = self._rl_stats.get("mc_ret_sum_total", 0.0)
+            mc_ret_sq_sum = self._rl_stats.get("mc_ret_sq_sum_total", 0.0)
+            mc_val_sum = self._rl_stats.get("mc_value_sum_total", 0.0)
+
+            mc_ret_mean = mc_ret_sum / mc_token_count
+            mc_ret_var = max(0.0, mc_ret_sq_sum / mc_token_count - mc_ret_mean * mc_ret_mean)
+
+            mc_err_mean = (mc_ret_sum - mc_val_sum) / mc_token_count
+            mc_err_var = max(0.0, mc_err_sq_sum / mc_token_count - mc_err_mean * mc_err_mean)
+
+            payload["train_mc_value_ev"] = 1.0 - (mc_err_var / max(mc_ret_var, 1e-8))
 
         adv_pos_mean, pos_counts = self._position_means_from_stats("advantage_pos")
         if adv_pos_mean is not None:
