@@ -44,6 +44,8 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
         self._metric_sums: dict[str, float | torch.Tensor] = {}
         self._metric_counts: dict[str, int] = defaultdict(int)
         self._rl_stats: dict[str, float] = defaultdict(float)
+        self._eval_metric_sums: dict[str, float] = defaultdict(float)
+        self._eval_metric_counts: dict[str, int] = defaultdict(int)
 
     _RL_VECTOR_KEYS = {
         "token_count_per_sample",
@@ -624,6 +626,29 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
         self._metric_counts.clear()
         self._rl_stats.clear()
 
+    def on_prediction_step_end(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        **kwargs,
+    ):
+        if self.trainer is None:
+            return
+        batch_losses = getattr(self.trainer, "_last_eval_batch_losses", {})
+        if not batch_losses:
+            return
+        gathered: dict[str, torch.Tensor] = {}
+        for key, value in batch_losses.items():
+            gathered[key] = self._gather_metric_tensor(value, metric_key=key, state=state)
+        if not self._is_main_process(args):
+            return
+        for key, values in gathered.items():
+            if values.numel() > 0:
+                step_mean = float(values.detach().to(dtype=torch.float32).mean().cpu().item())
+                self._eval_metric_sums[key] += step_mean
+                self._eval_metric_counts[key] += 1
+
     def on_evaluate(
         self,
         args: TrainingArguments,
@@ -640,6 +665,16 @@ class UnifiedMetricsLoggerCallback(TrainerCallback):
             scalar_value = self._scalar_to_float(value)
             if scalar_value is not None:
                 payload[key] = scalar_value
+
+        if self._eval_metric_counts:
+            eval_means = {
+                f"eval_{k}_mean": self._eval_metric_sums[k] / self._eval_metric_counts[k]
+                for k in self._eval_metric_counts
+            }
+            payload.update(eval_means)
+            print("[Eval] " + "  ".join(f"{k}: {v:.4f}" for k, v in eval_means.items()))
+            self._eval_metric_sums.clear()
+            self._eval_metric_counts.clear()
 
         if not payload:
             return

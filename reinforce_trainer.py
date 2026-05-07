@@ -37,6 +37,7 @@ class REINFORCETrainerRB(Trainer):
             self._reward_sq_mean: torch.Tensor | None = None
             self._last_train_metrics: dict[str, float | torch.Tensor] = {}
             self._last_rl_metrics: dict[str, float | torch.Tensor] = {}
+            self._last_eval_batch_losses: dict[str, float] = {}
             self._sync_kernel_device(getattr(self.args, "device", None))
 
 
@@ -149,6 +150,14 @@ class REINFORCETrainerRB(Trainer):
             "train_ce_loss": ce_invalid_metric,
         }
         self._last_train_metrics.update(self._last_rl_metrics)
+
+        if not model.training:
+            self._last_eval_batch_losses = {
+                "rl_loss": reinforce_loss.detach(),
+                "ce_loss": ce_invalid_metric.detach(),
+                "valid_ratio": valid_ratio.detach(),
+                "invalid_ratio": invalid_ratio.detach(),
+            }
 
         if return_outputs:
             outputs = model(**inputs)
@@ -458,6 +467,7 @@ class REINFORCETrainerGAE(Trainer):
             self.critic_weight_decay = float(critic_weight_decay)
             self._last_train_metrics: dict[str, float | torch.Tensor] = {}
             self._last_rl_metrics: dict[str, float | torch.Tensor] = {}
+            self._last_eval_batch_losses: dict[str, float] = {}
             self._actor_frozen: bool = False
             self._critic_cache: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = []
             self._critic_cache_full: bool = False
@@ -683,6 +693,15 @@ class REINFORCETrainerGAE(Trainer):
             "train_ce_loss": ce_invalid_metric,
         }
         self._last_train_metrics.update(self._last_rl_metrics)
+
+        if not model.training:
+            self._last_eval_batch_losses = {
+                "actor_loss": self._last_rl_metrics.get("train_actor_loss", reinforce_loss).detach(),
+                "critic_loss": self._last_rl_metrics.get("train_critic_loss", reinforce_loss.new_zeros(())).detach(),
+                "ce_loss": ce_invalid_metric.detach(),
+                "valid_ratio": valid_ratio.detach(),
+                "invalid_ratio": invalid_ratio.detach(),
+            }
 
         if return_outputs:
             if critic_warmup:
