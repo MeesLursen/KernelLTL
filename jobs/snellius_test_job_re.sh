@@ -1,8 +1,8 @@
 #!/bin/bash  
 #SBATCH --job-name=kernelltl_test_job_re
-#SBATCH --output=logs/kernelltl_gae_lambda_1_critic_lr_tests_%j.out
-#SBATCH --error=logs/kernelltl_gae_lambda_1_critic_lr_tests_%j.err
-#SBATCH --time=00:59:00
+#SBATCH --output=logs/kernelltl_gae_lambda_09_critic_lr_tests_%j.out
+#SBATCH --error=logs/kernelltl_gae_lambda_09_critic_lr_tests_%j.err
+#SBATCH --time=03:00:00
 #SBATCH --partition=gpu_h100
 #SBATCH --constraint=scratch-node
 #SBATCH --gpus=2
@@ -74,7 +74,7 @@ DEFAULT_RB_BASELINE_MOMENTUM="0.9"
 
 # GAE-specific controls
 DEFAULT_GAE_GAMMA="1.0"
-DEFAULT_GAE_LAMBDA="1.0"
+DEFAULT_GAE_LAMBDA="0.9"
 DEFAULT_CRITIC_LR="5e-6"
 DEFAULT_CRITIC_HIDDEN_DIM="256"
 DEFAULT_CRITIC_WEIGHT_DECAY="0.0"
@@ -88,11 +88,11 @@ DEFAULT_CRITIC_WEIGHT_DECAY="0.0"
 # ============================================================================
 
 STAGE_CONFIGS=(
-    "critic_lr_1e-2_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:1e-2"
-    "critic_lr_5e-3_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:5e-3"
-    "critic_lr_1e-3_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:1e-3"
-    "critic_lr_5e-4_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:5e-4"
-    "critic_lr_1e-4_test_gae_lamdba_1:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:5:5e-8:gae:1e-4"
+    "critic_lr_1e-2_test_gae_lamdba_09:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:10:5e-8:gae:1e-2"
+    "critic_lr_5e-3_test_gae_lamdba_09:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:10:5e-8:gae:5e-3"
+    "critic_lr_1e-3_test_gae_lamdba_09:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:10:5e-8:gae:1e-3"
+    "critic_lr_5e-4_test_gae_lamdba_09:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:10:5e-8:gae:5e-4"
+    "critic_lr_1e-4_test_gae_lamdba_09:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:10:5e-8:gae:1e-4"
     
 )   
     # "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:100:1e-4:rb"

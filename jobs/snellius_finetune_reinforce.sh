@@ -68,8 +68,8 @@ DEFAULT_RB_BASELINE_MOMENTUM="0.9"
 
 # GAE-specific controls
 DEFAULT_GAE_GAMMA="1.0"
-DEFAULT_GAE_LAMBDA="1.0"
-DEFAULT_CRITIC_LR="5e-6"
+DEFAULT_GAE_LAMBDA="0.9"
+DEFAULT_CRITIC_LR="1e-3"
 DEFAULT_CRITIC_HIDDEN_DIM="256"
 DEFAULT_CRITIC_WEIGHT_DECAY="0.0"
 
@@ -85,7 +85,7 @@ DISABLE_TRAIN_END_SEMANTIC_EVAL=0
 # ============================================================================
 
 STAGE_CONFIGS=(
-    "rb_momentum_09_lr_5e-8:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:50:5e-8:rb"
+    "gae_lambda_09_lr_5e-8_crlr_5e-3:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:30:5e-8:gae"
     
 )   
     # "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:50:5e-4:gae"
@@ -166,7 +166,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     BATCH_SIZE="$DEFAULT_TRAIN_BATCH_SIZE"
     STAGE_RL_TRAINER=${STAGE_RL_TRAINER:-$DEFAULT_RL_TRAINER}
     STEP_INTERVAL=$(echo "scale=6; 1/$EPOCHS" | bc -l)
-    PRETRAIN_STEP_INTERVAL=$(echo "scale=6; 2/$EPOCHS" | bc -l)
+    PRETRAIN_STEP_INTERVAL=$(echo "scale=6; 5/$EPOCHS" | bc -l)
 
     STAGE_OUTPUT_DIR="$BASE_RE_OUTPUT_DIR/$STAGE_NAME"
     STAGE_MODEL_SAVE_DIR="$STAGE_OUTPUT_DIR/final_model"
