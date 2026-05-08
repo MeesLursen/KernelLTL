@@ -22,7 +22,7 @@ Usage (multi-GPU)::
 
     torchrun --nproc_per_node=N scripts/validate_model.py ...
 
-Metric-computation logic lives in ``scripts/validation_passes.py``.
+Metric-computation logic lives in ``validation_passes.py``.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from kernel_class import LTLKernel
 from model_class import LTLModel
 from tokenizer_pretrained_class import LTLTokenizer
 
-from validation_passes import (
+from validation_utils import (
     aggregate_greedy_by_depth,
     aggregate_topk_by_depth,
     run_greedy_pass,
