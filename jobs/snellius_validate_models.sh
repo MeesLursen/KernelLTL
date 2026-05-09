@@ -2,7 +2,7 @@
 #SBATCH --job-name=kernelltl_validate
 #SBATCH --output=logs/kernelltl_validate_%j.out
 #SBATCH --error=logs/kernelltl_validate_%j.err
-#SBATCH --time=03:00:00
+#SBATCH --time=06:00:00
 #SBATCH --partition=gpu_h100
 #SBATCH --constraint=scratch-node
 #SBATCH --gpus=2
