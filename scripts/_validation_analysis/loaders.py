@@ -303,7 +303,7 @@ def build_topk_aggregates(df_flat: pd.DataFrame) -> pd.DataFrame:
             ),
         })
 
-    grouped = df_flat.groupby(["run", "formula_id", "target_depth"], sort=False).apply(_aggregate_block)
+    grouped = df_flat.groupby(["run", "formula_id", "target_depth"], sort=False).apply(_aggregate_block, include_groups=False)
     grouped = grouped.reset_index()
     grouped["syntax_semantics_gap_topk"] = (
         grouped["semantic_equiv_rate_topk"] - grouped["exact_match_rate_topk"]
