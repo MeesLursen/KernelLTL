@@ -269,10 +269,13 @@ def plot_radar(
     axes_metrics: list[tuple[str, str]],  # (column_name_in_summary, axis_label)
     title: str,
     stem: Path,
+    normalize: bool = False,
 ) -> None:
     """Radar with one polygon per run. ``summary`` has columns: run, <metrics...>.
 
-    Each axis is min-max normalised across the runs so the polygon sits in [0, 1].
+    By default plots raw values on a fixed [0, 1] radial scale — assumes all
+    axes are bounded rates. Set ``normalize=True`` for min-max normalization
+    across runs (useful when axes have heterogeneous scales).
     """
     runs = [r for r in runs if r in summary["run"].tolist()]
     if not runs or not axes_metrics:
@@ -281,13 +284,18 @@ def plot_radar(
     labels = [lab for _, lab in axes_metrics]
 
     sub = summary.set_index("run").loc[runs, cols].astype(float)
-    norm = sub.copy()
-    for c in cols:
-        v = norm[c]
-        if v.max() == v.min():
-            norm[c] = 0.5
-        else:
-            norm[c] = (v - v.min()) / (v.max() - v.min())
+    if normalize:
+        plot_vals = sub.copy()
+        for c in cols:
+            v = plot_vals[c]
+            if v.max() == v.min():
+                plot_vals[c] = 0.5
+            else:
+                plot_vals[c] = (v - v.min()) / (v.max() - v.min())
+        subtitle = "  (min-max normalised across runs per axis)"
+    else:
+        plot_vals = sub
+        subtitle = ""
 
     n = len(cols)
     angles = np.linspace(0, 2 * np.pi, n, endpoint=False).tolist()
@@ -296,7 +304,7 @@ def plot_radar(
     pal = _run_palette(runs)
     fig, ax = plt.subplots(figsize=(7, 7), subplot_kw=dict(polar=True))
     for r in runs:
-        vals = norm.loc[r].tolist()
+        vals = plot_vals.loc[r].tolist()
         vals_closed = vals + vals[:1]
         ax.plot(angles_closed, vals_closed, label=r, color=pal[r], linewidth=2)
         ax.fill(angles_closed, vals_closed, color=pal[r], alpha=0.10)
@@ -306,7 +314,7 @@ def plot_radar(
     ax.set_yticklabels(["0.25", "0.50", "0.75", "1.0"], fontsize=7)
     ax.set_ylim(0, 1)
     ax.legend(loc="upper right", bbox_to_anchor=(1.4, 1.1), fontsize=8)
-    ax.set_title(title, pad=20)
+    ax.set_title(title + subtitle, pad=20)
     _save(fig, stem)
 
 

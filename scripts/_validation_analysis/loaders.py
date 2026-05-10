@@ -232,21 +232,6 @@ def load_runs(
     df_topk_flat = pd.concat(flat_frames, ignore_index=True)
     df_topk_grouped = pd.concat(grouped_frames, ignore_index=True)
 
-    # Rewrite ce_base zero-filled KL fields to NaN.
-    if "ce_base" in runs:
-        mask_g = df_greedy["run"] == "ce_base"
-        df_greedy.loc[mask_g, "seq_kl_mean"] = float("nan")
-        # token_kls in df_greedy is still a list; keep as zeros — the
-        # ECDF code will exclude ce_base explicitly.
-
-        mask_f = df_topk_flat["run"] == "ce_base"
-        df_topk_flat.loc[mask_f, "seq_kl_mean"] = float("nan")
-
-        mask_grp = df_topk_grouped["run"] == "ce_base"
-        for col in ("kl_from_base_target_seq_mean", "kl_from_base_target_token_mean"):
-            if col in df_topk_grouped.columns:
-                df_topk_grouped.loc[mask_grp, col] = float("nan")
-
     # Build the per-target K-aggregates frame from df_topk_flat.
     df_topk_aggregates = build_topk_aggregates(df_topk_flat)
 

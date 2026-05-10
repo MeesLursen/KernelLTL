@@ -343,19 +343,25 @@ def _render_paired_diff(sources, reference_run, variants, fig_dir, rng_seed):
 
 
 def _render_holistic(summary: pd.DataFrame, runs: list[str], fig_dir: Path) -> None:
+    radar_axes = [
+        ("validity_greedy",         "validity (greedy)"),
+        ("correctness_greedy",      "correctness (greedy)"),
+        ("semantic_equiv_rate",     "equiv-rate (greedy)"),
+        ("validity_topk",           "validity (top-K)"),
+        ("correctness_topk",        "correctness (top-K)"),
+        ("semantic_equiv_rate_topk","equiv-rate (top-K)"),
+        ("diversity_topk",          "diversity (1 − self-bleu)"),
+    ]
     plots.plot_radar(
-        summary, runs=runs,
-        axes_metrics=[
-            ("validity_greedy",         "validity (greedy)"),
-            ("correctness_greedy",      "correctness (greedy)"),
-            ("semantic_equiv_rate",     "equiv-rate (greedy)"),
-            ("validity_topk",           "validity (top-K)"),
-            ("correctness_topk",        "correctness (top-K)"),
-            ("semantic_equiv_rate_topk","equiv-rate (top-K)"),
-            ("diversity_topk",          "diversity (1 − self-bleu)"),
-        ],
+        summary, runs=runs, axes_metrics=radar_axes,
         title="Cross-model radar (monotone-quality axes)",
         stem=fig_dir / "radar_overall",
+    )
+    plots.plot_radar(
+        summary, runs=runs, axes_metrics=radar_axes,
+        title="Cross-model radar (monotone-quality axes)",
+        stem=fig_dir / "radar_overall_normalized",
+        normalize=True,
     )
     plots.plot_pareto(
         summary, x_col="diversity_topk", y_col="correctness_topk",
