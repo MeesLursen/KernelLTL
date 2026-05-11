@@ -113,13 +113,43 @@ def plot_satisfaction_rate_by_depth(df: pd.DataFrame, stem: Path) -> None:
     _save(fig, stem)
 
 
+def _batch_agree(
+    satisfactions,
+    i_arr: np.ndarray,
+    j_arr: np.ndarray,
+    batch_size: int,
+) -> np.ndarray:
+    """Pairwise mean Hamming agreement computed in batches.
+
+    Accepts either a numpy array or a (mmap) torch.Tensor.  Batching caps
+    peak allocation at ``2 × batch_size × N_traces`` bytes instead of
+    ``2 × n_pairs × N_traces``.
+    """
+    import torch
+    is_tensor = isinstance(satisfactions, torch.Tensor)
+    agree = np.empty(len(i_arr), dtype=np.float32)
+    for b in range(0, len(i_arr), batch_size):
+        ib = i_arr[b:b + batch_size]
+        jb = j_arr[b:b + batch_size]
+        if is_tensor:
+            ri = satisfactions[ib].float()
+            rj = satisfactions[jb].float()
+            agree[b:b + batch_size] = (ri == rj).float().mean(dim=1).numpy()
+        else:
+            ri = satisfactions[ib]
+            rj = satisfactions[jb]
+            agree[b:b + batch_size] = np.mean(ri == rj, axis=1)
+    return agree
+
+
 def plot_within_depth_satisfaction_similarity(
     df: pd.DataFrame,
-    satisfactions: np.ndarray,
+    satisfactions,          # torch.Tensor (mmap) or np.ndarray
     stem: Path,
     *,
     pairs_per_depth: int = 50_000,
     rng_seed: int = 0,
+    batch_size: int = 500,
 ) -> None:
     """Histogram of pairwise Hamming agreement on traces, per depth."""
     rng = np.random.default_rng(rng_seed)
@@ -137,7 +167,7 @@ def plot_within_depth_satisfaction_similarity(
         i, j = i[keep], j[keep]
         if len(i) == 0:
             continue
-        agree = np.mean(satisfactions[i] == satisfactions[j], axis=1)
+        agree = _batch_agree(satisfactions, i, j, batch_size)
         sns.kdeplot(agree, ax=ax, label=f"d={d}", color=color, fill=False)
     ax.set_xlabel("pairwise Hamming agreement on traces")
     ax.set_ylabel("density")

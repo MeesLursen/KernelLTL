@@ -15,11 +15,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import sys
 from pathlib import Path
 
 import pandas as pd
+import torch
 
 from dataset_class import LTLDataset
 
@@ -54,14 +56,25 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def build_per_formula_dataframe(dataset: LTLDataset) -> pd.DataFrame:
+def _sat_rates_chunked(t: torch.Tensor, chunk_rows: int = 500) -> torch.Tensor:
+    """Compute per-formula satisfaction rates without holding the full tensor in RAM.
+
+    Processes ``chunk_rows`` rows at a time so peak allocation is
+    ``chunk_rows × N_traces`` rather than ``N_formulas × N_traces``.
+    """
+    n, n_traces = t.shape
+    sat = torch.empty(n, dtype=torch.float32)
+    for start in range(0, n, chunk_rows):
+        end = min(start + chunk_rows, n)
+        sat[start:end] = t[start:end].sum(dim=1).float() / n_traces
+    return sat
+
+
+def build_per_formula_dataframe(
+    dataset: LTLDataset,
+    sat: torch.Tensor | None = None,
+) -> pd.DataFrame:
     rows: list[dict] = []
-    has_sat = dataset.satisfactions is not None
-    if has_sat:
-        # sum(dim=1) reads row-by-row (mmap-friendly) and keeps the compact
-        # dtype; only the 1-D result is cast to float32 before dividing.
-        t = dataset.satisfactions
-        sat = (t.sum(dim=1).float() / t.shape[1]).cpu().numpy()
     for i, formula in enumerate(dataset.formulas):
         sm = shape_metrics(formula)
         ops = operator_counts(formula)
@@ -79,7 +92,7 @@ def build_per_formula_dataframe(dataset: LTLDataset) -> pd.DataFrame:
             "n_unique_props": n_unique_propositions(formula),
             "n_prop_occurrences": n_proposition_occurrences(formula),
             "length_chars": len(str(formula)),
-            "satisfaction_rate": float(sat[i]) if has_sat else float("nan"),
+            "satisfaction_rate": float(sat[i]) if sat is not None else float("nan"),
         }
         for op in ALL_OPERATORS:
             row[f"n_{op}"] = ops[op]
@@ -156,7 +169,16 @@ def main() -> None:
     )
     print(f"[analyze_dataset] loaded {len(dataset)} formulas", file=sys.stderr)
 
-    df = build_per_formula_dataframe(dataset)
+    # Compute satisfaction rates in chunks to avoid holding the full tensor in RAM,
+    # then release the mmap so the OS can reclaim those pages before the plots run.
+    sat: torch.Tensor | None = None
+    if dataset.satisfactions is not None:
+        print("[analyze_dataset] computing satisfaction rates (chunked)...", file=sys.stderr)
+        sat = _sat_rates_chunked(dataset.satisfactions)
+        dataset.satisfactions = None
+        gc.collect()
+
+    df = build_per_formula_dataframe(dataset, sat=sat)
     df.to_csv(out / "per_formula.csv", index=False)
     print(f"[analyze_dataset] wrote {out / 'per_formula.csv'}", file=sys.stderr)
 
@@ -184,15 +206,23 @@ def main() -> None:
     plots.plot_length_by_depth_box(df, fig_dir / "length_by_depth_box")
     plots.plot_proposition_count_distribution(df, fig_dir / "proposition_count_distribution")
     plots.plot_depth_length_heatmap(df, fig_dir / "depth_length_2d_heatmap")
-    if dataset.satisfactions is not None:
+    if sat is not None:
         plots.plot_satisfaction_rate_by_depth(df, fig_dir / "satisfaction_rate_by_depth_violin")
-        plots.plot_within_depth_satisfaction_similarity(
-            df,
-            dataset.satisfactions.cpu().numpy(),
-            fig_dir / "within_depth_satisfaction_similarity",
-            pairs_per_depth=args.similarity_pairs_per_depth,
-            rng_seed=args.rng_seed,
+        # Reload the satisfactions tensor fresh (previous mmap was released above)
+        # so the similarity plot starts with the full memory budget.
+        _sat_ds = LTLDataset.load(
+            args.dataset_dir, load_satisfactions=True, satisfactions_mmap=True,
         )
+        if _sat_ds.satisfactions is not None:
+            plots.plot_within_depth_satisfaction_similarity(
+                df,
+                _sat_ds.satisfactions,
+                fig_dir / "within_depth_satisfaction_similarity",
+                pairs_per_depth=args.similarity_pairs_per_depth,
+                rng_seed=args.rng_seed,
+            )
+        del _sat_ds
+        gc.collect()
     plots.plot_operator_frequency_overall(df, fig_dir / "operator_frequency_overall")
     plots.plot_operator_frequency_by_depth(df, fig_dir / "operator_frequency_by_depth")
     plots.plot_operator_cooccurrence_heatmap(df, fig_dir / "operator_cooccurrence_heatmap")
