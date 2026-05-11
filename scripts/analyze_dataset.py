@@ -16,11 +16,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from dataset_class import LTLDataset
@@ -50,6 +48,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-shape-uniformity", action="store_true")
     p.add_argument("--no-embeddings", action="store_true",
                    help="Skip the PCA scatter (e.g. if embeddings are huge).")
+    p.add_argument("--mmap-satisfactions", action="store_true",
+                   help="Load satisfactions.pt via mmap (avoids loading the full tensor "
+                        "into RAM; required for large datasets with >~50 GB tensors).")
     return p.parse_args()
 
 
@@ -57,7 +58,10 @@ def build_per_formula_dataframe(dataset: LTLDataset) -> pd.DataFrame:
     rows: list[dict] = []
     has_sat = dataset.satisfactions is not None
     if has_sat:
-        sat = dataset.satisfactions.float().mean(dim=1).cpu().numpy()
+        # sum(dim=1) reads row-by-row (mmap-friendly) and keeps the compact
+        # dtype; only the 1-D result is cast to float32 before dividing.
+        t = dataset.satisfactions
+        sat = (t.sum(dim=1).float() / t.shape[1]).cpu().numpy()
     for i, formula in enumerate(dataset.formulas):
         sm = shape_metrics(formula)
         ops = operator_counts(formula)
@@ -122,12 +126,17 @@ def serialise_uniformity(uniformity: dict) -> dict:
     }
     # Rank plot info: keep top-20 per depth (full list could be huge)
     rank = {}
-    for d, ranked in uniformity["shape_rank"].items():
-        top = ranked[:20]
-        rank[str(d)] = [
-            {"shape_repr": repr(sh), "p_empirical": float(pe), "p_uniform": float(pu)}
-            for sh, pe, pu in top
-        ]
+    for d, rank_data in uniformity["shape_rank"].items():
+        rank[str(d)] = {
+            "empirical_top20": [
+                {"shape_repr": repr(sh), "p": float(p)}
+                for sh, p in rank_data["empirical"][:20]
+            ],
+            "reference_top20": [
+                {"shape_repr": repr(sh), "p": float(p)}
+                for sh, p in rank_data["reference"][:20]
+            ],
+        }
     out["shape_rank_top20"] = rank
     return out
 
@@ -140,7 +149,11 @@ def main() -> None:
     fig_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"[analyze_dataset] loading dataset from {args.dataset_dir}", file=sys.stderr)
-    dataset = LTLDataset.load(args.dataset_dir, load_satisfactions=True)
+    dataset = LTLDataset.load(
+        args.dataset_dir,
+        load_satisfactions=True,
+        satisfactions_mmap=args.mmap_satisfactions,
+    )
     print(f"[analyze_dataset] loaded {len(dataset)} formulas", file=sys.stderr)
 
     df = build_per_formula_dataframe(dataset)
@@ -196,9 +209,8 @@ def main() -> None:
 
     if uniformity is not None:
         plots.plot_shape_entropy_ratio(uniformity, fig_dir / "shape_entropy_ratio_by_depth")
-        for d in (2, 3, 4):
-            if d in uniformity["shape_rank"]:
-                plots.plot_shape_rank(uniformity, d, fig_dir / f"shape_rank_plot_d{d}")
+        for d in uniformity["shape_rank"].keys():
+            plots.plot_shape_rank(uniformity, d, fig_dir / f"shape_rank_plot_d{d}")
         plots.plot_ks_distance_heatmap(uniformity, fig_dir / "ks_distance_per_metric_by_depth")
 
     print(f"[analyze_dataset] done. figures under {fig_dir}", file=sys.stderr)

@@ -321,18 +321,44 @@ def plot_shape_entropy_ratio(uniformity: dict, stem: Path) -> None:
 def plot_shape_rank(uniformity: dict, depth: int, stem: Path) -> None:
     if depth not in uniformity["shape_rank"]:
         return
-    ranked = uniformity["shape_rank"][depth]  # list of (shape, p_emp, p_uniform)
-    p_emp = [r[1] for r in ranked]
-    p_unif = [r[2] for r in ranked]
-    xs = np.arange(len(ranked))
+    rank_data = uniformity["shape_rank"][depth]
+    emp_ranked = rank_data["empirical"]
+    ref_ranked = rank_data["reference"]
+
+    p_emp = np.array([r[1] for r in emp_ranked])
+    p_ref = np.array([r[1] for r in ref_ranked])
+
+    n_total = uniformity.get("n_eq", {}).get(depth, 0)
+    n_formulas = uniformity.get("n_formulas", {}).get(depth, 0)
+    n_seen_emp = len(p_emp)
+    n_seen_ref = len(p_ref)
+
+    # x-axis spans 0 to n_formulas (the actual sample size).
+    x_max = n_formulas if n_formulas > 0 else max(n_seen_emp, n_seen_ref)
+    xs = np.arange(x_max)
+    # Pad with NaN so each curve visibly stops at its own n_seen on log scale.
+    emp_y = np.full(x_max, np.nan)
+    emp_y[:min(n_seen_emp, x_max)] = p_emp[:x_max]
+    ref_y = np.full(x_max, np.nan)
+    ref_y[:min(n_seen_ref, x_max)] = p_ref[:x_max]
+
+    coverage_emp = n_seen_emp / n_total if n_total else float("nan")
+
     fig, ax = plt.subplots(figsize=(8, 4))
-    ax.plot(xs, p_emp, label="empirical", color=sns.color_palette()[0])
-    ax.plot(xs, p_unif, label="uniform reference", color=sns.color_palette()[2], linestyle="--")
-    ax.set_xlabel("shape rank (descending empirical pmf)")
+    ax.plot(xs, emp_y, label=f"empirical (dataset, {n_seen_emp:,} distinct shapes)",
+            color=sns.color_palette()[0])
+    ax.plot(xs, ref_y,
+            label=f"Boltzmann uniform sample, N={n_formulas:,} ({n_seen_ref:,} distinct)",
+            color=sns.color_palette()[2], linestyle="--")
+    ax.set_xlabel(f"shape rank (descending pmf, capped at n_formulas = {x_max:,})")
     ax.set_ylabel("probability")
-    ax.set_title(f"Shape pmf rank plot (depth = {depth}, N(d) = {len(ranked)})")
+    ax.set_title(
+        f"Shape pmf rank plot — depth = {depth}\n"
+        f"N_eq(d) = {n_total:,} | dataset shapes = {n_seen_emp:,} "
+        f"({coverage_emp:.2%} of N_eq) | reference shapes = {n_seen_ref:,}"
+    )
     ax.set_yscale("log")
-    ax.legend()
+    ax.legend(loc="upper right", fontsize=8)
     fig.tight_layout()
     _save(fig, stem)
 

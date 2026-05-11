@@ -8,8 +8,6 @@ Implements:
 * ``sample_eq(d, rng)`` / ``sample_le(d, rng)`` — uniform random draws
   using cumulative-integer comparisons (no float precision loss even at
   ``d = 5`` where counts approach ``10^9``).
-* ``enumerate_eq(d)`` / ``enumerate_le(d)`` — exact enumeration of every
-  topology, feasible for ``d ≤ 4`` (``n_le(4) = 33,673``).
 
 Counts recursion (binary trees with arities ∈ {0, 1, 2}, depth defined as
 longest root-to-leaf path):
@@ -26,7 +24,6 @@ from __future__ import annotations
 
 import random
 from functools import lru_cache
-from typing import Iterator
 
 from .metrics import LEAF, Topology
 
@@ -130,44 +127,3 @@ def sample_eq(d: int, rng: random.Random) -> Topology:
     return Topology(2, (sample_le(d - 2, rng), sample_eq(d - 1, rng)))
 
 
-# ---------------------------------------------------------------------------
-# Enumeration (exact, for verification + low-depth rank plots)
-# ---------------------------------------------------------------------------
-
-
-@lru_cache(maxsize=None)
-def _enum_le_tuple(d: int) -> tuple[Topology, ...]:
-    if d == 0:
-        return (LEAF,)
-    sub = _enum_le_tuple(d - 1)
-    out: list[Topology] = [LEAF]
-    for c in sub:
-        out.append(Topology(1, (c,)))
-    for left in sub:
-        for right in sub:
-            out.append(Topology(2, (left, right)))
-    return tuple(out)
-
-
-def enumerate_le(d: int) -> tuple[Topology, ...]:
-    """Every topology of depth ≤ ``d``. Cached. Infeasible above d ≈ 4."""
-    return _enum_le_tuple(d)
-
-
-def enumerate_eq(d: int) -> tuple[Topology, ...]:
-    """Every topology of depth exactly ``d``."""
-    if d == 0:
-        return (LEAF,)
-    seen = enumerate_le(d - 1)
-    seen_set = set(seen)
-    return tuple(t for t in enumerate_le(d) if t not in seen_set)
-
-
-# ---------------------------------------------------------------------------
-# Convenience
-# ---------------------------------------------------------------------------
-
-
-def sample_eq_iter(d: int, n: int, rng: random.Random) -> Iterator[Topology]:
-    for _ in range(n):
-        yield sample_eq(d, rng)

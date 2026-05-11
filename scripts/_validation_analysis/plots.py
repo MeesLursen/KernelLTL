@@ -358,12 +358,16 @@ def plot_pareto(
     pal = _run_palette(list(pts.index))
     fig, ax = plt.subplots(figsize=(7, 6))
     for run, row in pts.iterrows():
+        is_opt = pareto_mask[run]
         ax.scatter(row[x_col], row[y_col], color=pal[run],
-                   s=200 if pareto_mask[run] else 100,
-                   edgecolor="black" if pareto_mask[run] else "none",
-                   linewidth=2 if pareto_mask[run] else 0,
-                   label=run + (" *" if pareto_mask[run] else ""))
-        ax.annotate(run, (row[x_col], row[y_col]), fontsize=8, xytext=(5, 5), textcoords="offset points")
+                   s=200 if is_opt else 100,
+                   edgecolor="black" if is_opt else "none",
+                   linewidth=2 if is_opt else 0,
+                   label=run + (" *" if is_opt else ""))
+        ax.annotate(run + (" *" if is_opt else ""),
+                    (row[x_col], row[y_col]), fontsize=8,
+                    xytext=(5, 5), textcoords="offset points",
+                    fontweight="bold" if is_opt else "normal")
     ax.set_xlabel(x_label)
     ax.set_ylabel(y_label)
     ax.set_title(title + "\n(* = Pareto-optimal)")

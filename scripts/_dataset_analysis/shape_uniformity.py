@@ -23,7 +23,7 @@ from typing import Iterable
 from formula_class import Formula
 from scipy.stats import ks_2samp
 
-from .boltzmann_sampler import enumerate_eq, n_eq, sample_eq
+from .boltzmann_sampler import n_eq, sample_eq
 from .metrics import (
     Topology,
     branching_ratio,
@@ -121,30 +121,6 @@ def reference_metric_arrays(
     return topos, arrays
 
 
-def reference_distribution(
-    depth: int,
-    mc_n: int,
-    rng: random.Random,
-) -> Counter:
-    """Counter of topologies sampled uniformly at depth ``depth``.
-
-    For ``depth ≤ 4`` we return an explicit per-shape ``mc_n / N_eq(depth)``-
-    weighted reference (i.e. the exact uniform pmf rescaled to a sample
-    size of ``mc_n``); otherwise we just sample.
-    """
-    if depth <= 4 and n_eq(depth) <= 100_000:
-        # Return the exact uniform pmf as if mc_n samples had been drawn.
-        per_shape = mc_n // n_eq(depth)
-        c: Counter = Counter()
-        for sh in enumerate_eq(depth):
-            c[sh] = per_shape
-        return c
-    c = Counter()
-    for _ in range(mc_n):
-        c[sample_eq(depth, rng)] += 1
-    return c
-
-
 def ks_distance(empirical: list[float], reference: list[float]) -> tuple[float, float]:
     """``(D, p_value)`` from a two-sample KS test. ``(NaN, NaN)`` if either side empty."""
     if not empirical or not reference:
@@ -164,9 +140,12 @@ def compute_shape_uniformity(
     Returns a dict with keys:
       - ``depths`` (sorted list of depths discovered)
       - ``n_eq`` (per-depth count of all topologies of depth exactly d)
+      - ``n_formulas`` (per-depth count of formulas in the dataset)
       - ``shape_entropy_ratio`` (per-depth scalar, in [0, 1] or ``None``)
-      - ``shape_rank`` (per-depth list of (shape_repr, empirical_pmf,
-        uniform_pmf), only for d ≤ 4)
+      - ``shape_rank`` (per-depth dict ``{"empirical": [...], "reference":
+        [...]}``, each a list of ``(shape, p)`` sorted by descending ``p``).
+        ``reference`` is a Boltzmann-sampled uniform draw at N = n_formulas
+        (regime-appropriate baseline at any depth).
       - ``ks_distances`` (dict[depth][metric] -> (D, p))
       - ``empirical_metric_arrays`` and ``reference_metric_arrays`` for
         downstream plots
@@ -178,6 +157,7 @@ def compute_shape_uniformity(
     out = {
         "depths": depths,
         "n_eq": {d: n_eq(d) for d in depths},
+        "n_formulas": {d: int(sum(distributions[d].values())) for d in depths},
         "shape_entropy_ratio": {},
         "shape_rank": {},
         "ks_distances": {},
@@ -200,15 +180,25 @@ def compute_shape_uniformity(
             ks[name] = ks_distance(emp_arr.get(name, []), ref_arr.get(name, []))
         out["ks_distances"][d] = ks
 
-        if d <= 4 and n_eq(d) <= 100_000:
-            shapes = enumerate_eq(d)
-            total = sum(dist.values())
-            uniform_p = 1.0 / n_eq(d)
-            ranked = sorted(
-                ((sh, dist.get(sh, 0) / total if total else 0.0, uniform_p)
-                 for sh in shapes),
+        # Rank: empirical from seen shapes only (no enumeration needed),
+        # reference is a Boltzmann-sampled uniform draw at the same N so
+        # the comparison is regime-correct at every depth.
+        total = int(sum(dist.values()))
+        if total > 0:
+            emp_ranked = sorted(
+                ((sh, c / total) for sh, c in dist.items()),
                 key=lambda r: -r[1],
             )
-            out["shape_rank"][d] = ranked
+            ref_counter: Counter = Counter()
+            for _ in range(total):
+                ref_counter[sample_eq(d, rng)] += 1
+            ref_ranked = sorted(
+                ((sh, c / total) for sh, c in ref_counter.items()),
+                key=lambda r: -r[1],
+            )
+            out["shape_rank"][d] = {
+                "empirical": emp_ranked,
+                "reference": ref_ranked,
+            }
 
     return out
