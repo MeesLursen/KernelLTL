@@ -149,7 +149,7 @@ def plot_within_depth_satisfaction_similarity(
     *,
     pairs_per_depth: int = 50_000,
     rng_seed: int = 0,
-    batch_size: int = 500,
+    batch_size: int = 5_000,
 ) -> None:
     """Histogram of pairwise Hamming agreement on traces, per depth."""
     rng = np.random.default_rng(rng_seed)

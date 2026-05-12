@@ -56,7 +56,7 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _sat_rates_chunked(t: torch.Tensor, chunk_rows: int = 500) -> torch.Tensor:
+def _sat_rates_chunked(t: torch.Tensor, chunk_rows: int = 5_000) -> torch.Tensor:
     """Compute per-formula satisfaction rates without holding the full tensor in RAM.
 
     Processes ``chunk_rows`` rows at a time so peak allocation is

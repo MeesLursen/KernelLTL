@@ -25,6 +25,17 @@ sns.set_theme(style="whitegrid", palette="colorblind")
 CE_BASE = "ce_base"
 CE_BASE_GREY = "#9e9e9e"
 
+# Fixed canonical run order — determines color assignment so that the same
+# model always gets the same color even when a subset of runs is plotted
+# (e.g. KL panels that exclude ce_base).
+CANONICAL_RUN_ORDER = [
+    "ce_base",
+    "ce_finetune",
+    "rb_momentum_09",
+    "gae_lambda_09",
+    "gae_lambda_1",
+]
+
 
 def _save(fig: plt.Figure, stem: Path, dpi: int = 200) -> None:
     stem = Path(stem)
@@ -35,15 +46,20 @@ def _save(fig: plt.Figure, stem: Path, dpi: int = 200) -> None:
 
 
 def _run_palette(runs: list[str], grey_runs: Iterable[str] = ()) -> dict[str, tuple]:
-    base = sns.color_palette("colorblind", n_colors=max(len(runs), 1))
+    grey_runs = set(grey_runs)
+    n_colors = max(len(CANONICAL_RUN_ORDER), len(runs), 1)
+    base = sns.color_palette("colorblind", n_colors=n_colors)
+    canonical_colors = {r: base[i] for i, r in enumerate(CANONICAL_RUN_ORDER)}
     pal = {}
-    color_idx = 0
+    extra_idx = len(CANONICAL_RUN_ORDER)
     for r in runs:
         if r in grey_runs:
             pal[r] = CE_BASE_GREY
+        elif r in canonical_colors:
+            pal[r] = canonical_colors[r]
         else:
-            pal[r] = base[color_idx % len(base)]
-            color_idx += 1
+            pal[r] = base[extra_idx % len(base)]
+            extra_idx += 1
     return pal
 
 
