@@ -36,12 +36,10 @@ from model_class import LTLModel
 from tokenizer_pretrained_class import LTLTokenizer
 
 
-# ---------------------------------------------------------------------------
-# small helpers
-# ---------------------------------------------------------------------------
 
 def _is_main(accelerator: Accelerator) -> bool:
     return bool(accelerator.is_main_process)
+
 
 
 def _pad_T(t: torch.Tensor, T_target: int, pad_value: float = 0.0) -> torch.Tensor:
@@ -52,6 +50,7 @@ def _pad_T(t: torch.Tensor, T_target: int, pad_value: float = 0.0) -> torch.Tens
     if T_actual > T_target:
         return t[..., :T_target].contiguous()
     return F.pad(t, (0, T_target - T_actual), value=pad_value)
+
 
 
 def _sentence_bleu(candidate: list[str], references: list[list[str]], max_n: int = 4) -> float:
@@ -98,6 +97,7 @@ def _sentence_bleu(candidate: list[str], references: list[list[str]], max_n: int
     return float(bp * math.exp(log_precision))
 
 
+
 def _bleu_tokens_from_sequence(seq: torch.Tensor, bos_id: int, eos_id: int, pad_id: int) -> list[str]:
     ids = seq.tolist()
     if bos_id in ids:
@@ -112,9 +112,6 @@ def _bleu_tokens_from_sequence(seq: torch.Tensor, bos_id: int, eos_id: int, pad_
     return [str(x) for x in content if x != pad_id]
 
 
-# ---------------------------------------------------------------------------
-# semantic evaluation of a single generated formula
-# ---------------------------------------------------------------------------
 
 def _score_one_generated(
     *,
@@ -132,7 +129,7 @@ def _score_one_generated(
         "is_invalid": False,
         "is_exact_match": False,
         "is_semantic_equivalent": False,
-        "semantic_distance": 1.0,  # max distance; overwritten if valid
+        "semantic_distance": 1.0,
         "generated_depth": 0,
         "reward": 0.0,
     }
@@ -159,9 +156,6 @@ def _score_one_generated(
     return out
 
 
-# ---------------------------------------------------------------------------
-# greedy pass
-# ---------------------------------------------------------------------------
 
 def run_greedy_pass(
     *,
@@ -194,8 +188,6 @@ def run_greedy_pass(
     original_training = bool(gen_model.training)
     gen_model.eval()
 
-    # Each entry in buffered_batches contains everything needed to write JSONL
-    # (after gather) plus the tensors needed for the reference-model pass.
     buffered_batches: list[dict[str, torch.Tensor]] = []
 
     with torch.no_grad(), accelerator.autocast():
@@ -222,10 +214,8 @@ def run_greedy_pass(
             sequences = out.sequences
             scores = list(out.scores) if isinstance(out.scores, tuple) else out.scores
             if not scores:
-                # Degenerate batch: nothing generated. Skip.
                 continue
 
-            # (B, T_actual, V)
             score_tensor = torch.stack(scores, dim=1)
             re_log_probs = torch.log_softmax(score_tensor, dim=-1)
             re_probs = torch.exp(re_log_probs)
@@ -235,7 +225,6 @@ def run_greedy_pass(
             prefix_len = max(0, seq_len - T_actual)
             gen_tokens = sequences[:, prefix_len : prefix_len + T_actual].long()  # (B, T_actual)
 
-            # (B, T_actual)
             token_mask = (gen_tokens != pad_id)
             token_mask_f = token_mask.to(dtype=score_tensor.dtype)
             token_entropy = -(re_probs * re_log_probs).sum(dim=-1)
@@ -243,7 +232,6 @@ def run_greedy_pass(
                 dim=-1, index=gen_tokens.unsqueeze(-1)
             ).squeeze(-1)
 
-            # per-sample semantic outcomes
             generated_strs = tokenizer.batch_decode(
                 gen_tokens.detach().cpu(), skip_special_tokens=True
             )
@@ -271,44 +259,33 @@ def run_greedy_pass(
                 per_sample["semantic_distance"][i] = outcome["semantic_distance"]
                 per_sample["generated_depth"][i] = outcome["generated_depth"]
 
-            # Pad per-token tensors to T_max so all batches have the same shape
-            # (gather_for_metrics would otherwise need pad_across_processes).
+
             gen_tokens_pad = _pad_T(gen_tokens, T_max, pad_value=pad_id).to(dtype=torch.long)
             mask_pad = _pad_T(token_mask.to(dtype=torch.uint8), T_max, pad_value=0)
             entropy_pad = _pad_T(token_entropy.to(dtype=torch.float32), T_max, pad_value=0.0)
             log_prob_pad = _pad_T(token_log_prob.to(dtype=torch.float32), T_max, pad_value=0.0)
 
-            # Move re_log_probs to CPU now to keep GPU memory low while we
-            # iterate the rest of the dataloader. Keep the per-token summary
-            # tensors on GPU so we can gather them at the end.
             re_log_probs_cpu = re_log_probs.detach().cpu().to(dtype=torch.float32)
             sequences_cpu = sequences.detach().cpu()
             embs_cpu = embs.detach().cpu()
 
             buffered_batches.append({
-                # Per-token summary tensors on GPU (will be padded again w/ KL):
                 "gen_tokens_pad": gen_tokens_pad,
                 "mask_pad": mask_pad,
                 "entropy_pad": entropy_pad,
                 "log_prob_pad": log_prob_pad,
-                # Per-sample tensors on GPU:
                 "formula_ids": formula_ids.to(dtype=torch.long),
                 "generated_length_tokens": generated_length_tokens,
                 "target_length_tokens": target_length_tokens,
                 **per_sample,
-                # CPU tensors for ref-model pass:
                 "_sequences_cpu": sequences_cpu,
                 "_embs_cpu": embs_cpu,
                 "_re_log_probs_cpu": re_log_probs_cpu,
                 "_T_actual": T_actual,
             })
 
-    # ------------------------------------------------------------------
-    # Stage B: reference-model pass (per-token KL)
-    # ------------------------------------------------------------------
     do_kl = ref_model_path is not None and len(buffered_batches) > 0
     if do_kl:
-        # Mirror the swap pattern from training_utils.py:1125-1157
         gen_model.to("cpu")
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -346,7 +323,6 @@ def run_greedy_pass(
                 torch.cuda.empty_cache()
             gen_model.to(device)
     else:
-        # Drop buffered CPU tensors we no longer need
         for buf in buffered_batches:
             buf.pop("_sequences_cpu", None)
             buf.pop("_embs_cpu", None)
@@ -359,9 +335,6 @@ def run_greedy_pass(
     if original_training:
         gen_model.train()
 
-    # ------------------------------------------------------------------
-    # Stage C: gather, write JSONL, aggregate
-    # ------------------------------------------------------------------
     total = 0
     sum_distance = 0.0
     n_invalid = 0
@@ -369,11 +342,11 @@ def run_greedy_pass(
     n_equiv = 0
     sum_gen_depth = 0
     sum_gen_len = 0
-    n_valid_for_depth_len = 0  # i.e. valid (parseable) generations
+    n_valid_for_depth_len = 0
     sum_token_entropy = 0.0
     sum_token_kl = 0.0
     sum_token_log_prob = 0.0
-    sum_tokens = 0  # for token-mean aggregations
+    sum_tokens = 0
     sum_seq_entropy_means = 0.0
     sum_seq_kl_means = 0.0
     sum_seq_log_prob_means = 0.0
@@ -463,7 +436,6 @@ def run_greedy_pass(
                 }
                 writer.write(json.dumps(row) + "\n")
 
-                # Aggregates
                 total += 1
                 sum_distance += distance
                 if is_invalid:
@@ -509,12 +481,10 @@ def run_greedy_pass(
         summary["generated_depth_mean"] = sum_gen_depth / n_valid_for_depth_len
         summary["generated_length_tokens_mean"] = sum_gen_len / n_valid_for_depth_len
     if n_with_tokens > 0:
-        # (a) sequence-mean: each formula contributes equally
         summary["policy_entropy_seq_mean"] = sum_seq_entropy_means / n_with_tokens
         summary["kl_from_base_seq_mean"] = sum_seq_kl_means / n_with_tokens
         summary["action_log_prob_seq_mean"] = sum_seq_log_prob_means / n_with_tokens
     if sum_tokens > 0:
-        # (b) token-mean: each token contributes equally
         summary["policy_entropy_token_mean"] = sum_token_entropy / sum_tokens
         summary["kl_from_base_token_mean"] = sum_token_kl / sum_tokens
         summary["action_log_prob_token_mean"] = sum_token_log_prob / sum_tokens
@@ -522,9 +492,6 @@ def run_greedy_pass(
     return summary
 
 
-# ---------------------------------------------------------------------------
-# top-K pass
-# ---------------------------------------------------------------------------
 
 def run_topk_pass(
     *,
@@ -614,12 +581,9 @@ def run_topk_pass(
                 gen_tokens.detach().cpu(), skip_special_tokens=True
             )
 
-            # Per-(target, k) outcomes -- stored as (B, K) so the leading dim
-            # matches the dataset stride for accelerator.gather_for_metrics.
             per_sk_invalid = torch.zeros(B, K, dtype=torch.bool, device=device)
             per_sk_reward = torch.zeros(B, K, dtype=torch.float32, device=device)
 
-            # Self-BLEU per target needs all K bleu-token sequences for that target
             grouped_token_sequences: list[list[list[str]]] = [[] for _ in range(B)]
             grouped_rewards: list[list[float]] = [[] for _ in range(B)]
             grouped_invalid_idx: list[list[int]] = [[] for _ in range(B)]
@@ -667,8 +631,6 @@ def run_topk_pass(
                         per_target_self_bleu[b_idx] = float(sum(bleu_vals) / len(bleu_vals))
                         per_target_has_bleu[b_idx] = True
 
-            # Pad token-level tensors to T_max, then reshape to (B, K, T_max)
-            # so the leading dimension matches the dataset stride.
             gen_tokens_pad = _pad_T(gen_tokens, T_max, pad_value=pad_id).to(dtype=torch.long).view(B, K, T_max)
             mask_pad = _pad_T(token_mask.to(dtype=torch.uint8), T_max, pad_value=0).view(B, K, T_max)
             entropy_pad = _pad_T(token_entropy.to(dtype=torch.float32), T_max, pad_value=0.0).view(B, K, T_max)
@@ -680,28 +642,25 @@ def run_topk_pass(
             buffered_batches.append({
                 "B": B,
                 "K": K,
-                # per (target, k) reshaped to (B, K, ...) for gather_for_metrics
                 "gen_tokens_pad": gen_tokens_pad,                    # (B, K, T_max)
                 "mask_pad": mask_pad,                                # (B, K, T_max)
                 "entropy_pad": entropy_pad,                          # (B, K, T_max)
                 "log_prob_pad": log_prob_pad,                        # (B, K, T_max)
                 "per_sk_invalid": per_sk_invalid,                    # (B, K)
                 "per_sk_reward": per_sk_reward,                      # (B, K)
-                # per target
                 "formula_ids": formula_ids.to(dtype=torch.long),     # (B,)
                 "per_target_self_bleu": per_target_self_bleu,        # (B,)
                 "per_target_has_bleu": per_target_has_bleu,          # (B,)
                 "per_target_reward_mean": per_target_reward_mean,    # (B,)
                 "per_target_reward_var": per_target_reward_var,      # (B,)
                 "per_target_n_invalid": per_target_n_invalid,        # (B,)
-                # ref-pass cpu buffers
                 "_sequences_cpu": sequences_cpu,
                 "_embs_cpu": embs_cpu,
                 "_re_log_probs_cpu": re_log_probs_cpu,
                 "_T_actual": T_actual,
             })
 
-    # ----- Stage B: ref-model swap for KL -----
+
     do_kl = ref_model_path is not None and len(buffered_batches) > 0
     if do_kl:
         gen_model.to("cpu")
@@ -721,7 +680,6 @@ def run_topk_pass(
 
                     shifted = sequences_cpu[:, :-1].to(device, non_blocking=True)
                     shifted_attn = (shifted != pad_id).to(dtype=torch.long)
-                    # Repeat embeddings K times to match (B*K) dimension
                     embs_g = embs_cpu.to(device, non_blocking=True)
                     embs_rep = embs_g.repeat_interleave(K, dim=0)
                     re_lp_g = re_log_probs_cpu.to(device, non_blocking=True)
@@ -759,7 +717,6 @@ def run_topk_pass(
     if original_training:
         gen_model.train()
 
-    # ----- Stage C: gather, write JSONLs, aggregate -----
     n_targets = 0
     sum_self_bleu = 0.0
     sum_self_bleu_sq = 0.0
@@ -788,7 +745,6 @@ def run_topk_pass(
 
     try:
         for buf in buffered_batches:
-            # Gather per-(target, k) tensors  (shape (B_local*K,) or (B_local*K, T_max))
             sk_gathered = accelerator.gather_for_metrics((
                 buf["gen_tokens_pad"],
                 buf["mask_pad"],
@@ -808,7 +764,6 @@ def run_topk_pass(
                 g_reward,
             ) = sk_gathered
 
-            # Gather per-target tensors  (shape (B_local,))
             t_gathered = accelerator.gather_for_metrics((
                 buf["formula_ids"],
                 buf["per_target_self_bleu"],
@@ -834,7 +789,6 @@ def run_topk_pass(
                 f"Top-K gather shape mismatch: {tuple(g_tok_ids.shape)} vs ({B_total},{K},...)"
             )
 
-            # Per-(target, k) flat rows
             for b_idx in range(B_total):
                 fid = int(g_formula_ids[b_idx].item())
                 target_formula = dataset.formulas[fid]
@@ -890,7 +844,6 @@ def run_topk_pass(
                         target_token_kl_sum += sum(kl_row)
                         target_token_count += tok_count
 
-                # Per-target grouped row
                 self_bleu = float(g_self_bleu[b_idx].item())
                 has_bleu = bool(g_has_bleu[b_idx].item())
                 reward_mean = float(g_reward_mean[b_idx].item())
@@ -928,7 +881,6 @@ def run_topk_pass(
                 }
                 grouped_writer.write(json.dumps(grouped_row) + "\n")
 
-                # Dataset-level accumulators
                 n_targets += 1
                 sum_reward_mean += reward_mean
                 sum_reward_var += reward_var
@@ -977,9 +929,6 @@ def run_topk_pass(
     return summary
 
 
-# ---------------------------------------------------------------------------
-# per-depth aggregation utility (post-processing)
-# ---------------------------------------------------------------------------
 
 def aggregate_greedy_by_depth(jsonl_path: str) -> dict[int, dict[str, float]]:
     """Read greedy per-sample JSONL and bucket aggregates by target_depth.
