@@ -127,6 +127,16 @@ def cond_wrong_and_valid(df: pd.DataFrame) -> pd.Series:
     return (~df["is_semantic_equivalent"].astype(bool)) & (~df["is_invalid"].astype(bool))
 
 
+def cond_always(df: pd.DataFrame) -> pd.Series:
+    return pd.Series(True, index=df.index)
+
+
+def cond_valid(df: pd.DataFrame) -> pd.Series:
+    if "is_invalid" not in df.columns:
+        return cond_always(df)
+    return ~df["is_invalid"].astype(bool)
+
+
 # ---------------------------------------------------------------------------
 # pass@k' curve
 # ---------------------------------------------------------------------------

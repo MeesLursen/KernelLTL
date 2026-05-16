@@ -102,6 +102,8 @@ def main() -> None:
     )
     df_greedy = loaded["df_greedy"]
     df_topk_flat = loaded["df_topk_flat"]
+    df_topk_grouped = loaded["df_topk_grouped"]
+    df_topk_aggregates = loaded["df_topk_aggregates"]
     runs = list(args.runs)
 
     # target_length_tokens lives only on the greedy frame in the loader output.
@@ -123,6 +125,19 @@ def main() -> None:
 
     print("[extra] computing contrast studies (paired-diff, agreement, output similarity)...", file=sys.stderr)
     _run_contrast_studies(df_greedy, df_topk_flat, runs, fig_dir, stats_dir, args)
+
+    print("[extra] computing unconditional paired-diff coverage (overall + by-depth)...", file=sys.stderr)
+    _run_unconditional_paired_diffs(
+        sources={
+            "greedy": df_greedy,
+            "topk_aggregates": df_topk_aggregates,
+            "topk_grouped": df_topk_grouped,
+        },
+        runs=runs,
+        fig_dir=fig_dir,
+        stats_dir=stats_dir,
+        args=args,
+    )
 
     metadata = {
         "git_sha": _git_sha(),
@@ -290,12 +305,19 @@ def _run_operator_analysis(
     df_op_topk = operator_analysis.build_target_operator_frame_topk(df_topk_flat, df_greedy)
 
     for src_name, df_op in [("greedy", df_op_greedy), ("topk_any", df_op_topk)]:
-        # KL + per-op contributions
+        # KL + per-op contributions (Case B: summed per-operator Bernoulli KL)
         kl_df = operator_analysis.compute_kl_per_run(df_op, runs=runs)
         kl_df.to_csv(stats_dir / f"op_kl_{src_name}.csv", index=False)
         extra_plots.plot_kl_per_run(kl_df, runs=runs, stem=fig_dir / f"op_kl_{src_name}")
         extra_plots.plot_kl_contribution_per_run(
             kl_df, runs=runs, stem=fig_dir / f"op_kl_contribution_{src_name}",
+        )
+
+        # Case-B independence diagnostic: per-subset 8x8 phi co-occurrence
+        cooc_df = operator_analysis.compute_operator_cooccurrence(df_op, runs=runs)
+        cooc_df.to_csv(stats_dir / f"op_cooccurrence_{src_name}.csv", index=False)
+        extra_plots.plot_operator_cooccurrence(
+            cooc_df, runs=runs, stem=fig_dir / f"op_cooccurrence_{src_name}",
         )
 
         # Decomposition: P(op | correct/wrong) with bootstrap CIs + base-rate tick
@@ -407,7 +429,7 @@ def _run_contrast_studies(
             # Per-metric figures + per-target CSV
             extra_plots.plot_paired_diff_conditional(
                 per_target_diffs, summary,
-                variants=variants, reference_run=reference_run,
+                variants=variants, runs=runs, reference_run=reference_run,
                 title=f"Paired Δ vs {reference_run} — {ylabel} ({src_name})",
                 ylabel=ylabel,
                 stem=fig_dir / f"contrast_paired_diff_{metric_name}_{src_name}",
@@ -415,7 +437,7 @@ def _run_contrast_studies(
             )
             if not bydepth.empty:
                 extra_plots.plot_paired_diff_bydepth(
-                    bydepth, variants=variants, reference_run=reference_run,
+                    bydepth, variants=variants, runs=runs, reference_run=reference_run,
                     title=f"Paired Δ vs {reference_run} by target_depth — {ylabel} ({src_name})",
                     ylabel=ylabel,
                     stem=fig_dir / f"contrast_paired_diff_{metric_name}_{src_name}_bydepth",
@@ -511,6 +533,140 @@ def _run_contrast_studies(
             stem=fig_dir / "contrast_output_similarity_exact_greedy",
             vmin=0.0, vmax=1.0, cmap="Blues",
         )
+
+
+# ---------------------------------------------------------------------------
+# Unconditional paired-diff coverage (overall + by-depth) for all metrics
+# that the main analysis visualises as boxes/bars but never gave paired-diff
+# treatment, plus by-depth versions of the original 7 paired-diff metrics.
+# Family structure for BH-FDR: one family per source (greedy / topk).
+# ---------------------------------------------------------------------------
+
+# (name, source_key, value_col, ylabel, require_valid)
+UNCONDITIONAL_PAIRED_SPECS: list[tuple] = [
+    # --- Greedy: original paired-diff metrics (by-depth was missing) ---
+    ("semantic_distance",             "greedy",          "semantic_distance",                  "Δ semantic_distance",              False),
+    ("is_invalid",                    "greedy",          "is_invalid",                         "Δ p(invalid)",                     False),
+    ("is_semantic_equivalent",        "greedy",          "is_semantic_equivalent",             "Δ p(equiv)",                       False),
+    # --- Greedy: paired-diff entirely missing ---
+    ("is_exact_match",                "greedy",          "is_exact_match",                     "Δ p(exact match)",                 False),
+    ("generated_depth",               "greedy",          "generated_depth",                    "Δ generated_depth",                True),
+    ("generated_length_tokens",       "greedy",          "generated_length_tokens",            "Δ generated_length_tokens",        True),
+    ("seq_entropy_mean",              "greedy",          "seq_entropy_mean",                   "Δ policy entropy (seq mean)",      False),
+    # --- Top-K aggregates: original paired-diff metrics (by-depth was missing) ---
+    ("semantic_distance_mean_topk",   "topk_aggregates", "semantic_distance_mean_topk",        "Δ SD_topk (mean over K)",          False),
+    ("semantic_equiv_rate_topk",      "topk_aggregates", "semantic_equiv_rate_topk",           "Δ equiv-rate (top-K)",             False),
+    # --- Top-K aggregates: paired-diff entirely missing ---
+    ("semantic_distance_variance_topk","topk_aggregates","semantic_distance_variance_topk",    "Δ within-target SD variance",      False),
+    ("invalid_rate_topk",             "topk_aggregates", "invalid_rate_topk",                  "Δ invalid_rate (top-K)",           False),
+    ("exact_match_rate_topk",         "topk_aggregates", "exact_match_rate_topk",              "Δ exact-match rate (top-K)",       False),
+    ("syntax_semantics_gap_topk",     "topk_aggregates", "syntax_semantics_gap_topk",          "Δ syntax-semantics gap (top-K)",   False),
+    ("generated_depth_mean_topk",     "topk_aggregates", "generated_depth_mean_topk",          "Δ generated_depth (top-K mean)",   False),
+    ("generated_length_tokens_mean_topk","topk_aggregates","generated_length_tokens_mean_topk","Δ generated_length (top-K mean)",  False),
+    # --- Top-K grouped: original paired-diff metrics (by-depth was missing) ---
+    ("self_bleu",                     "topk_grouped",    "self_bleu",                          "Δ self-BLEU",                      False),
+    ("policy_entropy_target_seq_mean","topk_grouped",    "policy_entropy_target_seq_mean",     "Δ policy entropy (top-K)",         False),
+]
+
+
+def _run_unconditional_paired_diffs(
+    sources: dict[str, pd.DataFrame],
+    runs: list[str],
+    fig_dir: Path,
+    stats_dir: Path,
+    args: argparse.Namespace,
+) -> None:
+    reference_run = args.reference_run
+    variants = [r for r in runs if r != reference_run]
+
+    # Group specs by source for one BH-FDR family per (source, unconditional).
+    by_source: dict[str, list[tuple]] = {}
+    for spec in UNCONDITIONAL_PAIRED_SPECS:
+        by_source.setdefault(spec[1], []).append(spec)
+    # Greedy is its own family; topk_aggregates + topk_grouped pool into "topk".
+    family_groups = {
+        "greedy": by_source.get("greedy", []),
+        "topk":   by_source.get("topk_aggregates", []) + by_source.get("topk_grouped", []),
+    }
+
+    for family_name, specs in family_groups.items():
+        family_summaries: list[pd.DataFrame] = []
+        family_pvals: list[float] = []
+        family_keys: list[tuple[str, str]] = []
+
+        for name, src_key, value_col, ylabel, require_valid in specs:
+            df_src = sources.get(src_key)
+            if df_src is None or value_col not in df_src.columns:
+                continue
+            cond_fn = extra_metrics.cond_valid if require_valid else extra_metrics.cond_always
+            per_target = extra_metrics.compute_per_target_conditional_value(
+                df_src,
+                value_col=value_col,
+                condition_fn=cond_fn,
+            )
+            if per_target.empty:
+                continue
+            summary, per_target_diffs = extra_contrast.compute_paired_diff_summary(
+                per_target, reference_run=reference_run, variants=variants,
+                n_bootstrap=args.bootstrap_n, alpha=args.alpha, rng_seed=args.rng_seed,
+            )
+            bydepth = extra_contrast.compute_paired_diff_by_depth(
+                per_target, reference_run=reference_run, variants=variants,
+                n_bootstrap=args.bootstrap_n, alpha=args.alpha, rng_seed=args.rng_seed,
+            )
+
+            summary = summary.assign(metric=name, source=family_name,
+                                     require_valid=require_valid)
+            if not bydepth.empty:
+                bydepth = bydepth.assign(metric=name, source=family_name)
+            family_summaries.append(summary)
+            for _, row in summary.iterrows():
+                family_pvals.append(row["wilcoxon_p"])
+                family_keys.append((name, row["variant"]))
+
+            extra_plots.plot_paired_diff_conditional(
+                per_target_diffs, summary,
+                variants=variants, runs=runs, reference_run=reference_run,
+                title=f"Paired Δ vs {reference_run} — {ylabel} ({family_name})",
+                ylabel=ylabel,
+                stem=fig_dir / f"paired_diff_uncond_{name}_{family_name}",
+                rng_seed=args.rng_seed,
+            )
+            if not bydepth.empty:
+                extra_plots.plot_paired_diff_bydepth(
+                    bydepth, variants=variants, runs=runs, reference_run=reference_run,
+                    title=f"Paired Δ vs {reference_run} by target_depth — {ylabel} ({family_name})",
+                    ylabel=ylabel,
+                    stem=fig_dir / f"paired_diff_uncond_{name}_{family_name}_bydepth",
+                )
+
+            per_target_diffs.assign(metric=name, source=family_name).to_csv(
+                stats_dir / f"paired_diff_uncond_{name}_{family_name}_per_target.csv",
+                index=False,
+            )
+            if not bydepth.empty:
+                bydepth.to_csv(
+                    stats_dir / f"paired_diff_uncond_{name}_{family_name}_bydepth.csv",
+                    index=False,
+                )
+
+        # BH-FDR over this (source, unconditional_paired_diffs) family.
+        if family_summaries:
+            family_df = pd.concat(family_summaries, ignore_index=True)
+            adj_p, reject = extra_contrast.apply_bh_fdr(family_pvals, alpha=args.alpha)
+            adj_lookup = {k: (p, r) for k, p, r in zip(family_keys, adj_p, reject)}
+            family_df["wilcoxon_p_adj_bh"] = [
+                adj_lookup.get((m, v), (float("nan"), False))[0]
+                for m, v in zip(family_df["metric"], family_df["variant"])
+            ]
+            family_df["reject_bh"] = [
+                adj_lookup.get((m, v), (float("nan"), False))[1]
+                for m, v in zip(family_df["metric"], family_df["variant"])
+            ]
+            family_df.to_csv(
+                stats_dir / f"paired_diff_uncond_summary_{family_name}_bhfdr.csv",
+                index=False,
+            )
 
 
 # ---------------------------------------------------------------------------

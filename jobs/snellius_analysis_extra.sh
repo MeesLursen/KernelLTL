@@ -1,24 +1,28 @@
 #!/bin/bash
-#SBATCH --job-name=kernelltl_analysis
-#SBATCH --output=logs/kernelltl_analysis_%j.out
-#SBATCH --error=logs/kernelltl_analysis_%j.err
-#SBATCH --time=03:00:00
+#SBATCH --job-name=kernelltl_analysis_extra
+#SBATCH --output=logs/kernelltl_analysis_extra_%j.out
+#SBATCH --error=logs/kernelltl_analysis_extra_%j.err
+#SBATCH --time=02:00:00
 #SBATCH --partition=gpu_a100
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=18
 #SBATCH --mem=120G
 
 # ==========================================================================
-# Snellius CPU analysis script for KernelLTL
+# Snellius CPU analysis script for KernelLTL — extra validation analyses
 #
-# Runs:
-#   1. analyze_dataset.py  — dataset characterisation (depth/length/operator
-#      distributions, tree shape-bias diagnostics via Boltzmann P1 reference)
-#   2. visualize_validation.py — cross-model comparison of validation outputs
-#      across all 5 trained models (bars, ECDFs, per-depth, Pareto, radar,
-#      paired statistics with bootstrap CIs)
+# Runs visualize_validation_extra.py, which produces the conditional
+# descriptive metrics (depth/length gaps and semantic distance sliced by
+# correctness), top-K diagnostics (pass@k', distinct-correct counts),
+# target-side operator analysis (KL, decomposition, log-odds, logistic
+# regression), and the contrast studies (per-target paired diffs, pairwise
+# Cohen's κ + McNemar agreement matrices, pairwise output-similarity heatmap)
+# across the same five trained models as the main analysis.
 #
-# Pure CPU job — no GPU required.
+# Pure CPU workload; the partition request matches snellius_analysis.sh for
+# consistency, no GPU is actually used. Outputs go under the same
+# ``_analysis`` directory as the main script, in ``figures/extra/`` and
+# ``stats/extra/`` subdirectories.
 # ==========================================================================
 
 set -e
@@ -36,15 +40,6 @@ TOKENIZER_DIR="$HOME_DIR/artifacts/tokenizer"
 
 ANALYSIS_OUTPUT_DIR="$PROJECT_DIR/artifacts/validation/_analysis"
 
-# Each entry is "split_name:dataset_path" — the split name becomes the
-# output subdirectory under dataset_analysis/.
-DATASET_SPLITS=(
-    # "validation:$PROJECT_DIR/artifacts/datasets/validation"
-    # "finetune:$PROJECT_DIR/artifacts/datasets/finetune/train"
-    "stage4_train:$PROJECT_DIR/artifacts/datasets/stage4/train"
-    "stage4_eval:$PROJECT_DIR/artifacts/datasets/stage4/eval"
-)
-
 RUNS=(
     "ce_base"
     "ce_finetune"
@@ -54,9 +49,8 @@ RUNS=(
 )
 REFERENCE_RUN="ce_base"
 
-BOOTSTRAP_N=10000
+BOOTSTRAP_N=2000
 ALPHA=0.05
-MC_SHAPE_N=100000
 RNG_SEED=0
 DPI=200
 
@@ -65,7 +59,7 @@ DPI=200
 # ==========================================================================
 
 echo "=============================================="
-echo "KernelLTL Analysis"
+echo "KernelLTL Extra Validation Analysis"
 echo "Job ID:    $SLURM_JOB_ID"
 echo "Node:      $SLURMD_NODENAME"
 echo "CPUs:      $SLURM_CPUS_PER_TASK"
@@ -97,53 +91,21 @@ echo "Python: $(python --version)"
 echo "PYTHONPATH: $PYTHONPATH"
 
 # ==========================================================================
-# 1. DATASET ANALYSIS
+# EXTRA VALIDATION ANALYSIS
 # ==========================================================================
 
 echo ""
 echo "=============================================="
-echo "Step 1: Dataset analysis"
-echo "  Splits: ${DATASET_SPLITS[*]}"
-echo "=============================================="
-
-STEP1_START=$(date +%s)
-
-for SPLIT_ENTRY in "${DATASET_SPLITS[@]}"; do
-    SPLIT_NAME="${SPLIT_ENTRY%%:*}"
-    SPLIT_PATH="${SPLIT_ENTRY#*:}"
-    SPLIT_OUT="$ANALYSIS_OUTPUT_DIR/dataset_analysis/$SPLIT_NAME"
-    echo "  Analysing split '$SPLIT_NAME' -> $SPLIT_PATH"
-    mkdir -p "$SPLIT_OUT"
-    python -u scripts/analyze_dataset.py \
-        --dataset-dir "$SPLIT_PATH" \
-        --output-dir "$SPLIT_OUT" \
-        --mc-shape-n "$MC_SHAPE_N" \
-        --rng-seed "$RNG_SEED" \
-        --dpi "$DPI" \
-        --mmap-satisfactions
-done
-
-STEP1_END=$(date +%s)
-STEP1_DUR=$((STEP1_END - STEP1_START))
-echo "Dataset analysis done in $((STEP1_DUR / 60))m $((STEP1_DUR % 60))s"
-
-# ==========================================================================
-# 2. VALIDATION ANALYSIS
-# ==========================================================================
-
-echo ""
-echo "=============================================="
-echo "Step 2: Validation analysis"
+echo "Running visualize_validation_extra.py"
 echo "  Runs:      ${RUNS[*]}"
 echo "  Reference: $REFERENCE_RUN"
 echo "  Output:    $ANALYSIS_OUTPUT_DIR"
 echo "=============================================="
 
-STEP2_START=$(date +%s)
+START=$(date +%s)
 
-python -u scripts/visualize_validation.py \
+python -u scripts/visualize_validation_extra.py \
     --validation-root "$VALIDATION_ROOT" \
-    --dataset-dir     "$DATASET_DIR" \
     --output-dir      "$ANALYSIS_OUTPUT_DIR" \
     --runs            "${RUNS[@]}" \
     --reference-run   "$REFERENCE_RUN" \
@@ -151,25 +113,24 @@ python -u scripts/visualize_validation.py \
     --bootstrap-n     "$BOOTSTRAP_N" \
     --alpha           "$ALPHA" \
     --rng-seed        "$RNG_SEED" \
-    --dpi             "$DPI"
+    --dpi             "$DPI" \
+    --logistic-regularized-fallback
 
-STEP2_END=$(date +%s)
-STEP2_DUR=$((STEP2_END - STEP2_START))
-echo "Validation analysis done in $((STEP2_DUR / 60))m $((STEP2_DUR % 60))s"
+END=$(date +%s)
+DURATION=$((END - START))
 
 # ==========================================================================
 # SUMMARY
 # ==========================================================================
 
-TOTAL_DUR=$((STEP2_END - STEP1_START))
 echo ""
 echo "=============================================="
-echo "All analyses complete!"
-echo "Total time: $((TOTAL_DUR / 60))m $((TOTAL_DUR % 60))s"
-echo "End: $(date)"
+echo "Extra analysis complete!"
+echo "Duration:  $((DURATION / 60))m $((DURATION % 60))s"
+echo "End:       $(date)"
 echo ""
 echo "Outputs:"
-echo "  Dataset analysis: $DATASET_ANALYSIS_OUTPUT_DIR"
-echo "  Validation:       $ANALYSIS_OUTPUT_DIR"
-echo "  Summary:          $ANALYSIS_OUTPUT_DIR/summary.md"
+echo "  Figures:  $ANALYSIS_OUTPUT_DIR/figures/extra/"
+echo "  Stats:    $ANALYSIS_OUTPUT_DIR/stats/extra/"
+echo "  Metadata: $ANALYSIS_OUTPUT_DIR/run_metadata_extra.json"
 echo "=============================================="

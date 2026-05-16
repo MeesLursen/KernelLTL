@@ -129,35 +129,106 @@ def build_target_operator_frame_topk(
 
 
 # ---------------------------------------------------------------------------
-# KL(P_op | correct ‖ P_op | wrong)
+# KL(P_op | correct ‖ P_op | wrong) — Case B: per-operator Bernoulli, summed
 # ---------------------------------------------------------------------------
 
 
+def _binary_kl(p: float, q: float) -> float:
+    """KL( Bernoulli(p) ‖ Bernoulli(q) ), in nats. Always >= 0."""
+    return p * math.log(p / q) + (1.0 - p) * math.log((1.0 - p) / (1.0 - q))
+
+
 def compute_kl_per_run(df_op: pd.DataFrame, *, runs: list[str]) -> pd.DataFrame:
-    """KL on per-token operator frequencies, between the correct and wrong subsets."""
+    """Case-B operator divergence between the correct and wrong target subsets.
+
+    Each operator is treated as an independent presence indicator
+    (``has_OP``). Under that Naive-Bayes / class-conditional independence
+    factorization the KL between the two product-of-Bernoulli laws is additive:
+
+        KL = sum_op  KL( Bern(pi_op^correct) ‖ Bern(pi_op^wrong) )
+
+    so ``contrib_OP`` is now a *full binary KL per operator* and is
+    individually >= 0 (no sign flips, unlike the old categorical-token
+    pointwise summand). ``pi`` is Haldane-smoothed ((k + 0.5) / (n + 1)) so it
+    never hits 0 or 1.
+    """
     rows = []
     for r in runs:
         rdf = df_op[df_op["run"] == r]
         correct = rdf[rdf["correct"] == 1]
         wrong = rdf[rdf["correct"] == 0]
-        if correct.empty or wrong.empty:
+        n_c, n_w = len(correct), len(wrong)
+        if n_c == 0 or n_w == 0:
             continue
-        c_counts = np.array([correct[f"count_{op}"].sum() for op in OPERATORS], float)
-        w_counts = np.array([wrong[f"count_{op}"].sum() for op in OPERATORS], float)
-        if c_counts.sum() == 0 or w_counts.sum() == 0:
-            continue
-        eps = 1e-10
-        p_c = (c_counts + eps) / (c_counts + eps).sum()
-        p_w = (w_counts + eps) / (w_counts + eps).sum()
-        kl = float(np.sum(p_c * np.log(p_c / p_w)))
-        per_op_contrib = (p_c * np.log(p_c / p_w)).tolist()
+        per_op_contrib = {}
+        pi_c = {}
+        pi_w = {}
+        for op in OPERATORS:
+            k_c = float(correct[f"has_{op}"].sum())
+            k_w = float(wrong[f"has_{op}"].sum())
+            p_c = (k_c + 0.5) / (n_c + 1.0)
+            p_w = (k_w + 0.5) / (n_w + 1.0)
+            pi_c[op] = p_c
+            pi_w[op] = p_w
+            per_op_contrib[op] = _binary_kl(p_c, p_w)
+        kl = float(sum(per_op_contrib.values()))
         rows.append({
             "run": r,
             "kl_correct_to_wrong": kl,
-            "n_correct": int(len(correct)),
-            "n_wrong": int(len(wrong)),
-            **{f"contrib_{op}": per_op_contrib[i] for i, op in enumerate(OPERATORS)},
+            "n_correct": int(n_c),
+            "n_wrong": int(n_w),
+            **{f"contrib_{op}": per_op_contrib[op] for op in OPERATORS},
+            **{f"pi_correct_{op}": pi_c[op] for op in OPERATORS},
+            **{f"pi_wrong_{op}": pi_w[op] for op in OPERATORS},
         })
+    return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
+# Case-B diagnostic: per-subset 8x8 operator-presence co-occurrence (phi)
+# ---------------------------------------------------------------------------
+
+
+def compute_operator_cooccurrence(
+    df_op: pd.DataFrame, *, runs: list[str]
+) -> pd.DataFrame:
+    """Per-(run, subset) phi-correlation between ``has_OP`` indicators.
+
+    The Case-B KL assumes operator presence is conditionally independent given
+    correctness. This is the diagnostic for that assumption: for each run and
+    each subset (correct / wrong) we compute the 8x8 phi (= Pearson on the 0/1
+    indicators) matrix. Off-diagonal phi ~ 0 in *both* subsets => the
+    Naive-Bayes factorization is faithful and the summed-Bernoulli KL
+    approximates the true joint KL. A subset with non-trivial off-diagonal
+    structure, or a structure that *differs* between correct and wrong, is
+    exactly the interaction term Case B discards.
+
+    Returned long-form: run, subset, op_a, op_b, phi, n. ``phi`` is NaN where
+    an operator has zero variance in that subset (always or never present).
+    """
+    rows = []
+    subsets = [("correct", 1), ("wrong", 0)]
+    for r in runs:
+        rdf = df_op[df_op["run"] == r]
+        for sub_name, flag in subsets:
+            sdf = rdf[rdf["correct"] == flag]
+            n = len(sdf)
+            if n == 0:
+                continue
+            mat = sdf[[f"has_{op}" for op in OPERATORS]].to_numpy(dtype=float)
+            std = mat.std(axis=0)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                corr = np.corrcoef(mat, rowvar=False)
+            for i, op_a in enumerate(OPERATORS):
+                for j, op_b in enumerate(OPERATORS):
+                    phi = corr[i, j]
+                    if std[i] == 0.0 or std[j] == 0.0:
+                        phi = float("nan")
+                    rows.append({
+                        "run": r, "subset": sub_name,
+                        "op_a": op_a, "op_b": op_b,
+                        "phi": float(phi), "n": int(n),
+                    })
     return pd.DataFrame(rows)
 
 

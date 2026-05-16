@@ -183,8 +183,8 @@ def plot_kl_per_run(
     colors = [pal[r] for r in sub["run"]]
     fig, ax = plt.subplots(figsize=(7, 4.5))
     ax.bar(sub["run"].astype(str), sub["kl_correct_to_wrong"], color=colors)
-    ax.set_ylabel("KL(P_op | correct ‖ P_op | wrong)")
-    ax.set_title("Operator-distribution divergence between correct & wrong targets")
+    ax.set_ylabel("Σ_op KL( Bern(π_op|correct) ‖ Bern(π_op|wrong) )  [nats]")
+    ax.set_title("Operator-presence divergence between correct & wrong targets (Case B)")
     ax.tick_params(axis="x", rotation=20)
     fig.tight_layout()
     _save(fig, stem)
@@ -196,7 +196,9 @@ def plot_kl_contribution_per_run(
     runs: list[str],
     stem: Path,
 ) -> None:
-    """Per-operator contribution to the per-run KL: P(op|correct) · log(P(op|correct)/P(op|wrong))."""
+    """Per-operator contribution to the per-run KL: the full binary KL
+    KL( Bern(π_op|correct) ‖ Bern(π_op|wrong) ) for each operator (Case B,
+    all contributions >= 0)."""
     sub = kl_df[kl_df["run"].isin(runs)].copy()
     if sub.empty:
         return
@@ -222,10 +224,71 @@ def plot_kl_contribution_per_run(
     ax.axhline(0, color="black", linewidth=0.5)
     ax.set_xticks(x_pos)
     ax.set_xticklabels(OPERATORS)
-    ax.set_ylabel("P(op|correct) · log( P(op|correct) / P(op|wrong) )")
-    ax.set_title("Per-operator contribution to KL(correct ‖ wrong)")
+    ax.set_ylabel("KL( Bern(π_op|correct) ‖ Bern(π_op|wrong) )  [nats]")
+    ax.set_title("Per-operator binary KL contribution (Case B, all ≥ 0)")
     ax.legend(loc="best", fontsize=8)
     fig.tight_layout()
+    _save(fig, stem)
+
+
+def plot_operator_cooccurrence(
+    cooc_df: pd.DataFrame,
+    *,
+    runs: list[str],
+    stem: Path,
+) -> None:
+    """Grid of 8x8 phi heatmaps: rows = runs, cols = [correct, wrong, Δ].
+
+    Δ = phi(correct) − phi(wrong) is the differential co-occurrence structure,
+    i.e. the interaction term the Case-B KL discards. Near-zero off-diagonals
+    in the correct/wrong panels => the Naive-Bayes factorization is faithful;
+    a structured Δ panel => Case B is missing real signal.
+    """
+    sub = cooc_df[cooc_df["run"].isin(runs)].copy()
+    if sub.empty:
+        return
+    present = [r for r in runs if r in set(sub["run"])]
+    if not present:
+        return
+    n_op = len(OPERATORS)
+
+    def _mat(run: str, subset: str) -> np.ndarray:
+        s = sub[(sub["run"] == run) & (sub["subset"] == subset)]
+        m = np.full((n_op, n_op), np.nan)
+        idx = {op: i for i, op in enumerate(OPERATORS)}
+        for _, row in s.iterrows():
+            m[idx[row["op_a"]], idx[row["op_b"]]] = row["phi"]
+        return m
+
+    fig, axes = plt.subplots(
+        len(present), 3,
+        figsize=(13.5, 4.2 * len(present)),
+        squeeze=False,
+    )
+    col_titles = ["phi | correct", "phi | wrong", "Δ phi (correct − wrong)"]
+    for ri, run in enumerate(present):
+        mc = _mat(run, "correct")
+        mw = _mat(run, "wrong")
+        md = mc - mw
+        for ci, (mat, cmap, vlim) in enumerate(
+            [(mc, "coolwarm", 1.0), (mw, "coolwarm", 1.0), (md, "PuOr", 1.0)]
+        ):
+            ax = axes[ri][ci]
+            im = ax.imshow(mat, cmap=cmap, vmin=-vlim, vmax=vlim, aspect="equal")
+            ax.set_xticks(range(n_op))
+            ax.set_yticks(range(n_op))
+            ax.set_xticklabels(OPERATORS, rotation=45, ha="right", fontsize=7)
+            ax.set_yticklabels(OPERATORS, fontsize=7)
+            if ri == 0:
+                ax.set_title(col_titles[ci], fontsize=10)
+            if ci == 0:
+                ax.set_ylabel(run, fontsize=9)
+            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.suptitle(
+        "Operator-presence co-occurrence (Case-B independence diagnostic)",
+        fontsize=12,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.98))
     _save(fig, stem)
 
 
@@ -412,6 +475,7 @@ def plot_paired_diff_conditional(
     summary_df: pd.DataFrame,
     *,
     variants: list[str],
+    runs: list[str],
     reference_run: str,
     title: str,
     ylabel: str,
@@ -420,10 +484,15 @@ def plot_paired_diff_conditional(
     scatter_max: int = 2000,
 ) -> None:
     """One sub-axis per variant. Jittered scatter of per-target paired
-    differences + mean with bootstrap CI errorbar from ``summary_df``."""
+    differences + mean with bootstrap CI errorbar from ``summary_df``.
+
+    Palette is built from the full ``runs`` list so each variant keeps its
+    canonical colour regardless of how many variants are being plotted here.
+    """
     if per_target_diffs.empty or summary_df.empty:
         return
     rng = np.random.default_rng(rng_seed)
+    pal = _run_palette(runs)
     n = len(variants)
     fig, axes = plt.subplots(1, n, figsize=(3.5 * n, 4.5), sharey=True, squeeze=False)
     axes = axes[0]
@@ -441,7 +510,7 @@ def plot_paired_diff_conditional(
         lo = float(s["ci_low"].iloc[0])
         hi = float(s["ci_high"].iloc[0])
         ax.errorbar([0], [m], yerr=[[m - lo], [hi - m]], fmt="o",
-                    color="black", capsize=4, markersize=6)
+                    color=pal[variant], capsize=4, markersize=6)
         ax.axhline(0, color="red", linestyle="--", linewidth=1)
         ax.set_xticks([])
         ax.set_xlim(-0.6, 0.6)
@@ -457,15 +526,20 @@ def plot_paired_diff_bydepth(
     bydepth_df: pd.DataFrame,
     *,
     variants: list[str],
+    runs: list[str],
     reference_run: str,
     title: str,
     ylabel: str,
     stem: Path,
 ) -> None:
-    """Stratified paired diffs by target_depth — line + shaded CI per variant."""
+    """Stratified paired diffs by target_depth — line + shaded CI per variant.
+
+    Palette is built from the full ``runs`` list so each variant keeps its
+    canonical colour across figures (consistent with the main analysis).
+    """
     if bydepth_df.empty:
         return
-    pal = _run_palette(variants)
+    pal = _run_palette(runs)
     fig, ax = plt.subplots(figsize=(7, 4.5))
     for v in variants:
         sub = bydepth_df[bydepth_df["variant"] == v].sort_values("target_depth")
