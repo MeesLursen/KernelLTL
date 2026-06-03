@@ -1,5 +1,2 @@
 __pycache__/
-.github/
-.ltlkernel/
-test.py
-.python-version
+datasets/validation/
