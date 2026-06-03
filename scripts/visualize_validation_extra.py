@@ -29,6 +29,7 @@ import pandas as pd
 
 from scripts._validation_analysis import (
     extra_contrast, extra_metrics, extra_plots, loaders, operator_analysis,
+    operator_crossmodel,
 )
 
 
@@ -137,6 +138,12 @@ def main() -> None:
         fig_dir=fig_dir,
         stats_dir=stats_dir,
         args=args,
+    )
+
+    print("[extra] computing fair cross-model operator comparison "
+          "(pooled interaction + AME + stratified McNemar)...", file=sys.stderr)
+    _run_crossmodel_operator_comparison(
+        df_greedy, df_topk_flat, runs, fig_dir, stats_dir, args,
     )
 
     metadata = {
@@ -599,7 +606,7 @@ def _run_unconditional_paired_diffs(
             if df_src is None or value_col not in df_src.columns:
                 continue
             cond_fn = extra_metrics.cond_valid if require_valid else extra_metrics.cond_always
-            per_target = extra_metrics.compute_per_target_conditional_value(
+            per_target = extra_contrast.compute_per_target_conditional_value(
                 df_src,
                 value_col=value_col,
                 condition_fn=cond_fn,
@@ -613,6 +620,13 @@ def _run_unconditional_paired_diffs(
             bydepth = extra_contrast.compute_paired_diff_by_depth(
                 per_target, reference_run=reference_run, variants=variants,
                 n_bootstrap=args.bootstrap_n, alpha=args.alpha, rng_seed=args.rng_seed,
+            )
+
+            # Avoid a redundant "_topk_topk" when the metric name already
+            # encodes the source (e.g. "semantic_distance_mean_topk").
+            stem_label = (
+                name if name.endswith(f"_{family_name}")
+                else f"{name}_{family_name}"
             )
 
             summary = summary.assign(metric=name, source=family_name,
@@ -629,7 +643,7 @@ def _run_unconditional_paired_diffs(
                 variants=variants, runs=runs, reference_run=reference_run,
                 title=f"Paired Δ vs {reference_run} — {ylabel} ({family_name})",
                 ylabel=ylabel,
-                stem=fig_dir / f"paired_diff_uncond_{name}_{family_name}",
+                stem=fig_dir / f"paired_diff_uncond_{stem_label}",
                 rng_seed=args.rng_seed,
             )
             if not bydepth.empty:
@@ -637,16 +651,16 @@ def _run_unconditional_paired_diffs(
                     bydepth, variants=variants, runs=runs, reference_run=reference_run,
                     title=f"Paired Δ vs {reference_run} by target_depth — {ylabel} ({family_name})",
                     ylabel=ylabel,
-                    stem=fig_dir / f"paired_diff_uncond_{name}_{family_name}_bydepth",
+                    stem=fig_dir / f"paired_diff_uncond_{stem_label}_bydepth",
                 )
 
             per_target_diffs.assign(metric=name, source=family_name).to_csv(
-                stats_dir / f"paired_diff_uncond_{name}_{family_name}_per_target.csv",
+                stats_dir / f"paired_diff_uncond_{stem_label}_per_target.csv",
                 index=False,
             )
             if not bydepth.empty:
                 bydepth.to_csv(
-                    stats_dir / f"paired_diff_uncond_{name}_{family_name}_bydepth.csv",
+                    stats_dir / f"paired_diff_uncond_{stem_label}_bydepth.csv",
                     index=False,
                 )
 
@@ -688,6 +702,179 @@ def _bh_fdr_operator_families(
     out["p_value_adj_bh"] = adj_p
     out["reject_bh"] = reject
     return out
+
+
+# ---------------------------------------------------------------------------
+# Fair cross-model operator comparison
+# ---------------------------------------------------------------------------
+
+
+def _run_crossmodel_operator_comparison(
+    df_greedy: pd.DataFrame,
+    df_topk_flat: pd.DataFrame,
+    runs: list[str],
+    fig_dir: Path,
+    stats_dir: Path,
+    args: argparse.Namespace,
+) -> None:
+    """Pooled model x has_op interaction (cluster-robust by formula_id) + AME
+    differences + operator-stratified McNemar, on the shared common-target set.
+
+    BH-FDR family convention: one family per (source, outcome) for the
+    interaction p-values, and one per (source, outcome) for the stratified
+    McNemar p-values.
+    """
+    reference_run = args.reference_run
+
+    df_op_greedy = operator_analysis.build_target_operator_frame(df_greedy)
+    df_op_topk = operator_analysis.build_target_operator_frame_topk(
+        df_topk_flat, df_greedy,
+    )
+
+    # (tag, df_op, outcome_col, outcome_label)
+    cases = [
+        ("greedy_correct", df_op_greedy, "correct",
+         "greedy correctness"),
+        ("greedy_invalid", df_op_greedy, "invalid",
+         "greedy invalidity (brittleness attribution)"),
+        ("topk_any_correct", df_op_topk, "correct",
+         "top-K any-correct"),
+    ]
+
+    for tag, df_op, outcome_col, outcome_label in cases:
+        if outcome_col not in df_op.columns:
+            continue
+        out = operator_crossmodel.fit_pooled_interaction(
+            df_op, runs=runs, reference_run=reference_run,
+            outcome_col=outcome_col, alpha=args.alpha,
+            n_sim=max(1000, args.bootstrap_n // 2), rng_seed=args.rng_seed,
+        )
+        interactions = out["interactions"]
+        ame = out["ame"]
+
+        if not interactions.empty:
+            # BH-FDR over the model x predictor interaction family for this
+            # (source, outcome) — only the has_OP interactions (operator tests).
+            op_mask = interactions["predictor"].str.startswith("has_")
+            op_inter = interactions[op_mask].copy()
+            adj_p, reject = extra_contrast.apply_bh_fdr(
+                op_inter["p_value"].tolist(), alpha=args.alpha,
+            )
+            op_inter["p_value_adj_bh"] = adj_p
+            op_inter["reject_bh"] = reject
+            # Keep covariate interactions unadjusted but in the CSV.
+            cov_inter = interactions[~op_mask].copy()
+            cov_inter["p_value_adj_bh"] = float("nan")
+            cov_inter["reject_bh"] = False
+            interactions_out = pd.concat([op_inter, cov_inter],
+                                         ignore_index=True)
+            interactions_out.insert(0, "source_outcome", tag)
+            interactions_out.to_csv(
+                stats_dir / f"crossmodel_interaction_{tag}.csv", index=False,
+            )
+            extra_plots.plot_crossmodel_interaction_forest(
+                op_inter, runs=runs, reference_run=reference_run,
+                alpha=args.alpha,
+                stem=fig_dir / f"crossmodel_interaction_{tag}",
+                outcome_label=outcome_label,
+            )
+
+        # All-pairs interaction contrasts (own BH family per source,outcome).
+        inter_pw = out.get("interactions_pairwise", pd.DataFrame())
+        if not inter_pw.empty:
+            adj_p, reject = extra_contrast.apply_bh_fdr(
+                inter_pw["p_value"].tolist(), alpha=args.alpha,
+            )
+            inter_pw = inter_pw.copy()
+            inter_pw["p_value_adj_bh"] = adj_p
+            inter_pw["reject_bh"] = reject
+            inter_pw.insert(0, "source_outcome", tag)
+            inter_pw.to_csv(
+                stats_dir / f"crossmodel_interaction_pairwise_{tag}.csv",
+                index=False,
+            )
+            extra_plots.plot_crossmodel_pairwise_heatmaps(
+                inter_pw, value_col="coef", sig_col="p_value_adj_bh",
+                runs=runs, alpha=args.alpha,
+                title=f"Pairwise interaction Δ log-odds slope ({outcome_label})",
+                stem=fig_dir / f"crossmodel_interaction_pairwise_{tag}",
+            )
+
+        if not ame.empty:
+            ame_out = ame.copy()
+            ame_out.insert(0, "source_outcome", tag)
+            ame_out["n_obs"] = out["n_obs"]
+            ame_out["n_targets"] = out["n_targets"]
+            ame_out.to_csv(
+                stats_dir / f"crossmodel_ame_{tag}.csv", index=False,
+            )
+            extra_plots.plot_crossmodel_ame_forest(
+                ame, runs=runs, reference_run=reference_run,
+                alpha=args.alpha,
+                stem=fig_dir / f"crossmodel_ame_{tag}",
+                outcome_label=outcome_label,
+            )
+
+        # All-pairs AME differences (CI-based; no p-value family).
+        ame_pw = out.get("ame_pairwise", pd.DataFrame())
+        if not ame_pw.empty:
+            ame_pw = ame_pw.copy()
+            ame_pw.insert(0, "source_outcome", tag)
+            ame_pw.to_csv(
+                stats_dir / f"crossmodel_ame_pairwise_{tag}.csv", index=False,
+            )
+            extra_plots.plot_crossmodel_pairwise_heatmaps(
+                ame_pw, value_col="ame_diff", sig_col=None,
+                runs=runs, alpha=args.alpha,
+                title=f"Pairwise AME difference on P(outcome) ({outcome_label})",
+                stem=fig_dir / f"crossmodel_ame_pairwise_{tag}",
+                cmap="PuOr_r",
+            )
+
+        # Operator-stratified McNemar cross-check (assumption-light).
+        strat = operator_crossmodel.operator_stratified_mcnemar(
+            df_op, runs=runs, reference_run=reference_run,
+            outcome_col=outcome_col,
+        )
+        if not strat.empty:
+            adj_p, reject = extra_contrast.apply_bh_fdr(
+                strat["mcnemar_p"].tolist(), alpha=args.alpha,
+            )
+            strat["mcnemar_p_adj_bh"] = adj_p
+            strat["mcnemar_reject_bh"] = reject
+            strat.insert(0, "source_outcome", tag)
+            strat.to_csv(
+                stats_dir / f"crossmodel_stratified_mcnemar_{tag}.csv",
+                index=False,
+            )
+            extra_plots.plot_stratified_mcnemar(
+                strat, runs=runs, reference_run=reference_run,
+                alpha=args.alpha,
+                stem=fig_dir / f"crossmodel_stratified_mcnemar_{tag}",
+                outcome_label=outcome_label,
+            )
+
+        # All-pairs operator-stratified McNemar (own BH family).
+        strat_pw = operator_crossmodel.operator_stratified_mcnemar_pairwise(
+            df_op, runs=runs, outcome_col=outcome_col,
+        )
+        if not strat_pw.empty:
+            adj_p, reject = extra_contrast.apply_bh_fdr(
+                strat_pw["mcnemar_p"].tolist(), alpha=args.alpha,
+            )
+            strat_pw["mcnemar_p_adj_bh"] = adj_p
+            strat_pw["mcnemar_reject_bh"] = reject
+            strat_pw.insert(0, "source_outcome", tag)
+            strat_pw.to_csv(
+                stats_dir / f"crossmodel_stratified_mcnemar_pairwise_{tag}.csv",
+                index=False,
+            )
+            extra_plots.plot_crossmodel_pairwise_heatmaps(
+                strat_pw, value_col="mcnemar_effect",
+                sig_col="mcnemar_p_adj_bh", runs=runs, alpha=args.alpha,
+                title=f"Pairwise operator-stratified McNemar effect ({outcome_label})",
+                stem=fig_dir / f"crossmodel_stratified_mcnemar_pairwise_{tag}",
+            )
 
 
 if __name__ == "__main__":

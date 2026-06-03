@@ -23,7 +23,9 @@ from scripts._validation_analysis.extra_metrics import bootstrap_mean_ci
 
 
 OPERATORS: list[str] = ["NOT", "AND", "OR", "IMPLIES", "X", "F", "G", "U"]
-COVARIATES: list[str] = ["target_depth", "target_length_tokens"]
+# target_length_tokens dropped: its adjusted coefficient was consistently
+# ~0 (subsumed by target_depth, with which it is highly collinear).
+COVARIATES: list[str] = ["target_depth"]
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +90,7 @@ def build_target_operator_frame(df_greedy: pd.DataFrame) -> pd.DataFrame:
     across runs for a given ``formula_id``. We parse once per unique target.
     """
     cols = ["run", "formula_id", "target_formula_str", "target_depth",
-            "target_length_tokens", "is_semantic_equivalent"]
+            "target_length_tokens", "is_semantic_equivalent", "is_invalid"]
     df = df_greedy[cols].copy()
 
     # Parse unique targets only.
@@ -100,6 +102,7 @@ def build_target_operator_frame(df_greedy: pd.DataFrame) -> pd.DataFrame:
         df[f"has_{op}"] = (df[f"count_{op}"] > 0).astype(int)
 
     df["correct"] = df["is_semantic_equivalent"].astype(int)
+    df["invalid"] = df["is_invalid"].astype(int)
     return df
 
 
@@ -351,7 +354,7 @@ def compute_logistic_regression(
     use_regularized: bool = False,
 ) -> pd.DataFrame:
     """Per-run logistic regression with operator-presence indicators and
-    target-side covariates (``target_depth`` and ``target_length_tokens``).
+    the target-side covariate ``target_depth``.
 
     Returns per-(run, predictor) coefficient (log-odds) with CI. If standard fit
     fails to converge, falls back to L2-regularized estimation (and CIs are

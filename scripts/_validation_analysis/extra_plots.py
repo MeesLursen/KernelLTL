@@ -417,11 +417,11 @@ def plot_logistic_coefficient_forest(
     runs: list[str],
     stem: Path,
     include_covariates: bool = True,
-    title: str = "Logistic regression coefficients (target_depth + target_length_tokens covariates)",
+    title: str = "Logistic regression coefficients (target_depth covariate)",
 ) -> None:
     """Forest plot of logistic-regression coefficients per (run, operator).
-    Coefficients are on the log-odds scale, controlling for ``target_depth``,
-    ``target_length_tokens`` and the other operator indicators simultaneously.
+    Coefficients are on the log-odds scale, controlling for ``target_depth``
+    and the other operator indicators simultaneously.
     """
     sub = coef_df[coef_df["run"].isin(runs)].copy()
     if sub.empty:
@@ -704,5 +704,173 @@ def plot_log_odds_vs_regression_overlay(
         axes[j // ncols, j % ncols].axis("off")
     fig.suptitle("Marginal log-odds (open) vs adjusted regression coef (filled)",
                  y=1.02)
+    fig.tight_layout()
+    _save(fig, stem)
+
+
+# ---------------------------------------------------------------------------
+# Cross-model operator comparison (pooled interaction / AME / stratified McNemar)
+# ---------------------------------------------------------------------------
+
+
+def _crossmodel_forest(
+    df: pd.DataFrame,
+    *,
+    value_col: str,
+    lo_col: str,
+    hi_col: str,
+    runs: list[str],
+    reference_run: str,
+    sig_col: str | None,
+    alpha: float,
+    xlabel: str,
+    title: str,
+    stem: Path,
+) -> None:
+    """One panel per operator; y = variants, x = value with CI. Filled marker
+    if BH-adjusted significant (when sig_col given). Canonical run colours."""
+    if df.empty:
+        return
+    variants = [r for r in runs if r != reference_run]
+    pal = _run_palette(runs)
+    n = len(OPERATORS)
+    ncols = 4
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4.0 * ncols, 2.6 * nrows),
+                             squeeze=False, sharex=True)
+    y_pos = np.arange(len(variants))
+    for idx, op in enumerate(OPERATORS):
+        ax = axes[idx // ncols, idx % ncols]
+        sub = df[df["op"] == op].set_index("variant").reindex(variants)
+        if sub[value_col].isna().all():
+            ax.set_title(f"{op} (no data)", fontsize=9)
+            ax.set_yticks(y_pos); ax.set_yticklabels(variants, fontsize=7)
+            continue
+        for i, v in enumerate(variants):
+            if v not in sub.index or pd.isna(sub.loc[v, value_col]):
+                continue
+            m = float(sub.loc[v, value_col])
+            lo = float(sub.loc[v, lo_col]); hi = float(sub.loc[v, hi_col])
+            sig = (sig_col is not None and sig_col in sub.columns
+                   and not pd.isna(sub.loc[v, sig_col])
+                   and sub.loc[v, sig_col] < alpha)
+            ax.errorbar([m], [i], xerr=[[m - lo], [hi - m]], fmt="o",
+                        color=pal[v], capsize=3,
+                        markersize=7 if sig else 5,
+                        markerfacecolor=pal[v] if sig else "white",
+                        markeredgecolor=pal[v])
+        ax.axvline(0, color="red", linestyle="--", linewidth=1)
+        ax.set_yticks(y_pos); ax.set_yticklabels(variants, fontsize=7)
+        ax.set_title(op, fontsize=10)
+        ax.invert_yaxis()
+        ax.set_xlabel(xlabel, fontsize=8)
+    for j in range(n, nrows * ncols):
+        axes[j // ncols, j % ncols].axis("off")
+    fig.suptitle(title + ("  (filled = BH-FDR sig.)" if sig_col else ""), y=1.01)
+    fig.tight_layout()
+    _save(fig, stem)
+
+
+def plot_crossmodel_interaction_forest(interactions, *, runs, reference_run,
+                                       alpha, stem, outcome_label):
+    """model x has_OP interaction coefficients (log-odds diff vs reference)."""
+    df = interactions[interactions["predictor"].str.startswith("has_")].copy()
+    _crossmodel_forest(
+        df, value_col="coef", lo_col="ci_low", hi_col="ci_high",
+        runs=runs, reference_run=reference_run,
+        sig_col="p_value_adj_bh" if "p_value_adj_bh" in df.columns else "p_value",
+        alpha=alpha,
+        xlabel="Δ log-odds slope (variant − reference)",
+        title=f"Pooled interaction: operator effect difference vs {reference_run} ({outcome_label})",
+        stem=stem,
+    )
+
+
+def plot_crossmodel_ame_forest(ame, *, runs, reference_run, alpha, stem,
+                               outcome_label):
+    """AME difference (probability scale) variant − reference per operator."""
+    _crossmodel_forest(
+        ame, value_col="ame_diff", lo_col="ci_low", hi_col="ci_high",
+        runs=runs, reference_run=reference_run,
+        sig_col=None, alpha=alpha,
+        xlabel="Δ AME on P(outcome)  (variant − reference)",
+        title=f"AME difference vs {reference_run} ({outcome_label})",
+        stem=stem,
+    )
+
+
+def plot_stratified_mcnemar(strat, *, runs, reference_run, alpha, stem,
+                            outcome_label):
+    """Operator-stratified McNemar signed effect (variant − reference) with
+    BH-significance markers. One panel per operator."""
+    if strat.empty:
+        return
+    df = strat.rename(columns={"mcnemar_effect": "coef"})
+    df["ci_low"] = df["coef"]
+    df["ci_high"] = df["coef"]
+    _crossmodel_forest(
+        df, value_col="coef", lo_col="ci_low", hi_col="ci_high",
+        runs=runs, reference_run=reference_run,
+        sig_col="mcnemar_p_adj_bh" if "mcnemar_p_adj_bh" in df.columns else "mcnemar_p",
+        alpha=alpha,
+        xlabel="McNemar signed advantage (variant − reference)",
+        title=f"Operator-stratified McNemar vs {reference_run} ({outcome_label})",
+        stem=stem,
+    )
+
+
+def plot_crossmodel_pairwise_heatmaps(
+    df: pd.DataFrame,
+    *,
+    value_col: str,
+    sig_col: str | None,
+    runs: list[str],
+    alpha: float,
+    title: str,
+    stem: Path,
+    cmap: str = "RdBu_r",
+    vlim: float | None = None,
+) -> None:
+    """One N×N heatmap per operator (faceted). Cell (row a, col b) = signed
+    value of a vs b; the frame stores only unordered (run_a < run_b in `runs`
+    order) rows, the opposite triangle is filled by negation. `*` annotation
+    when sig_col < alpha (BH-adjusted)."""
+    if df.empty:
+        return
+    n = len(OPERATORS)
+    ncols = 4
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.6 * ncols, 3.0 * nrows),
+                             squeeze=False)
+    if vlim is None:
+        vlim = float(np.nanmax(np.abs(df[value_col].to_numpy()))) or 1.0
+    for idx, op in enumerate(OPERATORS):
+        ax = axes[idx // ncols, idx % ncols]
+        sub = df[df["op"] == op]
+        if sub.empty:
+            ax.axis("off"); continue
+        M = pd.DataFrame(np.nan, index=runs, columns=runs, dtype=float)
+        A = pd.DataFrame("", index=runs, columns=runs, dtype=object)
+        for _, r in sub.iterrows():
+            a, b, v = r["run_a"], r["run_b"], float(r[value_col])
+            star = ""
+            if sig_col and sig_col in sub.columns and not pd.isna(r[sig_col]) \
+                    and r[sig_col] < alpha:
+                star = "*"
+            M.loc[a, b] = v
+            M.loc[b, a] = -v
+            A.loc[a, b] = f"{v:+.2f}{star}"
+            A.loc[b, a] = f"{-v:+.2f}{star}"
+        sns.heatmap(M.astype(float), annot=A.values, fmt="", cmap=cmap,
+                    center=0, vmin=-vlim, vmax=vlim, square=True,
+                    cbar=False, ax=ax, linewidths=0.5, linecolor="white",
+                    annot_kws={"fontsize": 7})
+        ax.set_title(op, fontsize=10)
+        ax.set_xlabel(""); ax.set_ylabel("")
+        ax.tick_params(labelsize=6)
+    for j in range(n, nrows * ncols):
+        axes[j // ncols, j % ncols].axis("off")
+    fig.suptitle(title + ("  (* = BH-FDR sig.)" if sig_col else "")
+                 + "   cell = row vs column", y=1.01)
     fig.tight_layout()
     _save(fig, stem)
