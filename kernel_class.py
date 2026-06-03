@@ -230,7 +230,7 @@ class LTLKernel:
         - formulas: list of formulae length m.
         - all_traces: Tensor shape (N, AP, T), dtype=bool.
         Specifies self.F: 
-        - F: Tensor of shape (m, N) with ±1 values, dtype=int8.
+        - F: Tensor of shape (m, N) with {0,1} values, dtype=int8.
         """
         if self.traces is None and self.anchor_formulas is []:
             raise ValueError('Please first sample traces and formulas, using the sample_traces(N) and sample_formulas() method respectively.')
