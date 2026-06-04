@@ -64,12 +64,12 @@
     
     \section{Our Contributions}
 
-\chapter{Method: Datasets, Model Architecture, and Tokenization}
+\chapter{Method: Formulae, Datasets, Model Architecture, and Tokenization}
 
-    \section{LTL Formula representation}
+    \section{LTL Formula Representation}
     \begin{figure}
         \centering
-        \caption{Two formulae represented as trees.}
+        \caption{Abstract syntax trees for $p_1 \land p_2$ (left, depth $1$) and $p_1 \land (p_2 \, \text{U} \, p_3)$ (right, depth $2$). Rectangles denote operator nodes and circles denote atomic propositions. Each edge is labeled $+1$ to indicate its contribution to the depth of the root.}
         \vspace{8pt}
         \begin{tikzpicture}[baseline=(root.base)]
           \node (root) [draw, black, rectangle] {$\land$} 
@@ -86,7 +86,7 @@
             child { node [draw, black, circle] {$p_1$}
             edge from parent [->]
             node[above, sloped, font=\tiny] {+1} }
-            child { node [draw, black, rectangle] {$\rightarrow$}
+            child { node [draw, black, rectangle] {$\text{U}$}
                 child { node [draw, black, circle] {$p_2$}
                 edge from parent [->]
                 node[above, sloped, font=\tiny] {+1} }
@@ -99,11 +99,12 @@
         \end{tikzpicture}
         \label{fig:formula_ast}
     \end{figure}
-    If we think of a formula $\phi$ as a tree structure, where the root node is the formula's outermost connective and each of it leafs are propositional variables, then a formula's $maxdepth$ can be thought of as the maximum length that any one of its branches could have. For example, the formula 
-    \[p_1 \land p_2\]
-    has a $maxdepth$ of 1, because both branches starting from the root node $\land$ have depth 1. The formula
-    \[p_1 \land (p_2\rightarrow p_3)\]
-    has a $maxdepth$ of $2$, as the right branch starting from the root node $\land$ has depth 2. For a visual example, see Figure \ref{fig:formula_ast}.
+
+    We represent LTL formulae as abstract syntax trees (ASTs) using a typed class hierarchy rooted at a \texttt{Formula} base class. Each node in the tree is an instance of one of nine subclasses: \texttt{Atom} for atomic propositions $p_0, p_1, \ldots$; four unary operator classes \texttt{Not} $(\lnot)$, \texttt{Next} $(X)$, \texttt{Eventually} $(F)$, and \texttt{Globally} $(G)$, each wrapping a single child \texttt{Formula}; and four binary operator classes \texttt{And} $(\land)$, \texttt{Or} $(\lor)$, \texttt{Implies} $(\to)$, and \texttt{Until} $(U)$, each wrapping a left and right child \texttt{Formula}. Formulae are built by recursive composition: any \texttt{Formula} instance may serve as the child of any operator node, producing trees of arbitrary nesting depth. Two examples are shown in Figure~\ref{fig:formula_ast}.
+
+    Every subclass implements a \texttt{\_\_str\_\_} method that produces a fully parenthesised, prefix-notation string. Atoms are rendered as \texttt{p\_i}, unary operators as \texttt{(OP child)}, and binary operators as \texttt{(left OP right)}. This string is  \emph{canonical}, in the sense that there is an injective mapping from formulae to strings, and is used for syntactic deduplication and as the input sequence consumed by the tokeniser.
+
+    Two further properties are central to dataset construction. First, the \emph{depth} of a formula is defined recursively: an atom has depth $0$, and any operator node has depth $1 + \max(\text{child depths})$. This is illustrated in Figure~\ref{fig:formula_ast}: the left tree has depth $1$ and the right tree has depth $2$, as indicated by the $+1$ label on each edge. Depth is the primary measure of formula complexity and will be used in the sampler described in the following section to bound the complexity of the generated formulae. Second, \emph{syntactic equality} is defined as recursive node-wise comparison: two formulae are equal if and only if they are the same operator class with equal children at every position in the tree. By injectivity of the \texttt{\_\_str\_\_} function, we may also take syntactic equality between two formulae as the string equality of their respective \texttt{\_\_str\_\_} representations.
     
     \section{Formula Sampling and Dataset Generation} \label{alg:formula_sampling_algorithm}
 
