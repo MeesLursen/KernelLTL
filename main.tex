@@ -66,6 +66,45 @@
 
 \chapter{Method: Datasets, Model Architecture, and Tokenization}
 
+    \section{LTL Formula representation}
+    \begin{figure}
+        \centering
+        \caption{Two formulae represented as trees.}
+        \vspace{8pt}
+        \begin{tikzpicture}[baseline=(root.base)]
+          \node (root) [draw, black, rectangle] {$\land$} 
+            child { node [draw, black, circle] {$p_1$}
+            edge from parent [->]
+            node[above, sloped, font=\tiny] {+1} }
+            child { node [draw, black, circle] {$p_2$}
+            edge from parent [->]
+            node[above, sloped, font=\tiny] {+1} };
+        \end{tikzpicture}
+        \hspace{25pt}
+        \begin{tikzpicture}[baseline=(root.base)]
+          \node (root) [draw, black, rectangle] {$\land$} 
+            child { node [draw, black, circle] {$p_1$}
+            edge from parent [->]
+            node[above, sloped, font=\tiny] {+1} }
+            child { node [draw, black, rectangle] {$\rightarrow$}
+                child { node [draw, black, circle] {$p_2$}
+                edge from parent [->]
+                node[above, sloped, font=\tiny] {+1} }
+                child { node [draw, black, circle] {$p_3$}
+                edge from parent [->]
+                node[above, sloped, font=\tiny] {+1} }
+            edge from parent [->]
+            node[above, sloped, font=\tiny] {+1} 
+            };
+        \end{tikzpicture}
+        \label{fig:formula_ast}
+    \end{figure}
+    If we think of a formula $\phi$ as a tree structure, where the root node is the formula's outermost connective and each of it leafs are propositional variables, then a formula's $maxdepth$ can be thought of as the maximum length that any one of its branches could have. For example, the formula 
+    \[p_1 \land p_2\]
+    has a $maxdepth$ of 1, because both branches starting from the root node $\land$ have depth 1. The formula
+    \[p_1 \land (p_2\rightarrow p_3)\]
+    has a $maxdepth$ of $2$, as the right branch starting from the root node $\land$ has depth 2. For a visual example, see Figure \ref{fig:formula_ast}.
+    
     \section{Formula Sampling and Dataset Generation} \label{alg:formula_sampling_algorithm}
 
     \section{Model Architecture}
