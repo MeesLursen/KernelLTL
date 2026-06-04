@@ -69,22 +69,28 @@
     \section{Formula Sampling and Dataset Generation} \label{alg:formula_sampling_algorithm}
 
     \section{Model Architecture}
+    \texttt{LTLModel} is our custom model class, built on \textit{HuggingFace}'s \texttt{GPT2LMHeadModel} with cross-attention enabled, through which all forward-pass and generation calls are routed. \texttt{GPT2LMHeadModel} couples a standard GPT-2 transformer backbone with a linear LM Head, which projects each hidden state to a logit vector over the vocabulary at every decoding step (see the \textit{HuggingFace} \href{https://github.com/huggingface/transformers/blob/v4.57.0/src/transformers/models/gpt2/modeling_gpt2.py#L981}{source} for implementation details). The full architecture is illustrated in Figure~\ref{fig:ltl_model_architecture}.
+
     \begin{figure}[h]
     \centering
     \caption{Architecture diagram of GPT2LMHeadModel with cross attention enabled.}
     \includegraphics[width=1\linewidth]{Figures/LTLModel_Architecture.png}
     \label{fig:ltl_model_architecture}
     \end{figure}
-    In our setup we use a custom model class called \texttt{LTLModel}, which uses the \textit{HuggingFace} library's GPT2LMHeadModel with \texttt{cross-attention} enabled as a base model through which all of the forwarding and generation calls are routed with arguments adjusted to fit our setup. The GPT2LMHeadModel consists of a standard GPT2 model with a language modeling head (LM Head) on top, to produce the logits from the token embedding (see the HuggingFace \href{https://github.com/huggingface/transformers/blob/v4.57.0/src/transformers/models/gpt2/modeling_gpt2.py#L981}{GitHub repository} for details). 
     
-    The essential modification to the otherwise standard GPT2 architecture is the addition of a cross-attention component within each of the GPT2 blocks Figure \ref{fig:ltl_model_architecture} describes this difference. What this allows us to do is to have the decoder attend to the semantic embedding that we inject into the \texttt{encoder\_hidden\_states}. We use the semantic embedding vector to produce \textit{Key} and \textit{Value} vectors as follows. Let $\bm{E}_{sem}$ be the semantic-embedding vector and let $\bm{W}^{cross}_k$ be the cross-attention \textit{Key}-weights matrix. Then: 
-    \begin{equation}\bm{K}_{sem} = \bm{W}^{cross}_k E_{sem}\end{equation}
+    The single departure from the standard GPT-2 architecture is the insertion of a Cross Attention block within each Transformer Block. In the vanilla configuration, each Transformer Block applies a Layer Normalization followed by Masked Self Attention and a Residual Connection, then a second Layer Normalization followed by a Multi-Layer Perceptron and a final Residual Connection. Enabling cross-attention inserts a third sublayer between the first Residual Connection and the MLP: a Layer Normalization, Cross Attention, and Residual Connection. This Cross Attention block allows the decoder's hidden states to use the \emph{Semantic Embedding Hidden States} $\bm{E}_{sem} \in \mathbb{R}^M$ as an external conditioning signal, which encodes the target formula's satisfaction behavior. Rather than supplying the conditioning signal once at the input as a prefix, this mechanism makes it available to the decoder at every layer and at every decoding step.
     
-    \noindent where $\bm{K}_{sem}$ is the \textit{Key}-vector for the semantic embedding vector to which the decoder \textit{Query} attends. Similarly, let $\bm{W}^{cross}_v$ be the cross-attention \textit{Value}-weights matrix. Then:
-    
-    \begin{equation}\bm{V}_{sem} = \bm{W}^{cross}_v E_{sem}\end{equation}
-    
-    \noindent where $\bm{V}_{sem}$ is the \textit{Value}-vector from which the cross-attention update values are calculated that are added to the residual self-attention output.
+    The Cross Attention block operates as follows. Let $\bm{h}_t \in \mathbb{R}^d$ denote the decoder hidden state at position $t$ after the first Residual Connection. The \emph{Query}, \emph{Key}, and \emph{Value} vectors are produced by three separate learned projections:
+    \begin{align}
+        \bm{Q}_t     &= \bm{W}^{cross}_q \bm{h}_t \\
+        \bm{K}_{sem} &= \bm{W}^{cross}_k \bm{E}_{sem} \\
+        \bm{V}_{sem} &= \bm{W}^{cross}_v \bm{E}_{sem}
+    \end{align}
+    where $\bm{W}^{cross}_q \in \mathbb{R}^{d_k \times d}$ maps the decoder state to a query, and $\bm{W}^{cross}_k, \bm{W}^{cross}_v \in \mathbb{R}^{d_k \times M}$ project the Semantic Embedding Hidden States into a key and a value. The cross-attention weight at position $t$ is then:
+    \begin{equation}
+        a_t = \mathrm{softmax}\!\left(\frac{\bm{Q}_t \cdot \bm{K}_{sem}}{\sqrt{d_k}}\right)
+    \end{equation}
+    and the resulting output $a_t\,\bm{V}_{sem}$, projected back to the dimension of the decoder hidden states, is passed through the Residual Connection into the Layer Normalization preceding the Multi-Layer Perceptron. Because $\bm{E}_{sem}$ is presented as a single conditioning token, the softmax is computed over a single scalar and reduces to the trivial weight $a_t = 1$ for every $t$. Each decoder position therefore receives the same additive update $\bm{V}_{sem}$ at every Transformer Block, and the strength of this conditioning is governed entirely by the magnitude of $\bm{V}_{sem}$, which is bounded by $\Vert\bm{W}^{cross}_v\Vert\,\Vert\bm{E}_{sem}\Vert$. We return to the implications of this property in Section~\ref{sec:the_embedding_kernel}, where it motivates our choice of the covariance kernel over normalized alternatives.
 
     \section{Tokenization}
     
