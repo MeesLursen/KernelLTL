@@ -69,7 +69,7 @@
     \section{LTL Formula Representation}
     \begin{figure}
         \centering
-        \caption{Abstract syntax trees for $p_1 \land p_2$ (left, depth $1$) and $p_1 \land (p_2 \, \text{U} \, p_3)$ (right, depth $2$). Rectangles denote operator nodes and circles denote atomic propositions. Each edge is labeled $+1$ to indicate its contribution to the depth of the root.}
+        \caption{Abstract syntax trees for $p_1 \land p_2$ (left, depth $1$) and $p_1 \land (p_2 \, \Un \, p_3)$ (right, depth $2$). Rectangles denote operator nodes and circles denote atomic propositions. Each edge is labeled $+1$ to indicate its contribution to the depth of the root.}
         \vspace{8pt}
         \begin{tikzpicture}[baseline=(root.base)]
           \node (root) [draw, black, rectangle] {$\land$} 
@@ -86,7 +86,7 @@
             child { node [draw, black, circle] {$p_1$}
             edge from parent [->]
             node[above, sloped, font=\tiny] {+1} }
-            child { node [draw, black, rectangle] {$\text{U}$}
+            child { node [draw, black, rectangle] {$\Un$}
                 child { node [draw, black, circle] {$p_2$}
                 edge from parent [->]
                 node[above, sloped, font=\tiny] {+1} }
@@ -100,13 +100,55 @@
         \label{fig:formula_ast}
     \end{figure}
 
-    We represent LTL formulae as abstract syntax trees (ASTs) using a typed class hierarchy rooted at a \texttt{Formula} base class. Each node in the tree is an instance of one of nine subclasses: \texttt{Atom} for atomic propositions $p_0, p_1, \ldots$; four unary operator classes \texttt{Not} $(\lnot)$, \texttt{Next} $(X)$, \texttt{Eventually} $(F)$, and \texttt{Globally} $(G)$, each wrapping a single child \texttt{Formula}; and four binary operator classes \texttt{And} $(\land)$, \texttt{Or} $(\lor)$, \texttt{Implies} $(\to)$, and \texttt{Until} $(U)$, each wrapping a left and right child \texttt{Formula}. Formulae are built by recursive composition: any \texttt{Formula} instance may serve as the child of any operator node, producing trees of arbitrary nesting depth. Two examples are shown in Figure~\ref{fig:formula_ast}.
+    We represent LTL formulae as abstract syntax trees (ASTs) using a typed class hierarchy rooted at a \texttt{Formula} base class. Each node in the tree is an instance of one of nine subclasses: \texttt{Atom} for atomic propositions $p_0, p_1, \ldots$; four unary operator classes \texttt{Not} $(\neg)$, \texttt{Next} $(X)$, \texttt{Eventually} $(F)$, and \texttt{Globally} $(G)$, each wrapping a single child \texttt{Formula}; and four binary operator classes \texttt{And} $(\land)$, \texttt{Or} $(\lor)$, \texttt{Implies} $(\to)$, and \texttt{Until} $(\Un)$, each wrapping a left and right child \texttt{Formula}. Formulae are built by recursive composition: any \texttt{Formula} instance may serve as the child of any operator node, producing trees of arbitrary nesting depth. Two examples are shown in Figure~\ref{fig:formula_ast}.
 
     Every subclass implements a \texttt{\_\_str\_\_} method that produces a fully parenthesised, prefix-notation string. Atoms are rendered as \texttt{p\_i}, unary operators as \texttt{(OP child)}, and binary operators as \texttt{(left OP right)}. This string is  \emph{canonical}, in the sense that there is an injective mapping from formulae to strings, and is used for syntactic deduplication and as the input sequence consumed by the tokeniser.
 
     Two further properties are central to dataset construction. First, the \emph{depth} of a formula is defined recursively: an atom has depth $0$, and any operator node has depth $1 + \max(\text{child depths})$. This is illustrated in Figure~\ref{fig:formula_ast}: the left tree has depth $1$ and the right tree has depth $2$, as indicated by the $+1$ label on each edge. Depth is the primary measure of formula complexity and will be used in the sampler described in the following section to bound the complexity of the generated formulae. Second, \emph{syntactic equality} is defined as recursive node-wise comparison: two formulae are equal if and only if they are the same operator class with equal children at every position in the tree. By injectivity of the \texttt{\_\_str\_\_} function, we may also take syntactic equality between two formulae as the string equality of their respective \texttt{\_\_str\_\_} representations.
     
-    \section{Formula Sampling and Dataset Generation} \label{alg:formula_sampling_algorithm}
+    \section{Formula Sampling and Dataset Generation}
+
+    We generate LTL formulae by sampling ASTs using a procedure parameterized by \texttt{p\_leaf\_range}, \texttt{max\_depth}, \texttt{n\_ap}, and a \texttt{force\_tree} flag. At each node, a leaf probability $p_{leaf}$ is drawn uniformly from \texttt{p\_leaf\_range}. With probability $p_{leaf}$, the node is instantiated as an \texttt{Atom}, selecting a proposition $p_i$ uniformly at random from $\{p_0, \ldots, p_{n_{ap}-1}\}$. Otherwise, an operator is drawn uniformly from $\{\neg, \X, \F, \G, \land, \lor, \to, \Un \}$. Once the recursion reaches \texttt{max\_depth}, a leaf is forced regardless of the drawn probability. The \texttt{force\_tree} flag prevents the root from being instantiated as a bare atom, ensuring every sampled formula contains at least one operator.
+
+    \begin{algorithm}
+        \caption{Recursive formula sampler. The outer call is $\texttt{Gen}(0,\, p_{leaf},\, \texttt{force\_tree})$ with $p_{leaf} \sim \mathrm{Uniform}[\texttt{p\_min}, \texttt{p\_max}]$. Redundant nesting denotes the combinations $\G(\G\,\phi)$, $\F(\F\,\phi)$, and $\neg\neg\phi$.}
+        \label{alg:formula_sampling_algorithm}
+        \begin{algorithmic}[1]
+        \Require $\texttt{n\_ap}$,\ $[\texttt{p\_min}, \texttt{p\_max}]$,\ $\texttt{max\_depth}$,\ $\texttt{force\_tree}$
+        \Function{Gen}{$d$,\ $p_{leaf}$,\ $force\_op$}
+            \If{$d \geq \texttt{max\_depth}$}
+                \State \Return $\texttt{Atom}(p_i)$,\quad $i \sim \mathrm{Uniform}\{0,\ldots,n_{ap}-1\}$
+            \EndIf
+            \If{\textbf{not} $force\_op$ \textbf{and} $\mathrm{Uniform}(0,1) < p_{leaf}$}
+                \State \Return $\texttt{Atom}(p_i)$,\quad $i \sim \mathrm{Uniform}\{0,\ldots,n_{ap}-1\}$
+            \EndIf
+            \State $\texttt{op} \sim \mathrm{Uniform}\{\neg,\, \X,\, \F,\, \G,\, \land,\, \lor,\, \to,\, \Un\}$
+            \If{$\texttt{op} \in \{\neg,\, \X,\, \F,\, \G\}$}
+                \Repeat
+                    \State $\texttt{child} \leftarrow \texttt{Gen}(d+1,\, p_{leaf},\, False)$
+                \Until{$\texttt{op}(\texttt{child})$ is not redundantly nested}
+                \State \Return $\texttt{op}(\texttt{child})$
+            \Else
+                \State $p_l,\, p_r \sim \mathrm{Uniform}[\texttt{p\_min}, \texttt{p\_max}]$
+                \State $\texttt{left} \leftarrow \texttt{Gen}(d+1,\, p_l,\, False)$
+                \Repeat
+                    \State $\texttt{right} \leftarrow \texttt{Gen}(d+1,\, p_r,\, False)$
+                \Until{$\texttt{right} \neq \texttt{left}$}
+                \State \Return $\texttt{op}(\texttt{left},\, \texttt{right})$
+            \EndIf
+        \EndFunction
+        \end{algorithmic}
+    \end{algorithm}
+
+    
+    Two structural constraints are enforced by rejection during sampling, as shown in Algorithm~\ref{alg:formula_sampling_algorithm}. First, redundant unary nesting is avoided: the combinations $\G(\G\,\phi)$, $\F(\F\,\phi)$, and $\neg\neg\phi$ are resampled whenever they arise, as they introduce syntactic redundancy without adding semantic content. Second, the two children of any binary operator must be syntactically distinct; if the left and right subtrees are equal under structural equality, the right child is resampled. Together these constraints reduce the proportion of trivially redundant formulae in the generated data without imposing any constraint on formula semantics.
+    
+    The sampled formulae are stored in an \texttt{LTLDataset} object, which pairs each formula with its pre-computed semantic embedding (for details about the semantic embedding of formulae, see Chapter~\ref{chap:kernel}). Each item in the dataset yields the formula AST, its $M$-dimensional embedding vector, and a dataset index, together with the formula's canonical string and satisfaction vector when these are requested at construction time. The embedding is computed once at dataset construction and stored alongside the formula, rather than being recomputed at training time.
+
+    \section{Tokenization}
+    The \texttt{LTLTokenizer} maps a formula AST to a sequence of integer token IDs. The vocabulary is composed of three groups: four special tokens (\texttt{<pad>}, \texttt{<bos>}, \texttt{<eos>}, \texttt{<unk>}), ten operator tokens (\texttt{\textasciitilde}, \texttt{AND}, \texttt{OR}, \texttt{->}, \texttt{X}, \texttt{F}, \texttt{G}, \texttt{U}, \texttt{(}, \texttt{)}), and $n_{ap}$ proposition tokens \texttt{p\_0}, \ldots, \texttt{p\_{n-1}}. The total vocabulary size is $14 + n_{ap}$, fully determined by the number of atomic propositions.
+    
+    Encoding proceeds in two steps. The formula's canonical string --- produced by \texttt{\_\_str\_\_} as described in Section~\ref{sec:formula_representation} --- is first split into tokens by greedy left-to-right matching against the vocabulary. Because the string is fully parenthesised and each syntactic unit corresponds to exactly one vocabulary entry, this procedure is unambiguous. The token sequence is then wrapped with \texttt{<bos>} and \texttt{<eos>} boundary markers and mapped to integer IDs. A batch of these encoded sequences, each paired with the corresponding formula's semantic embedding, forms the complete input to \texttt{LTLModel}: the token IDs as \texttt{input\_ids} and the embeddings as the \texttt{Kernel Embedding Hidden States}.
 
     \section{Model Architecture}
     \texttt{LTLModel} is our custom model class, built on \textit{HuggingFace}'s \texttt{GPT2LMHeadModel} with cross-attention enabled, through which all forward-pass and generation calls are routed. \texttt{GPT2LMHeadModel} couples a standard GPT-2 transformer backbone with a linear LM Head, which projects each hidden state to a logit vector over the vocabulary at every decoding step (see the \textit{HuggingFace} \href{https://github.com/huggingface/transformers/blob/v4.57.0/src/transformers/models/gpt2/modeling_gpt2.py#L981}{source} for implementation details). The full architecture is illustrated in Figure~\ref{fig:ltl_model_architecture}.
@@ -131,8 +173,6 @@
         a_t = \mathrm{softmax}\!\left(\frac{\bm{Q}_t \cdot \bm{K}_{sem}}{\sqrt{d_k}}\right)
     \end{equation}
     \noindent Since $\bm{E}_{sem}$ is presented as a single conditioning token, the softmax is taken over this one score and evaluates trivially to $a_t = 1$. The cross-attention output therefore reduces to $\bm{V}_{sem} \in \mathbb{R}^{d_k}$ at every position $t$, which is projected back to $\mathbb{R}^d$ and added to $\bm{h}_t$ through the Residual Connection. Within each Transformer Block, every decoder position $t$ receives the same additive update $\bm{V}{sem}$. The stregth of this update is governed entirely by the magnitude of $\bm{V}_{sem}$, which is bounded by $\Vert\bm{W}^{cross}_v\Vert\,\Vert\bm{E}_{sem}\Vert$. We return to the implications of this property in Section~\ref{sec:the_embedding_kernel}, where it motivates our choice of the covariance kernel over normalized alternatives.
-
-    \section{Tokenization}
     
 
 \chapter{The Linear Temporal Logic Kernel and Formula Embedding} \label{chap:kernel}
