@@ -36,6 +36,7 @@ PROJECT_DIR="/projects/prjs2029/KernelLTL"
 VENV_DIR="$HOME_DIR/venv"
 
 VALIDATION_ROOT="$PROJECT_DIR/artifacts/validation"
+DATASET_DIR="$PROJECT_DIR/artifacts/datasets/validation"   # holds trivial_ids.csv (auto-drops tautologies/contradictions)
 TOKENIZER_DIR="$HOME_DIR/artifacts/tokenizer"
 
 ANALYSIS_OUTPUT_DIR="$PROJECT_DIR/artifacts/validation/_analysis"
@@ -106,6 +107,7 @@ START=$(date +%s)
 
 python -u scripts/visualize_validation_extra.py \
     --validation-root "$VALIDATION_ROOT" \
+    --dataset-dir     "$DATASET_DIR" \
     --output-dir      "$ANALYSIS_OUTPUT_DIR" \
     --runs            "${RUNS[@]}" \
     --reference-run   "$REFERENCE_RUN" \

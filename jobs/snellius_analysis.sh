@@ -32,6 +32,7 @@ PROJECT_DIR="/projects/prjs2029/KernelLTL"
 VENV_DIR="$HOME_DIR/venv"
 
 VALIDATION_ROOT="$PROJECT_DIR/artifacts/validation"
+DATASET_DIR="$PROJECT_DIR/artifacts/datasets/validation"   # holds trivial_ids.csv (auto-drops tautologies/contradictions)
 TOKENIZER_DIR="$HOME_DIR/artifacts/tokenizer"
 
 ANALYSIS_OUTPUT_DIR="$PROJECT_DIR/artifacts/validation/_analysis"
@@ -53,6 +54,14 @@ RUNS=(
     "gae_lambda_1"
 )
 REFERENCE_RUN="ce_base"
+
+# Dataset analysis is the heaviest step and is independent of the trivial-target
+# filtering, so it rarely needs recomputing. Control it without editing the file:
+#   auto  (default) — run a split only if its output dir is missing/empty
+#   force           — always recompute every split
+#   skip            — never run (assume dataset_analysis/ is already there)
+# e.g.  RUN_DATASET_ANALYSIS=skip sbatch jobs/snellius_analysis.sh
+RUN_DATASET_ANALYSIS="${RUN_DATASET_ANALYSIS:-skip}"
 
 BOOTSTRAP_N=10000
 ALPHA=0.05
@@ -102,26 +111,34 @@ echo "PYTHONPATH: $PYTHONPATH"
 
 echo ""
 echo "=============================================="
-echo "Step 1: Dataset analysis"
+echo "Step 1: Dataset analysis (mode: $RUN_DATASET_ANALYSIS)"
 echo "  Splits: ${DATASET_SPLITS[*]}"
 echo "=============================================="
 
 STEP1_START=$(date +%s)
 
-for SPLIT_ENTRY in "${DATASET_SPLITS[@]}"; do
-    SPLIT_NAME="${SPLIT_ENTRY%%:*}"
-    SPLIT_PATH="${SPLIT_ENTRY#*:}"
-    SPLIT_OUT="$ANALYSIS_OUTPUT_DIR/dataset_analysis/$SPLIT_NAME"
-    echo "  Analysing split '$SPLIT_NAME' -> $SPLIT_PATH"
-    mkdir -p "$SPLIT_OUT"
-    python -u scripts/analyze_dataset.py \
-        --dataset-dir "$SPLIT_PATH" \
-        --output-dir "$SPLIT_OUT" \
-        --mc-shape-n "$MC_SHAPE_N" \
-        --rng-seed "$RNG_SEED" \
-        --dpi "$DPI" \
-        --mmap-satisfactions
-done
+if [ "$RUN_DATASET_ANALYSIS" = "skip" ]; then
+    echo "  RUN_DATASET_ANALYSIS=skip — leaving existing dataset_analysis/ untouched."
+else
+    for SPLIT_ENTRY in "${DATASET_SPLITS[@]}"; do
+        SPLIT_NAME="${SPLIT_ENTRY%%:*}"
+        SPLIT_PATH="${SPLIT_ENTRY#*:}"
+        SPLIT_OUT="$ANALYSIS_OUTPUT_DIR/dataset_analysis/$SPLIT_NAME"
+        if [ "$RUN_DATASET_ANALYSIS" = "auto" ] && [ -d "$SPLIT_OUT" ] && [ -n "$(ls -A "$SPLIT_OUT" 2>/dev/null)" ]; then
+            echo "  Split '$SPLIT_NAME' already analysed ($SPLIT_OUT non-empty) — skipping. Use RUN_DATASET_ANALYSIS=force to recompute."
+            continue
+        fi
+        echo "  Analysing split '$SPLIT_NAME' -> $SPLIT_PATH"
+        mkdir -p "$SPLIT_OUT"
+        python -u scripts/analyze_dataset.py \
+            --dataset-dir "$SPLIT_PATH" \
+            --output-dir "$SPLIT_OUT" \
+            --mc-shape-n "$MC_SHAPE_N" \
+            --rng-seed "$RNG_SEED" \
+            --dpi "$DPI" \
+            --mmap-satisfactions
+    done
+fi
 
 STEP1_END=$(date +%s)
 STEP1_DUR=$((STEP1_END - STEP1_START))

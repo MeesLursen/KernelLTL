@@ -170,6 +170,16 @@ def load_topk_grouped(run_dir: Path, run_name: str) -> pd.DataFrame:
     return df
 
 
+def read_trivial_ids(path) -> set[int]:
+    """Read formula_ids of trivial (tautology/contradiction = all-0/all-1, std==0)
+    targets. Accepts geometry_features.csv (uses ``is_trivial``) or a plain
+    trivial_ids.csv (single ``formula_id`` column)."""
+    df = pd.read_csv(path)
+    if "is_trivial" in df.columns:
+        return set(df.loc[df["is_trivial"].astype(int) == 1, "formula_id"].astype(int))
+    return set(df["formula_id"].astype(int))
+
+
 # ---------------------------------------------------------------------------
 # Top-level loader
 # ---------------------------------------------------------------------------
@@ -181,6 +191,8 @@ def load_runs(
     runs: Iterable[str],
     pad_token_id: int,
     drop_token_arrays: bool = True,
+    exclude_ids: set[int] | None = None,
+    dataset_dir: Path | str | None = None,
     log: callable = lambda m: print(m, file=sys.stderr),
 ) -> dict[str, pd.DataFrame]:
     """Load greedy/topk_flat/topk_grouped from every run, return a dict.
@@ -199,6 +211,17 @@ def load_runs(
     flat_frames: list[pd.DataFrame] = []
     grouped_frames: list[pd.DataFrame] = []
     summaries: dict[str, dict] = {}
+
+    # Auto-discover the trivial (tautology/contradiction = all-0/all-1, std==0) set:
+    # it is a property of the dataset, so we read it from <dataset_dir>/trivial_ids.csv
+    # unless an explicit exclude_ids was passed. These targets are dropped from ALL frames. 
+    if exclude_ids is None and dataset_dir is not None:
+        tpath = Path(dataset_dir) / "trivial_ids.csv"
+        if tpath.exists():
+            exclude_ids = read_trivial_ids(tpath)
+            log(f"[loaders] auto-discovered {len(exclude_ids)} trivial ids from {tpath}")
+        else:
+            log(f"[loaders] WARNING: no trivial_ids.csv at {tpath}; trivial targets NOT filtered")
 
     for run_name in runs:
         run_dir = Path(validation_root) / run_name
@@ -231,6 +254,17 @@ def load_runs(
     df_greedy = pd.concat(greedy_frames, ignore_index=True)
     df_topk_flat = pd.concat(flat_frames, ignore_index=True)
     df_topk_grouped = pd.concat(grouped_frames, ignore_index=True)
+
+    # Drop trivial targets (tautologies/contradictions = all-0/all-1 satvec) from
+    # ALL frames before any aggregation, so they never enter the results.
+    if exclude_ids:
+        exclude_ids = set(int(i) for i in exclude_ids)
+        n0 = len(df_greedy)
+        df_greedy = df_greedy[~df_greedy["formula_id"].astype(int).isin(exclude_ids)].reset_index(drop=True)
+        df_topk_flat = df_topk_flat[~df_topk_flat["formula_id"].astype(int).isin(exclude_ids)].reset_index(drop=True)
+        df_topk_grouped = df_topk_grouped[~df_topk_grouped["formula_id"].astype(int).isin(exclude_ids)].reset_index(drop=True)
+        log(f"[loaders] excluded {len(exclude_ids)} trivial formula_ids "
+            f"({n0 - len(df_greedy)} greedy rows dropped per run-stack)")
 
     # Build the per-target K-aggregates frame from df_topk_flat.
     df_topk_aggregates = build_topk_aggregates(df_topk_flat)

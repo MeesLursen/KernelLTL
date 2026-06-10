@@ -417,6 +417,7 @@ def main() -> None:
         runs=args.runs,
         pad_token_id=pad_id,
         drop_token_arrays=not args.keep_token_arrays,
+        dataset_dir=args.dataset_dir,
     )
     sources = {
         "greedy": loaded["df_greedy"],

@@ -44,6 +44,9 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--validation-root", default="artifacts/validation")
+    p.add_argument("--dataset-dir", default="artifacts/datasets/validation",
+                   help="Validation dataset dir; its trivial_ids.csv is auto-used to drop "
+                        "tautology/contradiction targets from all results.")
     p.add_argument("--output-dir", default="artifacts/validation/_analysis")
     p.add_argument("--runs", nargs="+", required=True)
     p.add_argument("--reference-run", default="ce_base")
@@ -100,6 +103,7 @@ def main() -> None:
         runs=args.runs,
         pad_token_id=pad_id,
         drop_token_arrays=not args.keep_token_arrays,
+        dataset_dir=args.dataset_dir,
     )
     df_greedy = loaded["df_greedy"]
     df_topk_flat = loaded["df_topk_flat"]

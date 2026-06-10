@@ -1,172 +1,135 @@
-"""Driver: embedding-geometry vs. correctness analysis on the validation runs.
+"""Driver: embedding-geometry vs. correctness (Q1 magnitude / Q2 orthogonality).
 
-Light step (consumes the cached geometry_features.csv from compute_geometry_features.py).
-Mirrors visualize_validation_extra.py: writes stats/extra/geometry_*.csv and
-figures/extra/geometry_* into the existing _analysis tree.
+Light step — consumes the cached geometry_features.csv (from compute_geometry_features.py).
+Drops trivial (tautology/contradiction, std==0) targets via the is_trivial flag, then runs:
+  Q1  correct ~ emb_norm                                  (marginal magnitude)
+  Q2  variance-stratified norm slopes                     (primary orthogonality test)
+  Q2  correct ~ variance + norm_resid + C(depth)          (FWL residual summary)
+  bonus cross-model interaction (BH-FDR) + AME
+Outcome = binary correct; semantic_distance kept only as a flagged descriptive curve.
 
-Example:
-  python scripts/visualize_validation_geometry.py \
-      --validation-root /home/mees/Documents/KernelLTL/artifacts/validation \
-      --geometry-features /home/mees/Documents/KernelLTL/artifacts/validation/_analysis/geometry_features.csv \
-      --output-dir /home/mees/Documents/KernelLTL/artifacts/validation/_analysis \
-      --runs ce_base ce_finetune rb_momentum_09 gae_lambda_09 gae_lambda_1 \
-      --reference-run ce_base
+Writes stats/extra/geometry_*.csv and figures/extra/geometry_* into the _analysis tree.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
 import pandas as pd
 
-# Allow `python scripts/visualize_validation_geometry.py` from repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 from scripts._validation_analysis import geometry_analysis as ga
 from scripts._validation_analysis import geometry_plots as gp
 
 
-def _log(m: str) -> None:
+def _log(m):
     print(m, file=sys.stderr, flush=True)
 
 
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--validation-root", required=True,
-                   help="Dir holding the per-run folders (with per_sample/*.jsonl)")
-    p.add_argument("--geometry-features", required=True, help="geometry_features.csv")
-    p.add_argument("--output-dir", required=True, help="Analysis output dir (_analysis)")
-    p.add_argument("--runs", nargs="+", required=True, help="Short run labels")
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--validation-root", required=True)
+    p.add_argument("--geometry-features", required=True)
+    p.add_argument("--output-dir", required=True)
+    p.add_argument("--runs", nargs="+", required=True)
     p.add_argument("--reference-run", default="ce_base")
     p.add_argument("--bootstrap-n", type=int, default=10000)
-    p.add_argument("--n-sim", type=int, default=2000, help="Parametric-sim draws for AME CIs")
+    p.add_argument("--n-sim", type=int, default=2000)
     p.add_argument("--alpha", type=float, default=0.05)
     p.add_argument("--rng-seed", type=int, default=0)
-    p.add_argument("--bins", type=int, default=12, help="Marginal-curve bins")
-    p.add_argument("--grid-bins", type=int, default=8, help="2-D heatmap bins per axis")
+    p.add_argument("--bins", type=int, default=12)
+    p.add_argument("--grid-bins", type=int, default=8)
+    p.add_argument("--n-strata", type=int, default=3)
     p.add_argument("--dpi", type=int, default=200)
-    p.add_argument("--regularized-fallback", action="store_true")
     return p.parse_args()
 
 
 def _resolve_run_dir(root: Path, label: str) -> Path:
-    """Map a short run label to its folder (exact, or `label_*` prefix)."""
-    exact = root / label
-    if exact.is_dir():
-        return exact
+    if (root / label).is_dir():
+        return root / label
     cands = sorted(d for d in root.iterdir()
                    if d.is_dir() and (d.name == label or d.name.startswith(label + "_")))
     if not cands:
-        raise FileNotFoundError(f"no run folder for label '{label}' under {root}")
+        raise FileNotFoundError(f"no run folder for '{label}' under {root}")
     return cands[0]
 
 
-def _read_jsonl(path: Path) -> list[dict]:
-    rows = []
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
-    return rows
-
-
-def load_correctness(root: Path, runs: list[str]) -> dict[str, pd.DataFrame]:
-    """Per-run long frames for two outcomes, joined later to geometry features.
-
-    Returns {'greedy': df, 'topk_any': df} each with columns
-    run, formula_id, correct, target_depth.
-    """
-    greedy_frames, topk_frames = [], []
+def load_greedy_correctness(root: Path, runs) -> pd.DataFrame:
+    frames = []
     for label in runs:
         d = _resolve_run_dir(root, label)
-        _log(f"[geom] {label} -> {d.name}")
-        g = pd.DataFrame(_read_jsonl(d / "per_sample" / "greedy.jsonl"))
-        g_out = g[["formula_id", "target_depth"]].copy()
-        g_out["correct"] = g["is_semantic_equivalent"].astype(int)
-        g_out["run"] = label
-        greedy_frames.append(g_out)
-
-        tf = pd.DataFrame(_read_jsonl(d / "per_sample" / "topk_flat.jsonl"))
-        tf["is_equiv"] = (tf["reward"].astype(float) == 1.0)
-        any_correct = tf.groupby("formula_id")["is_equiv"].any().astype(int).reset_index(name="correct")
-        t_out = any_correct.merge(g[["formula_id", "target_depth"]], on="formula_id", how="left")
-        t_out["run"] = label
-        topk_frames.append(t_out)
-
-    return {
-        "greedy": pd.concat(greedy_frames, ignore_index=True),
-        "topk_any": pd.concat(topk_frames, ignore_index=True),
-    }
+        rows = [json.loads(l) for l in open(d / "per_sample" / "greedy.jsonl")]
+        g = pd.DataFrame(rows)[["formula_id", "is_semantic_equivalent", "semantic_distance", "target_depth"]]
+        g["correct"] = g["is_semantic_equivalent"].astype(int)
+        g["run"] = label
+        frames.append(g[["run", "formula_id", "correct", "semantic_distance", "target_depth"]])
+        _log(f"[geom] {label} -> {d.name} ({len(g)} rows)")
+    return pd.concat(frames, ignore_index=True)
 
 
-def run_outcome(tag: str, corr: pd.DataFrame, features: pd.DataFrame, args, stats_dir: Path,
-                fig_dir: Path) -> dict:
-    runs = args.runs
-    df = ga.build_frame(features, corr)
-
-    # per-model logistic (CI headline; no BH)
-    coef = ga.per_model_logistic(df, runs=runs, alpha=args.alpha,
-                                 use_regularized=args.regularized_fallback)
-    coef.to_csv(stats_dir / f"geometry_logistic_coef_{tag}.csv", index=False)
-    gp.plot_logistic_forest(coef, runs=runs, stem=fig_dir / f"geometry_logistic_forest_{tag}", dpi=args.dpi)
-
-    # marginal binned curves
-    for feat in ga.GEOMETRY_PREDICTORS:
-        binned = ga.marginal_binned(df, runs=runs, feature=feat, n_bins=args.bins,
-                                    n_bootstrap=args.bootstrap_n, alpha=args.alpha, rng_seed=args.rng_seed)
-        binned.to_csv(stats_dir / f"geometry_marginal_{feat}_{tag}.csv", index=False)
-        gp.plot_marginal(binned, runs=runs, feature=feat, stem=fig_dir / f"geometry_marginal_{feat}_{tag}", dpi=args.dpi)
-
-    # 2-D std x alignment grid + per-run heatmaps
-    grid = ga.two_d_grid(df, runs=runs, fx="std", fy="alignment", nbins=args.grid_bins)
-    grid.to_csv(stats_dir / f"geometry_2d_grid_{tag}.csv", index=False)
-    for r in runs:
-        gp.plot_2d_heatmap(grid, run=r, stem=fig_dir / f"geometry_2d_heatmap_{r}_{tag}", dpi=args.dpi)
-
-    # cross-model interaction + AME (BH-FDR family)
-    res = ga.fit_pooled_interaction(df, runs=runs, reference_run=args.reference_run,
-                                    outcome_col="correct", alpha=args.alpha,
-                                    n_sim=args.n_sim, rng_seed=args.rng_seed)
-    res["interactions"].to_csv(stats_dir / f"geometry_crossmodel_interaction_{tag}.csv", index=False)
-    res["interactions_pairwise"].to_csv(stats_dir / f"geometry_crossmodel_interaction_pairwise_{tag}.csv", index=False)
-    res["ame"].to_csv(stats_dir / f"geometry_crossmodel_ame_{tag}.csv", index=False)
-    res["ame_pairwise"].to_csv(stats_dir / f"geometry_crossmodel_ame_pairwise_{tag}.csv", index=False)
-    gp.plot_crossmodel_interaction(res["interactions"], reference_run=args.reference_run,
-                                   stem=fig_dir / f"geometry_crossmodel_interaction_{tag}", dpi=args.dpi)
-    return {"coef": coef, "interactions": res["interactions"], "ame": res["ame"],
-            "n_obs": res["n_obs"], "n_targets": res["n_targets"]}
-
-
-def main() -> None:
+def main():
     args = parse_args()
-    root = Path(args.validation_root)
     out = Path(args.output_dir)
     stats_dir = out / "stats" / "extra"
     fig_dir = out / "figures" / "extra"
     stats_dir.mkdir(parents=True, exist_ok=True)
     fig_dir.mkdir(parents=True, exist_ok=True)
+    runs, ref = args.runs, args.reference_run
 
     features = pd.read_csv(args.geometry_features)
-    _log(f"[geom] features: {len(features)} targets")
-    gp.plot_basrate_hist(features, stem=fig_dir / "geometry_basrate_hist", dpi=args.dpi)
+    n_triv = int(features.get("is_trivial", pd.Series(0)).sum())
+    _log(f"[geom] features: {len(features)} targets ({n_triv} trivial dropped)")
 
-    corr = load_correctness(root, args.runs)
-    summary = {"reference_run": args.reference_run, "runs": args.runs,
-               "bootstrap_n": args.bootstrap_n, "alpha": args.alpha, "outcomes": {}}
-    for tag in ("greedy", "topk_any"):
-        _log(f"[geom] outcome = {tag}")
-        r = run_outcome(tag, corr[tag], features, args, stats_dir, fig_dir)
-        summary["outcomes"][tag] = {"n_obs": r["n_obs"], "n_targets": r["n_targets"]}
+    corr = load_greedy_correctness(Path(args.validation_root), runs)
+    df = ga.build_frame(features, corr)
+    _log(f"[geom] analysis frame: {len(df)} rows, {df.formula_id.nunique()} non-trivial targets")
 
+    # --- Q1: marginal magnitude ---
+    q1 = ga.q1_marginal(df, runs=runs, alpha=args.alpha)
+    q1.to_csv(stats_dir / "geometry_q1_marginal.csv", index=False)
+
+    # --- Q2: variance-stratified norm slopes (primary) + FWL residual (summary) ---
+    strat = ga.variance_stratified_slopes(df, runs=runs, n_strata=args.n_strata, alpha=args.alpha)
+    strat.to_csv(stats_dir / "geometry_stratified.csv", index=False)
+    gp.plot_stratified(strat, runs=runs, stem=fig_dir / "geometry_stratified", dpi=args.dpi)
+
+    resid = ga.q2_residual(df, runs=runs, alpha=args.alpha)
+    resid.to_csv(stats_dir / "geometry_q2_residual.csv", index=False)
+    gp.plot_residual_forest(resid, runs=runs, stem=fig_dir / "geometry_q2_residual_forest", dpi=args.dpi)
+
+    # --- descriptive marginal curves (binary + flagged distance) ---
+    for feat in ["emb_norm", "variance"]:
+        for outcome in ["correct", "semantic_distance"]:
+            mb = ga.marginal_binned(df, runs=runs, feature=feat, outcome=outcome, n_bins=args.bins,
+                                    n_bootstrap=args.bootstrap_n, alpha=args.alpha, rng_seed=args.rng_seed)
+            mb.to_csv(stats_dir / f"geometry_marginal_{feat}_{outcome}.csv", index=False)
+            gp.plot_marginal(mb, runs=runs, feature=feat, outcome=outcome,
+                             stem=fig_dir / f"geometry_marginal_{feat}_{outcome}", dpi=args.dpi)
+
+    # --- 2-D variance x norm_resid grid (fills, since decorrelated) + scatter w/ ceiling ---
+    grid = ga.two_d_grid(df, runs=runs, fx="variance", fy="norm_resid", nbins=args.grid_bins)
+    grid.to_csv(stats_dir / "geometry_2d_grid.csv", index=False)
+    for r in runs:
+        gp.plot_2d_heatmap(grid, run=r, stem=fig_dir / f"geometry_2d_heatmap_{r}", dpi=args.dpi)
+        gp.plot_scatter_ceiling(df, run=r, color_by="correct", stem=fig_dir / f"geometry_scatter_{r}", dpi=args.dpi)
+
+    # --- bonus: cross-model residual interaction (BH-FDR) + AME ---
+    res = ga.cross_model_interaction(df, runs=runs, reference_run=ref, alpha=args.alpha,
+                                     n_sim=args.n_sim, rng_seed=args.rng_seed)
+    res["interactions"].to_csv(stats_dir / "geometry_crossmodel_interaction.csv", index=False)
+    res["ame"].to_csv(stats_dir / "geometry_crossmodel_ame.csv", index=False)
+    gp.plot_crossmodel_interaction(res["interactions"], reference_run=ref,
+                                   stem=fig_dir / "geometry_crossmodel_interaction", dpi=args.dpi)
+
+    summary = {"reference_run": ref, "runs": runs, "n_targets_nontrivial": int(df.formula_id.nunique()),
+               "n_trivial_dropped": n_triv, "bootstrap_n": args.bootstrap_n,
+               "crossmodel_n_obs": res["n_obs"], "crossmodel_n_targets": res["n_targets"]}
     with open(out / "geometry_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
-    _log(f"[geom] done. stats -> {stats_dir}, figures -> {fig_dir}")
+    _log(f"[geom] done -> {stats_dir}, {fig_dir}")
 
 
 if __name__ == "__main__":

@@ -133,7 +133,12 @@ def main() -> None:
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     df.to_csv(args.output, index=False)
     _log(f"[geometry] wrote {len(df)} rows -> {args.output}")
-    _log(f"[geometry] trivial (std==0) targets: {int(is_trivial.sum())}")
+
+    # Emit the canonical trivial_ids.csv next to the dataset, so the analysis
+    # loaders auto-discover and drop tautology/contradiction targets everywhere.
+    triv_path = os.path.join(args.validation_dataset_dir, "trivial_ids.csv")
+    df.loc[df["is_trivial"] == 1, ["formula_id"]].to_csv(triv_path, index=False)
+    _log(f"[geometry] trivial (std==0) targets: {int(is_trivial.sum())} -> {triv_path}")
     _log("[geometry] feature summary:\n" + df.drop(columns=['formula_id']).describe().to_string())
 
 
