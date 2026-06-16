@@ -48,11 +48,102 @@
 
     \section{Kernel Methods}\label{sec:kernel_methods}
     
+    % =====================================================================
+    %  PRELIMINARIES SCAFFOLD — CE & RL machinery (general, citable only)
+    %  Method-specific content (Hamming reward, hybrid loss, RB/GAE variants,
+    %  Delta-z derivations, subset proof) is deferred to Ch.6 / appendix.
+    % =====================================================================
+
     \section{Language Models, Self-Attention, and Cross-Attention}
-
-    \section{Curriculum Training}
-
-    \section{Policy-Gradient Reinforcement Learning}
+    % Architecture already covered here; the items below add HOW such a model
+    % is trained (the cross-entropy objective), generally.
+    
+        \subsection{The Cross-Entropy Training Objective}\label{sec:prelim_ce}
+        \begin{itemize}
+            \item Autoregressive factorisation:
+                  $p_{\bm\theta}(\bm y \mid \bm e) = \prod_{t} p_{\bm\theta}(y_{t+1} \mid \bm y_{\le t}, \bm e)$.
+                  % Fix $\bm e$ as the generic conditioning context (= semantic embedding).
+            \item \emph{Teacher forcing}: feeding ground-truth prefixes during training
+                  rather than model samples. \cite{williams_learning_1989}
+                  % Consumed by: RL teacher-forced recomputation (6.5.2) + appendix.
+            \item Per-token negative log-likelihood / cross-entropy objective, general form:
+            \begin{equation}\label{eq:prelim_ce}
+                \mathcal{L}_{\text{CE}}^{\bm\theta} = \frac{1}{n+1}\sum_{t=0}^{n}\ell_t^{\bm\theta},
+                \qquad
+                \ell_t^{\bm\theta} = -\log P_{\bm\theta}(y_{t+1}\mid \bm y_{\le t},\bm e),
+            \end{equation}
+            with $P_{\bm\theta}(\cdot)$ the softmax over the logit vector $\bm z_t$.
+                  % THIS subsection establishes the shared notation block below.
+                  % Consumed by: 6.5.4 Move 1; full gradient in appendix.
+            \item Maximum-likelihood reading: minimising \eqref{eq:prelim_ce} is MLE of the
+                  data distribution. % one line.
+            \item \emph{Exposure bias}: the train/inference mismatch induced by teacher
+                  forcing. \cite{ranzato_sequence_2016, bengio_scheduled_2015}
+                  % Consumed by: 6.5.1, which invokes exposure bias as RL motivation.
+        \end{itemize}
+    
+        % --- Shared notation block (state here, reuse everywhere) ---
+        \begin{table}[ht]
+            \centering
+            \caption{Notation shared across the cross-entropy and policy-gradient objectives.}
+            \label{tab:prelim_notation}
+            \begin{tabular}{ll}
+                \toprule
+                Symbol & Meaning \\
+                \midrule
+                $\bm y = (y_0,\dots,y_{n+1})$ & ground-truth token sequence ($y_0=\texttt{<bos>}$, $y_{n+1}=\texttt{<eos>}$) \\
+                $\hat{\bm y}$                 & model-sampled token sequence \\
+                $\bm e$                       & conditioning context (the semantic embedding) \\
+                $\bm z_t,\ z_{t,v}$           & logit vector / per-token logit at position $t$ \\
+                $P_{\bm\theta}(\cdot\mid\bm y_{\le t},\bm e)$ & softmax token distribution \\
+                $\ell_t^{\bm\theta},\ \mathcal{L}_{\text{CE}}^{\bm\theta}$ & per-position and sequence loss \\
+                $R,\ b,\ A$                   & reward, baseline, advantage \\
+                \bottomrule
+            \end{tabular}
+        \end{table}
+    
+    
+    \section{Policy-Gradient Reinforcement Learning}\label{sec:prelim_rl}
+    
+        \begin{itemize}
+            \item Sequence generation as an MDP: state $=$ prefix $+$ conditioning,
+                  action $=$ next token, episode $=$ generated sequence, terminal
+                  (sequence-level) reward $R(\hat{\bm y})$.
+                  % Keep the reward ABSTRACT here; concrete Hamming reward is Ch.6.
+            \item The RL objective:
+            \begin{equation}\label{eq:prelim_rl_objective}
+                J(\bm\theta) = \mathbb{E}_{\hat{\bm y}\sim\pi_{\bm\theta}}\!\left[R(\hat{\bm y})\right].
+            \end{equation}
+            \item REINFORCE / score-function estimator and its unbiasedness:
+            \begin{equation}\label{eq:prelim_reinforce}
+                \nabla_{\bm\theta} J(\bm\theta)
+                = \mathbb{E}_{\hat{\bm y}\sim\pi_{\bm\theta}}\!\left[R(\hat{\bm y})\,\nabla_{\bm\theta}\log\pi_{\bm\theta}(\hat{\bm y})\right].
+            \end{equation}
+            \cite{williams_simple_1992}
+                  % The unbiased-estimator fact the whole RL argument rests on.
+                  % Consumed by: 6.5.4 Moves 1-2; appendix RE-gradient.
+            \item Variance reduction via baselines: advantage $A = R - b$; any
+                  state-independent (or value-function) baseline leaves
+                  \eqref{eq:prelim_reinforce} unbiased; EMA/running-mean baseline as the
+                  canonical instance.
+                  % Consumed by: RB variant (6.5.3).
+            \item Value functions and actor--critic: state-value $V(s)$, bootstrapping,
+                  the actor/critic split. % Consumed by: GAE critic.
+            \item Generalised Advantage Estimation: the $(\gamma,\lambda)$ estimator and
+                  the bias--variance interpretation of $\lambda$. \cite{schulman_high-dimensional_2016}
+                  % Consumed by: 6.5.3 lambda in {1.0, 0.9} contrast.
+            \item The \emph{credit-assignment problem}: a single terminal reward over a
+                  token sequence cannot, on its own, localise which actions earned it.
+                  \cite{minsky_steps_1961, sutton_temporal_1984}
+                  % Consumed by: 6.5.4 Move 4 (near-miss) and the RB->GAE motivation.
+        \end{itemize}
+    
+    % --- Deliberately EXCLUDED from preliminaries (lives in Ch.6 / appendix) ---
+    %   * concrete reward (1 - normalised Hamming) and the hybrid valid/invalid loss
+    %   * the alpha-mixing / multi-objective framing (dropped: stale)
+    %   * Delta z_{t,.} weight-update derivations; subset-optimality proof (appendix)
+    %   * RB / GAE variants by name (6.5.3)
+    
 
 
 \chapter{Related Work}
@@ -461,27 +552,15 @@
 
     Each of the mutations supply the model with two extremes of the syntax-semantics space. The two semantically equivalent forms are equal in semantics while being far from each other in syntax. Both are a different rewrite away from the base formula that created them, and thus separated by two rewrites from each other (for details on the possible rewrites see appendix \ref{app:INSERT_APPENDIX_REFERNECE}). The near-miss variants on the other hand are syntactically close, differing only in the added negation operator, while being semantically far removed from the base formula.
 
-    The contrast provided by these two cases supplies the model with the examples needed to disambiguate two .
-
+    The pretraining dataset generally provides one syntactical form per semantic equivalence class. The finetuning dataset is meant to supply the model with examples needed to decouple the semantic embedding from this exact syntactical representation learned during the pretraining phase, on the one hand providing different syntactical forms for the same semantics and on the other providing different semantics for similar syntactical forms.
+    
     \section{Curriculum Pretraining}\label{sec:curriculum_pretraining}
-    % Objective: standard per-token cross-entropy (next-token NLL) conditioned on the embedding
-    %   via cross-attention (Ch.4 architecture).
-    % Schedule: 4 stages trained consecutively, each resuming from the previous final_model;
-    %   per-stage peak LR 1e-4 -> 5e-5 -> 1e-5 -> 5e-6 (roughly order-of-magnitude decay, NOT a
-    %   strict halving); within each stage warmup_ratio 0.05 then linear decay; 100-epoch cap;
-    %   early stopping + best-model on eval_loss; effective batch 1024 (256 x 4 H100, DDP).
-    % Optimizer: AdamW (beta 0.9/0.999, eps 1e-8), weight_decay 0.01 (a deliberate fixed choice,
-    %   NOT the HF default of 0.0), grad-clip max_norm 1.0, dropout 0.1 (GPT-2 default).
-    % Convergence (early-stopped on eval_loss):
-    %   | stage (cum.) | peak LR | epoch cap | stopped @ | wall  |
-    %   |   1 (0-2)    |  1e-4   |   100     |    35     |  7m   |
-    %   |   2 (0-3)    |  5e-5   |   100     |    23     |  12m  |
-    %   |   3 (0-4)    |  1e-5   |   100     |    31     |  52m  |
-    %   |   4 (0-5)    |  5e-6   |   100     |    51     | 5h07m |
-    Each stage is trained with the standard teacher-forced cross-entropy (next-token negative log-likelihood) objective, conditioned on the target formula's embedding through the cross-attention mechanism of Chapter~\ref{chap:kernel}. The four stages run consecutively, each resuming from the weights and optimiser state of the previous stage.
-
-    Optimisation uses AdamW ($\beta_1=0.9$, $\beta_2=0.999$, $\varepsilon=10^{-8}$) with weight decay $0.01$, gradient-norm clipping at $1.0$, and dropout $0.1$; the effective batch size is $1024$ (a per-device batch of $256$ across four H100 GPUs under distributed data-parallel training). Each stage runs for at most $100$ epochs under a linear schedule --- warmup over the first $5\%$ of steps, then linear decay --- with early stopping and best-model selection on the evaluation loss. The peak learning rate is decayed across stages, from $10^{-4}$ at stage~1 to $5\times10^{-6}$ at stage~4, reflecting that each successive stage refines an increasingly converged model. Table~\ref{tab:pretraining} reports the peak rate, the early-stopping epoch, and the wall-clock time per stage; every stage converges well within the $100$-epoch cap.
-
+    The pretraining phase fixes the base model that all four finetuned variants inherit. Its objective is the teacher-forced cross-entropy of Section~\ref{sec:prelim_ce}: at each position the model is supervised to maximize the log-probability of the next ground-truth token of the canonical string $\mathrm{str}(\phi)$, conditioned on the target formula's semantic embedding through the cross-attention mechanism of Chapter~\ref{chap:kernel}. Minimizing this objective is maximum-likelihood estimation of the map from an embedding to the single canonical syntax that realizes it; what results is, in effect, a conditional language model over Linear Temporal Logic whose conditioning channel is the kernel embedding.
+    
+    The data is presented as the four-stage, depth-staged curriculum of Section~\ref{sec:curriculum_data}. Each stage extends the previous one with formulae a level deeper and roughly doubles the dataset, and each resumes from the weights and optimizer state of the last, so that the model is confronted with progressively deeper temporal structure only once it has converged on the shallower fragment out of which that structure is composed.
+    
+    Optimization uses AdamW ($\beta_1=0.9$, $\beta_2=0.999$, $\varepsilon=10^{-8}$) with weight decay $0.01$, gradient-norm clipping at $1.0$, and dropout $0.1$; the effective batch size is $1024$ (a per-device batch of $256$ across four H100 GPUs under distributed data-parallel training). Each stage runs for at most $100$ epochs under a linear schedule --- warmup over the first $5\%$ of steps, then linear decay --- with early stopping and best-model selection on the evaluation loss. The peak learning rate is decayed across stages, from $10^{-4}$ at stage~1 to $5\times10^{-6}$ at stage~4, reflecting that each successive stage refines an increasingly converged model. Table~\ref{tab:pretraining} reports the peak rate, the early-stopping epoch, and the wall-clock time per stage; every stage converges well within the $100$-epoch cap.
+    
     \begin{table}[ht]
         \centering
         \caption{Per-stage pretraining schedule and convergence (early stopping on the evaluation loss; $100$-epoch cap).}
@@ -498,6 +577,7 @@
         \end{tabular}
     \end{table}
     
+    
     \section{Hyperparameter Search}\label{sec:hpo}
     % Frame as: HPO CONFIRMED the pilot defaults (it did not improve on them).
     % - LR pilot sweep over {5e-6, 1e-5, 5e-5, 1e-4, 5e-4} (stage 1, fixed dropout 0.1 / wd 0.01,
@@ -511,101 +591,44 @@
     % NOTE (verification): the Optuna trials actually ran at peak LR ~5e-4 (confirmed from the log),
     % not 1e-4; left unstated in the prose above per Mees' call. Optuna's best semantic distance was
     % 0.0135 (selected-trial objective 0.0208, at dropout 0.0 / wd ~0.010); either way > the 0.0112 pilot.
+
     
     \section{Reinforcement-Learning Finetuning}\label{sec:rl_finetuning}
     
-    \subsection{Motivation and hypotheses}\label{sec:rl_motivation}
-    % WHY RL helps the orthogonal cases (RQ1). ONE spine, four moves; lean on the Ch.2
-    % preliminaries (cite, do not re-derive). Exposure bias = the why-RL-at-all backdrop only.
-    %   M1  Conditioning bottleneck. ||V_sem|| <= ||W^V|| ||emb(phi)|| (Ch.4): conditioning
-    %       strength is tethered to embedding magnitude. A small norm has two causes (Ch.5):
-    %       honest low variance vs. high-variance/low-norm anchor UNDER-COVERAGE -- the latter
-    %       is this section's target.
-    %   M2  The reward is a higher-fidelity semantic channel. R = 1 - normalised Hamming reads
-    %       the FULL satvec, not the lossy M-dim embedding, so it carries target semantics the
-    %       embedding has discarded. It is a TRAINING-time signal, re-accessed through the
-    %       embedding at inference -> RL recalibrates the model's RESPONSE to a weak signal; it
-    %       does not bypass the bottleneck.
-    %   M3  The spine: a discount policy miscalibrated on the orthogonal cell. The kernel couples
-    %       magnitude with informativeness on purpose (Ch.5); the CE-trained decoder learns
-    %       "small norm -> lean on the prior". Correct on low-variance, WRONG on high-variance/
-    %       low-norm (rich formula, under-registered, signal still workable). The reward's pressure
-    %       to use the weak signal is variance-proportional (an embedding-ignoring generation
-    %       incurs expected Hamming p(1-q)+(1-p)q -> 0.5 at p=0.5, -> 0 at the extremes), so RL
-    %       recalibrates exactly the cell CE under-serves. A partial, DECODER-SIDE remedy for the
-    %       Ch.5 orthogonality limitation (not a kernel fix).
-    %   M4  Hypotheses (both tested in 6.8/6.9):
-    %       H0 (premise): the model conditions on magnitude -> correct ~ emb_norm positive on
-    %          CE-base. If flat, the spine is moot (and that itself is a finding -- see 6.8.3).
-    %       H1 (primary): RL's benefit is concentrated in the high-variance/low-norm cell, not
-    %          uniform.
-    %   ASIDE (subordinate, theoretical, NOT a tested hypothesis; place last): the finetuning data
-    %   shapes the reward landscape -- equivalents and near-misses are hard positives/negatives that
-    %   sharpen the reward gradient around each target (6.1.2). The CE-finetuned control absorbs the
-    %   data-side effects, so RL-vs-control reflects the objective, not the extra data.
+    \subsection{Rationale}\label{sec:rl_motivation}
+    The base model fixed by pretraining is a conditional language model trained by teacher-forced cross-entropy: at every position it is supervised to reproduce the next token of a single canonical string, conditioned on the target embedding (\S\ref{sec:prelim_ce}). Two limitations of this regime motivate the finetuning phase, and we address them with two distinct levers. The first is a limitation of the \emph{supervision}: each semantic equivalence class is represented in the pretraining data by essentially one canonical syntax, so the maximum-likelihood objective couples each embedding to that one form and is obliged to penalise every equivalent alternative. The mutation dataset of \S\ref{sec:finetune_data}, which pairs each embedding with syntactically divergent equivalents and syntactically adjacent near-misses, is the lever aimed at this gap. The second is a limitation of the \emph{objective}, and is the subject of the rest of this rationale.
+    
+    Teacher-forced cross-entropy supervises the model only on ground-truth prefixes and rewards only exact reproduction of the reference string. It therefore inherits the exposure bias of \S\ref{sec:prelim_ce} --- at generation time the model must condition on its own samples, which it never saw during training --- and, more consequentially for our purposes, it has no way to credit a generation that is semantically correct but syntactically different from the reference. Reinforcement learning replaces the reference-matching signal with a reward computed from the generated formula's own behaviour (\S\ref{sec:rl_mechanics}), grading semantic agreement over the trace sample rather than string identity, and read off the model's own samples. 
+    
     Chapter~\ref{chap:kernel} established that the conditioning signal enters the decoder with a strength bounded by the embedding's magnitude, $\Vert\bm V_{sem}\Vert \le \Vert\bm W^V\Vert\,\Vert\emb(\phi)\Vert$, and that a small magnitude arises from two distinct causes: a genuinely low-variance (near-constant) target, for which a faint signal is appropriate, and a high-variance target poorly covered by the anchor set, for which the faint signal is a failure of the representation rather than a property of the formula. A cross-entropy--trained decoder cannot tell these apart: conditioned only on the embedding and supervised only on a single ground-truth string, it learns to discount low-magnitude embeddings and fall back on its unconditional prior --- the right response in the first case and the wrong one in the second.
-
-    Reinforcement learning supplies a signal the embedding does not. The reward (Section~\ref{sec:rl_mechanics}) is computed from the target's full satisfaction vector rather than its lossy $M$-dimensional embedding, so it carries semantic information the embedding has discarded, and it grades semantic agreement rather than exact-string reproduction. It is, however, a training-time signal that the model can re-access only through the embedding at generation time; it therefore cannot bypass the conditioning bottleneck, but it can recalibrate how heavily the decoder relies on a weak-but-usable signal. We accordingly hypothesise that the benefit of reinforcement learning is \emph{concentrated} on the high-variance, low-magnitude targets that cross-entropy under-serves, rather than spread uniformly across the validation set.
-
-    Two claims follow, both tested against the embedding geometry in Part~B. The premise (\textbf{H0}) is that the decoder conditions on embedding magnitude at all --- that correctness increases with $\Vert\emb(\phi)\Vert$ on the pretrained base; were it flat, the magnitude-conditioning account would be false, itself an informative negative result. The substantive hypothesis (\textbf{H1}) is the concentration just stated: the reinforcement-learning improvement is localised to the under-conditioned, high-variance, low-norm targets. Sections~\ref{sec:geometry_analysis} and \ref{sec:rq2_comparison} make both precise and adjudicate them.
-
-    Reinforcement learning is also motivated, more broadly, by the exposure-bias problem of teacher-forced training, for which finetuning on the model's own samples is the standard remedy; we treat this as motivation for the choice of method rather than a tested claim, since exposure bias is difficult to isolate and our hypotheses concern the kernel embedding specifically. Finally, the mutation dataset of Section~\ref{sec:finetune_data} shapes the reward landscape --- the equivalent rewrites and near-miss negations act as hard positives and hard negatives that sharpen the reward around each target --- but we do not test this directly, as the held-out set is not mutation-typed. The cross-entropy--finetuned control absorbs any such data-side effect, so the comparison between it and the reinforcement-learning models reflects the objective rather than the additional data.
-
+    
+    The reward supplies a signal the embedding does not. It is computed from the target's full satisfaction vector rather than its lossy $M$-dimensional embedding, so it carries semantic information the embedding has discarded. It remains a training-time signal that the model can re-access only through the embedding at generation time, and so it cannot widen the conditioning bottleneck; what it can do is recalibrate how heavily the decoder relies on a weak-but-usable signal. We therefore expect the benefit of reinforcement learning to be \emph{concentrated} on the high-variance, low-magnitude targets that cross-entropy under-serves, rather than spread uniformly --- a prediction we sharpen, from a second direction, in \S\ref{sec:objective_contrast} and state formally in \S\ref{sec:rl_hypotheses}.
+    
+    Because the mutation data and the reinforcement objective are distinct levers, we include a cross-entropy--finetuned control, trained on the same data under the pretraining objective (\S\ref{sec:rl_variants}). It absorbs whatever effect the mutation data exerts on its own, so that the comparison between it and the reinforcement-learning models isolates the contribution of the objective from that of the additional data. 
+    
     \subsection{Shared mechanics}\label{sec:rl_mechanics}
-    % - One finetuning run on the 60k mutation set (NOT staged); all four finetunes start from the
-    %   SAME CE-base (final pretraining checkpoint); eval on the stage-4 eval split (19,539);
-    %   early stopping + best-model on eval_semantic_distance; effective batch 1024.
-    % - Per item: sample one sequence (do_sample, temperature 1.0, num_beams 1) from BOS conditioned
-    %   on the embedding; re-run a teacher-forced forward pass for differentiable token log-probs.
-    % - Reward: R = 1 - semantic distance = 1 - normalised Hamming between the generated and target
-    %   satvecs over the trace sample, clipped to [-1,1] (clip inert for valid formulae).
-    % - Hybrid per-item loss: L = valid_ratio * L_RL + invalid_ratio * L_CE, where L_CE is
-    %   teacher-forced CE on the ground-truth labels of the INVALID items only (a corrective anchor
-    %   for samples the model cannot yet emit validly). Invalid generations are excluded from the RL
-    %   term; there is no R=-1 branch. (This supersedes any NMSE-on-embeddings reward or single
-    %   alpha-mixed objective from earlier notes.)
-    % - Full gradient derivations -> Appendix.
-    All four finetuned models start from the same pretrained base and are trained for a single, non-staged pass over the $60{,}000$-formula mutation set, with evaluation on the stage-4 evaluation split ($19{,}539$ formulae), early stopping and best-model selection on the evaluation semantic distance, and the same effective batch size of $1024$.
-
-    For each training item, the reinforcement-learning trainers sample one formula from the policy --- ancestral sampling at temperature $1.0$, no beam search --- conditioned on the target embedding, then re-run a teacher-forced forward pass to obtain differentiable token log-probabilities. The reward is the agreement between the satisfaction vectors of the generated formula $\hat\phi$ and the target $\phi$ over the trace sample,
-    \begin{equation}
+    All four finetuned models start from the same pretrained base and are trained for a single, non-staged pass over the $60{,}000$-formula mutation set, with evaluation on the stage-4 evaluation split ($19{,}539$ formulae), early stopping and best-model selection on the evaluation semantic distance, and the same effective batch size of $1024$. 
+    
+    For each training item, the reinforcement-learning trainers sample one formula from the policy --- ancestral sampling at temperature $1.0$, no beam search --- conditioned on the target embedding, then re-run a teacher-forced forward pass (\S\ref{sec:prelim_ce}) to obtain differentiable token log-probabilities. The reward is the agreement between the satisfaction vectors of the generated formula $\hat\phi$ and the target $\phi$ over the trace sample,
+    \begin{equation}\label{eq:rl_reward}
         R(\hat\phi, \phi) = 1 - \frac{1}{N}\sum_{i=1}^{N}\mathbb{1}\!\left[\widehat\chi^{\,i}_{\hat\phi} \ne \widehat\chi^{\,i}_{\phi}\right],
     \end{equation}
     i.e. one minus the normalised Hamming distance, clipped to $[-1,1]$ (the clip is inert for any valid formula, whose reward lies in $[0,1]$).
-
+    
     Generations that fail to parse receive no reward and are excluded from the policy-gradient term; they are instead handled by a corrective cross-entropy term on their ground-truth labels. The per-batch objective is the convex combination
-    \begin{equation}
+    \begin{equation}\label{eq:rl_hybrid}
         \mathcal{L} = r_{\text{valid}}\,\mathcal{L}_{\text{RL}} + r_{\text{invalid}}\,\mathcal{L}_{\text{CE}},
     \end{equation}
-    weighted by the proportions of valid and invalid generations in the batch, so the cross-entropy term acts as an anchor for samples the policy cannot yet emit validly. The per-trainer gradient derivations are deferred to the appendix.
-
+    weighted by the proportions of valid and invalid generations in the batch, so the cross-entropy term acts as an anchor for samples the policy cannot yet emit validly. The per-trainer gradient derivations are deferred to Appendix~\ref{app:objective_gradients}.
+    
     \subsection{Variants}\label{sec:rl_variants}
-    % RB (running-baseline REINFORCE): baseline b = EMA of batch reward mean (momentum 0.9), also
-    %   tracks EMA of reward^2; advantage A = (R-b)/sigma_R, detached; length-normalised sequence
-    %   log-prob; L_RL = -E[A * mean log p].
-    % GAE: critic = MLP (n_embd -> 256 -> 1, Tanh) on per-token last-layer hidden states; terminal
-    %   reward at the last real token; GAE(gamma,lambda) advantages; actor loss -sum A log p, critic
-    %   loss MSE to returns. gamma = 1 for BOTH runs; lambda in {1.0 (full Monte-Carlo), 0.9
-    %   (truncated)} is the axis of contrast. Critic initialised from scratch, then a ~5-epoch
-    %   actor-frozen warmup (critic-pretraining-ratio = 5/epochs). Critic LR chosen by a per-lambda
-    %   sweep over {1e-2..1e-4} on (MC-)explained-variance: 5e-3 (lambda=1.0) / 1e-3 (lambda=0.9).
-    % CE-finetuned control: same data + schedule, CE objective; isolates the OBJECTIVE from the
-    %   extra 60k data (RL-vs-control reflects the objective).
-    % Run summary:
-    %   | model        | trainer            | actor LR | critic LR | epoch cap | stopped @ | wall  |
-    %   | CE-finetuned | CETrainer          |  5e-6    |    --     |    50     |  50 (full)| 2h27m |
-    %   | RB           | REINFORCETrainerRB |  5e-8    |    --     |    50     |    18     | 2h14m |
-    %   | GAE lambda=1 | REINFORCETrainerGAE|  5e-8    |   5e-3    |    30     |   ~18     | 1h56m |
-    %   | GAE lambda=.9| REINFORCETrainerGAE|  5e-8    |   1e-3    |    30     |   ~25     | 2h41m |
-    %   (RB momentum 0.9; both GAE gamma=1.)
     The three reinforcement-learning models share the objective above and differ only in how the advantage is estimated; all use an actor learning rate of $5\times10^{-8}$.
-
+    
     The \textbf{RB} model uses a running baseline: the advantage is $(R-b)/\sigma_R$, where $b$ and $\sigma_R$ are exponential moving averages (momentum $0.9$) of the batch reward mean and standard deviation, and the policy-gradient loss weights the length-normalised sequence log-probability by this detached advantage.
-
-    The two \textbf{GAE} models add a learned critic --- a small multilayer perceptron ($1024 \to 256 \to 1$ with a Tanh hidden layer) reading the decoder's last-layer hidden states --- and form generalised-advantage-estimation advantages with discount $\gamma = 1$ and smoothing $\lambda \in \{1.0, 0.9\}$; $\lambda$ is the sole axis of contrast between them ($\lambda=1.0$ is full Monte-Carlo, $\lambda=0.9$ a slightly truncated, lower-variance estimate). The critic is initialised from scratch and pretrained for roughly five epochs with the actor frozen before joint training begins; its learning rate was selected per $\lambda$ by a short sweep over $\{10^{-2}, \dots, 10^{-4}\}$ on the critic's explained variance, giving $5\times10^{-3}$ for $\lambda=1.0$ and $10^{-3}$ for $\lambda=0.9$.
-
-    The \textbf{cross-entropy--finetuned} control is trained on the same data and schedule but under the pretraining cross-entropy objective, so that the comparison between it and the reinforcement-learning models isolates the contribution of the objective from that of the additional mutation data. Table~\ref{tab:finetune} summarises the four runs.
-
+    
+    The two \textbf{GAE} models add a learned critic --- a small multilayer perceptron ($1024 \to 256 \to 1$ with a Tanh hidden layer) reading the decoder's last-layer hidden states, the per-token value that lets the estimator localise credit (\S\ref{sec:objective_contrast}) --- and form generalised-advantage-estimation advantages with discount $\gamma = 1$ and smoothing $\lambda \in \{1.0, 0.9\}$; $\lambda$ is the sole axis of contrast between them ($\lambda=1.0$ is full Monte-Carlo, $\lambda=0.9$ a slightly truncated, lower-variance estimate). The critic is initialised from scratch and pretrained for roughly five epochs with the actor frozen before joint training begins; its learning rate was selected per $\lambda$ by a short sweep over $\{10^{-2}, \dots, 10^{-4}\}$ on the critic's explained variance, giving $5\times10^{-3}$ for $\lambda=1.0$ and $10^{-3}$ for $\lambda=0.9$.
+    The \textbf{cross-entropy--finetuned} control is trained on the same data and schedule but under the pretraining cross-entropy objective (\S\ref{sec:rl_motivation}). Table~\ref{tab:finetune} summarises the four runs.
+    
     \begin{table}[ht]
         \centering
         \caption{The four finetuning runs (all from the same pretrained base, on the $60{,}000$-formula mutation set, with early stopping and best-model selection on the evaluation semantic distance).}
@@ -621,6 +644,23 @@
             \bottomrule
         \end{tabular}
     \end{table}
+    
+    \subsection{What each objective can and cannot correct}\label{sec:objective_contrast}
+    The cross-entropy control and the three reinforcement-learning models are trained on the same data, from the same base, under the same conditioning; they differ only in the signal that drives the per-token update, and it is worth making precise what that difference allows each to correct. Under cross-entropy the gradient at every position raises the logit of the ground-truth token and lowers the rest, unconditionally: the update is steered only by how wrong the model was about the reference token, given the context (Appendix~\ref{app:obj_ce}). The policy gradient of \S\ref{sec:rl_variants} reuses exactly this per-token machinery but scales it by the advantage, so that the \emph{sign} of the advantage, rather than agreement with a reference, decides whether a sampled token is reinforced or suppressed, and its magnitude is gated by how far the sequence's reward sits from the baseline (Appendix~\ref{app:obj_re}). Where cross-entropy asks \emph{was this the right token here}, the policy gradient asks \emph{was this whole sequence better than expected}, and moves every token it emitted in the same direction on the strength of that single, sequence-level verdict.
+    
+    This difference has a clean consequence for the two objectives' optima. Any parameter setting optimal for the cross-entropy loss is also optimal for the reinforcement objective: a string-perfect policy reproduces $\mathrm{str}(\phi)$ exactly, hence matches its satisfaction vector, hence attains the maximal reward of a vanishing Hamming distance. The converse fails. A policy that, conditioned on the embedding of $p_1 \land p_2$, emits the commuted form $p_2 \land p_1$ is reward-optimal --- the two are logically equivalent --- yet cannot be cross-entropy-optimal, since the maximum-likelihood objective must have assigned the canonical token order strictly higher probability. The cross-entropy optima are therefore a \emph{proper} subset of the reinforcement optima (Appendix~\ref{app:obj_nesting}), and the surplus is exactly the space of semantically-equivalent syntaxes that cross-entropy is obliged to suppress. This is the formal content of the claim that reinforcement learning buys \emph{semantic flexibility}, the second axis along which we evaluate it in \S\ref{sec:rq2_comparison}. 
+    
+    \subsubsection{Equivalent rewrites: the latitude RL grants the syntax}
+    The equivalent rewrites of the mutation dataset (\S\ref{sec:finetune_data}) are where this latitude is meant to tell. Under teacher-forced cross-entropy the two rewrites of a base formula are simply two further reference strings, and the objective concentrates probability mass on each in turn; what it cannot do is credit the model for producing one when the other was the label. The reinforcement objective is indifferent to which syntactic realisation is emitted, provided the satisfaction vector matches, and from the start of finetuning it penalises a logically equivalent generation less than cross-entropy would --- pushing its likelihood up when it is sampled rather than down. It thereby relaxes the canonical-syntax coupling that pretraining installs, and we accordingly expect the reinforcement-finetuned models to command a larger set of distinct correct syntaxes per target than the cross-entropy control, an effect we measure directly through the distinct-correct count of \S\ref{sec:metrics}. 
+    
+    \subsubsection{Credit assignment and the near-miss}
+    The near-miss variants expose the opposite face of the policy gradient. Consider a target $\phi = (p_1 \land p_2) \to (\neg p_0 \land p_0)$, whose consequent is a contradiction, so that $\phi \equiv \neg(p_1 \land p_2)$, and suppose the policy, conditioned on $\emb(\phi)$, emits $\hat\phi = p_1 \land p_2$. The two are near-complementary in satisfaction, the reward is therefore near-minimal, and the sequence-level update of the running-baseline model (\S\ref{sec:rl_variants}) suppresses \emph{every} token of $\hat\phi$ uniformly. Yet the fault is sharply localised: the prefix $p_1 \land p_2$ is apt, and it is the omission of the negation-inducing structure --- the premature \texttt{<eos>} in place of the suffix that would flip the formula's behaviour --- that collapses the reward. A single scalar advantage has no vocabulary for \emph{which} action along the sequence deserved the blame, the credit-assignment problem of \S\ref{sec:prelim_rl} in concrete form. This is the gap the generalised-advantage estimator of \S\ref{sec:rl_variants} is introduced to narrow: by reading a per-token value from the decoder's hidden states and forming position-wise advantages against a terminal reward, it can, in principle, attribute the shortfall to the positions that caused it rather than to the sequence as a whole. The remedy should not be overstated --- with $\gamma = 1$ and a reward delivered only at the terminal token, the critic redistributes credit through its learned per-position baseline rather than dissolving the attribution problem --- but it is a principled, decoder-side response the scalar baseline cannot offer. A generation that fails to parse at all lies outside this picture entirely: it receives no policy-gradient signal, and is corrected instead by the hybrid cross-entropy term of \S\ref{sec:rl_mechanics}, which anchors the model back towards a valid string before the reward channel can speak.
+    
+    \subsubsection{Where the policy gradient does its work}
+    Read across the mutation dataset, the two cases predict an asymmetry in where reinforcement learning can act at all. The equivalent rewrites share their embedding with a base formula the model has already seen in pretraining; conditioned on that embedding the policy can reach the maximal reward simply by emitting a form it already commands --- typically the familiar base string --- so the policy gradient, once its baseline has caught up, finds little to push against on these targets. The near-miss variants carry an embedding far from any the policy was calibrated on, and for which no high-reward generation is yet in its repertoire; here the advantage is non-trivial and the credit-assignment machinery has something to correct. The training signal therefore concentrates, of its own accord, on precisely the under-served targets that the conditioning-bottleneck argument of \S\ref{sec:rl_motivation} independently identifies --- the high-variance, low-norm cell. 
+    
+    \subsection{Hypotheses}\label{sec:rl_hypotheses}
+    Two strands of the foregoing rationale --- the conditioning-bottleneck argument of \S\ref{sec:rl_motivation} and the credit-assignment argument of \S\ref{sec:objective_contrast} --- converge on a single prediction, which the evaluation of Part~B adjudicates. The premise (\textbf{H0}) is that the decoder conditions on embedding magnitude at all: that correctness increases with $\Vert\emb(\phi)\Vert$ on the pretrained base. Were it flat, the magnitude-conditioning account would be false, itself an informative negative result. The substantive hypothesis (\textbf{H1}) is the concentration the two strands predict: that the reinforcement-learning improvement is localised to the under-conditioned, high-variance, low-norm targets rather than spread uniformly, and --- by the credit-assignment argument --- that the variants able to localise credit have the most room to deliver it there. Sections~\ref{sec:geometry_analysis} and \ref{sec:rq2_comparison} make both precise and put them to the test.
     
     % ============================================================================
     % PART B — EVALUATION & ANALYSIS
@@ -820,5 +860,127 @@ Anchor cosine similarity threshold was only set to exclude large \emph{positive}
 \printbibliography[heading=bibintoc,title=Bibliography]
 
 \chapter{Appendices}
+
+% =====================================================================
+%  APPENDIX — Objective gradients and the CE/RL optimality nesting
+%  Consumed by: 6.5.2 (mechanics), 6.5.3 (variants), 6.5.4 (Moves 1-2,4).
+%  Reuses notation from Table~\ref{tab:prelim_notation} and Eq.~\eqref{eq:prelim_ce}.
+%  SOURCE: misc/passage.tex — STALE in three ways, flagged inline below.
+% =====================================================================
+
+\chapter{Gradient Derivations for the Training Objectives}\label{app:objective_gradients}
+
+    \section{Notation and Setup}\label{app:obj_setup}
+    \begin{itemize}
+        \item Recall Table~\ref{tab:prelim_notation} and \eqref{eq:prelim_ce}.
+        \item Add the output-layer specialisation used throughout: final hidden state
+              $\bm h_t \in \mathbb{R}^d$, output matrix $\bm W \in \mathbb{R}^{d\times|V|}$,
+              logit $z_{t,v} = \bm h_t^\top \bm W_{:,v}$.
+              % This is the "sparse" special case that makes Delta-z legible.
+        \item Add the critic $V_{\bm\psi}(\bm h_t)$ for the GAE derivation (§\ref{app:obj_gae}).
+    \end{itemize}
+
+    \section{Cross-Entropy Loss Gradient}\label{app:obj_ce}
+    % Reusable from passage.tex §97-206 ESSENTIALLY AS-IS (no stale dependencies).
+    \begin{itemize}
+        \item Logit derivative:
+              $\dfrac{\partial \ell_t^{\bm\theta}}{\partial z_{t,v}}
+               = P_{\bm\theta}(v\mid\bm y_{\le t},\bm e) - \mathbf{1}[v=y_{t+1}]$.
+        \item Output-layer derivative (column-sparse):
+              $\dfrac{\partial z_{t,v}}{\partial \bm W_{:,u}} = \bm h_t$ if $u=v$, else $\bm 0$.
+        \item Combine $\Rightarrow$ per-position logit change for the two cases:
+        \begin{align}
+            \Delta z_{t,y_{t+1}} &= \eta\,\bigl(1 - P_{\bm\theta}(y_{t+1}\mid\cdot)\bigr)\,\|\bm h_t\|^2 \;>\;0,\\
+            \Delta z_{t,u} &= -\eta\,P_{\bm\theta}(u\mid\cdot)\,\|\bm h_t\|^2 \;<\;0 \quad (u\neq y_{t+1}).
+        \end{align}
+        \item \textbf{Conclusion (cited by 6.5.4 Move 1):} CE \emph{unconditionally}
+              raises the ground-truth logit and lowers all others.
+        \item Close with the "zooming out" caveat: local-$W$ is a special case; the true
+              object is $\nabla_{\bm\theta}\mathcal{L}_{\text{CE}}$ over entangled weights.
+              \cite{elhage_toy_2022, olah_zoom_2020}
+    \end{itemize}
+
+    \section{Policy-Gradient (REINFORCE) Loss Gradient}\label{app:obj_re}
+    % Reusable from passage.tex §208-255, BUT:
+    %   STALE-FIX 1: advantage A is the CURRENT RB form (see §\ref{app:obj_rb}); do NOT
+    %               reintroduce the NMSE reward here. Keep R abstract until §\ref{app:obj_rb}.
+    \begin{itemize}
+        \item Per-token surrogate $\hat\ell_t^{\bm\theta} = -\log p_{\bm\theta}(\hat y_{t+1}\mid\hat{\bm y}_{\le t},\bm e)$
+              on the model's OWN sample $\hat{\bm y}$ (teacher-forced recomputation).
+        \item The advantage $A$ enters as a scalar multiplier; same chain rule as CE gives
+        \begin{equation}
+            \Delta z_{t,\hat y_{t+1}} = \eta\,A\,\bigl(1 - P_{\bm\theta}(\hat y_{t+1}\mid\cdot)\bigr)\,\|\bm h_t\|^2,
+        \end{equation}
+              and analogously for $u\neq\hat y_{t+1}$.
+        \item \textbf{Conclusion (cited by 6.5.4 Move 1):} the \emph{sign of $A$} decides the
+              update direction — RL raises the sampled-token logit when $A>0$, lowers it when $A<0$.
+              Contrast directly with §\ref{app:obj_ce}'s unconditional push.
+        \item State unbiasedness via \eqref{eq:prelim_reinforce} \cite{williams_simple_1992}.
+    \end{itemize}
+
+    \section{The Hybrid Valid/Invalid Objective}\label{app:obj_hybrid}
+    % NEW — must be written from scratch. REPLACES passage.tex §257-264 (alpha-mixing /
+    %   "Multi-Objective Learning" — DROPPED, stale). This is the CURRENT per-batch loss.
+    \begin{itemize}
+        \item Per batch: $\mathcal{L} = r_{\text{valid}}\,\mathcal{L}_{\text{RL}}
+              + r_{\text{invalid}}\,\mathcal{L}_{\text{CE}}$, weights $=$ batch proportions
+              of parseable / unparseable generations.
+        \item $\mathcal{L}_{\text{CE}}$ here is teacher-forced CE on the ground-truth labels
+              of the \emph{invalid} items only (a corrective anchor); valid items contribute
+              only through $\mathcal{L}_{\text{RL}}$.
+        \item Gradient by linearity; note the two terms touch disjoint subsets of the batch.
+        \item % STALE-FIX 2: there is NO R=-1 branch for invalid generations and NO global alpha.
+              Explicitly state this supersedes the earlier single-alpha mixed objective.
+    \end{itemize}
+
+    \section{Variant-Specific Advantage Estimators}\label{app:obj_variants}
+
+        \subsection{Running-Baseline REINFORCE (RB)}\label{app:obj_rb}
+        \begin{itemize}
+            \item Length-normalised sequence log-prob:
+                  $\overline{\log p} = \frac{1}{|\hat{\bm y}|}\sum_t \log p_{\bm\theta}(\hat y_{t+1}\mid\cdot)$.
+            \item Advantage $A = (R-b)/\sigma_R$, \emph{detached}; $b$ and $\mathbb{E}[R^2]$ are
+                  EMA-tracked (momentum), $\sigma_R = \sqrt{\mathbb{E}[R^2]-b^2}$.
+            \item $\mathcal{L}_{\text{RL}} = -\,\mathbb{E}_{\text{valid}}\!\left[A\,\overline{\log p}\right]$.
+        \end{itemize}
+
+        \subsection{Generalised Advantage Estimation (GAE)}\label{app:obj_gae}
+        \begin{itemize}
+            \item Per-token values $v_t = V_{\bm\psi}(\bm h_t)$; terminal reward placed at the
+                  last real token only.
+            \item TD residual $\delta_t = r_t + \gamma v_{t+1} - v_t$; backward recursion
+                  $A_t = \delta_t + \gamma\lambda\,A_{t+1}$; returns $G_t = A_t + v_t$. Use $\gamma=1$.
+            \item Actor loss $-\frac{1}{\sum m}\sum_t A_t\,\log p_t\,m_t$ (advantages detached);
+                  critic loss $\frac{1}{\sum m}\sum_t (v_t - G_t)^2 m_t$.
+            \item Critic warmup: critic pretrained with the actor frozen before joint training.
+            \item \textbf{Conclusion (cited by 6.5.4 Move 4):} per-token $A_t$ distributes credit
+                  the single RB scalar cannot — the principled (partial) response to the
+                  credit-assignment problem of §\ref{sec:prelim_rl}.
+        \end{itemize}
+
+    \section{The CE/RL Optimality Nesting}\label{app:obj_nesting}
+    % Reusable from passage.tex §268-283 with ONE substitution:
+    %   STALE-FIX 3: NMSE-based reward -> R = 1 - normalised Hamming. Argument is identical:
+    %               equivalent formula -> same satvec -> Hamming 0 -> maximal reward.
+    \begin{itemize}
+        \item Assumption + caveat: a CE-optimum assigns the ground-truth token top probability
+              at every position; note the mild violation for logically equivalent formulae
+              co-present in the data (the tie-break does not weaken the argument).
+        \item $\arg\min\mathcal{L}_{\text{CE}} \subseteq \arg\min\mathcal{L}_{\text{RL}}$:
+              a CE-optimal policy reproduces $\mathrm{str}(\phi)$ exactly $\Rightarrow$ same
+              satvec $\Rightarrow$ Hamming $0$ $\Rightarrow$ maximal reward.
+        \item Strict: $\arg\min\mathcal{L}_{\text{CE}} \subsetneq \arg\min\mathcal{L}_{\text{RL}}$
+              via the commutativity witness $p_1\land p_2$ vs.\ $p_2\land p_1$ — RL-optimal,
+              CE-suboptimal.
+        \item \textbf{Conclusion (cited by 6.5.4 Move 2):} RL admits the semantically-equivalent
+              syntaxes CE penalises — the formal handle on "RL buys semantic flexibility".
+    \end{itemize}
+
+    \section{Remark: Reward Clipping}\label{app:obj_clip}
+    % Optional, short. From passage.tex §60 but RE-SCOPED:
+    %   under R = 1 - Hamming, valid rewards already lie in [0,1], so the clip to [-1,1] is
+    %   INERT for valid generations. Keep only the bottom-clip-does-not-bias-the-optimum point
+    %   \cite{mnih_playing_2013, pohlen_observe_2018}; drop the NMSE framing.
+
 
 \end{document}
