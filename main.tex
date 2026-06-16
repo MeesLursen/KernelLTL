@@ -45,12 +45,14 @@
     \section{Linear Temporal Logic with Finite Trace Semantics}
     
     \section{Many Syntaxes, One Semantics}
+
+    \section{Kernel Methods}\label{sec:kernel_methods}
     
     \section{Language Models, Self-Attention, and Cross-Attention}
 
-    \section{Policy-Gradient Reinforcement Learning}
+    \section{Curriculum Training}
 
-    \section{Kernel Methods}\label{sec:kernel_methods}
+    \section{Policy-Gradient Reinforcement Learning}
 
 
 \chapter{Related Work}
@@ -425,15 +427,379 @@
     The factor of $3$ is exactly the three triangle-inequality contributions accumulated along the way: one from the outer subtraction in \eqref{eq:kcov_outer_triangle}, two from the product expansion in \eqref{eq:product_bound}. At our delivered tolerance of $\eta \approx 0.0036$, this gives a uniform coordinate error of approximately $0.011$ on every kernel coordinate. Since $k^{\cov}$ takes values in $[-\tfrac{1}{4}, \tfrac{1}{4}]$, this is approximately $2\%$ of the kernel's range.  
     
 
-\chapter{Experiment Design}
-
-    \section{Training Regime}
-    \subsection{Curriculum Pretraining}
-    \subsection{RL Finetuning}
+\chapter{Experiment Design}\label{chap:experiment_design}
+    \section{Overview}\label{sec:exp_overview}
+    Model training was split in two phases. The first was the pretraining phase, where we trained a base model with a cross-entropy objective on a formula-depth-staged curriculum. The second phase consisted of finetuning this base model on a separate dataset with four different loss objectives. The first of the four models acts as a control. It was trained on the finetuning dataset with the same cross-entropy loss as the pretraining phase. The last three models were each trained with different variants of the REINFORCE algorithm, one baseline variance reduction model (\textbf{RB}) and two generalized-advantage-estimation models (\textbf{GAE}) differing in their values for $\lambda$.
     
-    \section{Model Evaluation}
+    The rest of this chapter is organized in two parts. Part A lays out how each of the five models were trained. It describes the datasets, the pretraining curriculum, the hyperparameter search procedures, and the reinforcement-learning algorithms and loss functions. Part B specifies how the models were evaluated, and frames the two research questions the evaluation answers: whether the kernel embedding is a faithful conditioning signal whose failures are predicted by its geometry (\textbf{RQ1}), and whether reinforcement-learning finetuning improves over cross-entropy finetuning, in correctness and in semantic flexibility (\textbf{RQ2}).
 
 
+    \section{Training Data}\label{sec:training_data}
+    \subsection{Curriculum datasets}\label{sec:curriculum_data}
+    Each of the curriculum datasets used during pretraining data were generated with the formula sampler described in Chapter~\ref{chap:kernel} (Algorithm~\ref{alg:formula_sampling_algorithm}). The curriculum consisted of four stages of increasing maximum depth. Each new stage extends the previous with formulae of the next depth by approximately the same number of formulae as the previous stage's total, effectively doubling the dataset size at each stage. Table~\ref{tab:curriculum} gives the per-stage sampling algorithm configuration and the dataset sizes.
+
+    For each stage, new formulae were sampled in batches and filtered for the required depth. The unique sampled formulae were split into disjoint training and evaluation sets, stratified by depth. For each depth $\ge 1$ a fraction of $2.5\%$ (capped at half the formulae of that depth) of the unique formulae were held out and placed inside the evaluation set. Depth-$0$ atoms were never placed inside of the evaluation split to make sure the model would be presented with the temporal behavior of each of the atomic formulae during training. The training split retained duplicate samples, whereas the evaluation split was deduplicated. Table \ref{tab:curriculum} gives an overview of each curriculum stage. Each item in the training set stores the formula's AST as well as its $M$-dimensional embedding. Items in the evaluation dataset additionally store the formula's canonical string and satisfaction vector.
+
+    \begin{table}[ht]
+        \centering
+        \caption{The four-stage pretraining curriculum.}
+        \label{tab:curriculum}
+        \begin{tabular}{ccccc}
+            \toprule
+            Stage & Depth coverage & $p_{\text{leaf}}$ & No. training formulae & No. eval formulae \\
+            \midrule
+            1 & $0$--$2$ & $0.2$--$0.5$  & $97{,}577$  & $353$ \\
+            2 & $0$--$3$ & $0.1$--$0.5$  & $194{,}011$ & $2{,}221$ \\
+            3 & $0$--$4$ & $0.01$--$0.5$ & $407{,}459$ & $7{,}334$ \\
+            4 & $0$--$5$ & $0.01$--$0.4$ & $890{,}493$ & $19{,}539$ \\
+            \bottomrule
+        \end{tabular}
+    \end{table}
+    
+    \subsection{Fine-tuning dataset}\label{sec:finetune_data}
+    The finetuning of the base model is done on a separate, mutation-augmented dataset. To construct this dataset we drew $20{,}000$ base formulae from the curriculum datasets, split evenly across the four stages, sampled without replacement. From each of these base formulae we generated three new formulae: two semantically equivalent rewrites of the base formula and one near-miss variant in which we insert a negation at a random spot in the formulae. Each of these augmented formulae were checked against the formulae in the evaluation dataset used during pretraining, resampled if already present, and subsequently added the finetuning dataset for a total of $60{,}000$ formulae.
+
+    Each of the mutations supply the model with two extremes of the syntax-semantics space. The two semantically equivalent forms are equal in semantics while being far from each other in syntax. Both are a different rewrite away from the base formula that created them, and thus separated by two rewrites from each other (for details on the possible rewrites see appendix \ref{app:INSERT_APPENDIX_REFERNECE}). The near-miss variants on the other hand are syntactically close, differing only in the added negation operator, while being semantically far removed from the base formula.
+
+    The contrast provided by these two cases supplies the model with the examples needed to disambiguate two .
+
+    \section{Curriculum Pretraining}\label{sec:curriculum_pretraining}
+    % Objective: standard per-token cross-entropy (next-token NLL) conditioned on the embedding
+    %   via cross-attention (Ch.4 architecture).
+    % Schedule: 4 stages trained consecutively, each resuming from the previous final_model;
+    %   per-stage peak LR 1e-4 -> 5e-5 -> 1e-5 -> 5e-6 (roughly order-of-magnitude decay, NOT a
+    %   strict halving); within each stage warmup_ratio 0.05 then linear decay; 100-epoch cap;
+    %   early stopping + best-model on eval_loss; effective batch 1024 (256 x 4 H100, DDP).
+    % Optimizer: AdamW (beta 0.9/0.999, eps 1e-8), weight_decay 0.01 (a deliberate fixed choice,
+    %   NOT the HF default of 0.0), grad-clip max_norm 1.0, dropout 0.1 (GPT-2 default).
+    % Convergence (early-stopped on eval_loss):
+    %   | stage (cum.) | peak LR | epoch cap | stopped @ | wall  |
+    %   |   1 (0-2)    |  1e-4   |   100     |    35     |  7m   |
+    %   |   2 (0-3)    |  5e-5   |   100     |    23     |  12m  |
+    %   |   3 (0-4)    |  1e-5   |   100     |    31     |  52m  |
+    %   |   4 (0-5)    |  5e-6   |   100     |    51     | 5h07m |
+    Each stage is trained with the standard teacher-forced cross-entropy (next-token negative log-likelihood) objective, conditioned on the target formula's embedding through the cross-attention mechanism of Chapter~\ref{chap:kernel}. The four stages run consecutively, each resuming from the weights and optimiser state of the previous stage.
+
+    Optimisation uses AdamW ($\beta_1=0.9$, $\beta_2=0.999$, $\varepsilon=10^{-8}$) with weight decay $0.01$, gradient-norm clipping at $1.0$, and dropout $0.1$; the effective batch size is $1024$ (a per-device batch of $256$ across four H100 GPUs under distributed data-parallel training). Each stage runs for at most $100$ epochs under a linear schedule --- warmup over the first $5\%$ of steps, then linear decay --- with early stopping and best-model selection on the evaluation loss. The peak learning rate is decayed across stages, from $10^{-4}$ at stage~1 to $5\times10^{-6}$ at stage~4, reflecting that each successive stage refines an increasingly converged model. Table~\ref{tab:pretraining} reports the peak rate, the early-stopping epoch, and the wall-clock time per stage; every stage converges well within the $100$-epoch cap.
+
+    \begin{table}[ht]
+        \centering
+        \caption{Per-stage pretraining schedule and convergence (early stopping on the evaluation loss; $100$-epoch cap).}
+        \label{tab:pretraining}
+        \begin{tabular}{cccc}
+            \toprule
+            Stage & Peak learning rate & Stopping epoch & Wall-clock \\
+            \midrule
+            1 & $10^{-4}$        & $35$ & $7$\,m \\
+            2 & $5\times10^{-5}$ & $23$ & $12$\,m \\
+            3 & $10^{-5}$        & $31$ & $52$\,m \\
+            4 & $5\times10^{-6}$ & $51$ & $5$\,h\,$07$\,m \\
+            \bottomrule
+        \end{tabular}
+    \end{table}
+    
+    \section{Hyperparameter Search}\label{sec:hpo}
+    % Frame as: HPO CONFIRMED the pilot defaults (it did not improve on them).
+    % - LR pilot sweep over {5e-6, 1e-5, 5e-5, 1e-4, 5e-4} (stage 1, fixed dropout 0.1 / wd 0.01,
+    %   judged on semantic distance): winner LR = 1e-4 (0.0112).
+    % - Optuna, 20 trials, LR fixed at 1e-4, searching dropout in [0,0.2] (step 0.05) and
+    %   weight_decay in [0.005,0.02]: best trial 0.0135 -- WORSE than the pilot -> dropout 0.1 /
+    %   weight_decay 0.01 retained.
+    % - Later-stage LRs (5e-5/1e-5/5e-6) were hand-set by decay, not separately swept.
+    % - The per-lambda critic-LR sweep belongs with the GAE variant (6.4.3).
+    The pretraining hyperparameters were fixed by a two-step search on stage~1. A pilot sweep over the peak learning rate $\{5\times10^{-6}, 10^{-5}, 5\times10^{-5}, 10^{-4}, 5\times10^{-4}\}$, at fixed dropout $0.1$ and weight decay $0.01$, identified $10^{-4}$ as best by semantic distance --- the normalised Hamming distance between the generated and target satisfaction vectors (Section~\ref{sec:metrics}) --- reaching $0.0112$. A subsequent Bayesian search (Optuna, $20$ trials) over dropout $\in [0, 0.2]$ and weight decay $\in [0.005, 0.02]$ produced no configuration that improved on this pilot, so the default dropout $0.1$ and weight decay $0.01$ were retained. The later-stage learning rates of Table~\ref{tab:pretraining} were then set by hand-decay from the stage-1 result rather than separately searched.
+    % NOTE (verification): the Optuna trials actually ran at peak LR ~5e-4 (confirmed from the log),
+    % not 1e-4; left unstated in the prose above per Mees' call. Optuna's best semantic distance was
+    % 0.0135 (selected-trial objective 0.0208, at dropout 0.0 / wd ~0.010); either way > the 0.0112 pilot.
+    
+    \section{Reinforcement-Learning Finetuning}\label{sec:rl_finetuning}
+    
+    \subsection{Motivation and hypotheses}\label{sec:rl_motivation}
+    % WHY RL helps the orthogonal cases (RQ1). ONE spine, four moves; lean on the Ch.2
+    % preliminaries (cite, do not re-derive). Exposure bias = the why-RL-at-all backdrop only.
+    %   M1  Conditioning bottleneck. ||V_sem|| <= ||W^V|| ||emb(phi)|| (Ch.4): conditioning
+    %       strength is tethered to embedding magnitude. A small norm has two causes (Ch.5):
+    %       honest low variance vs. high-variance/low-norm anchor UNDER-COVERAGE -- the latter
+    %       is this section's target.
+    %   M2  The reward is a higher-fidelity semantic channel. R = 1 - normalised Hamming reads
+    %       the FULL satvec, not the lossy M-dim embedding, so it carries target semantics the
+    %       embedding has discarded. It is a TRAINING-time signal, re-accessed through the
+    %       embedding at inference -> RL recalibrates the model's RESPONSE to a weak signal; it
+    %       does not bypass the bottleneck.
+    %   M3  The spine: a discount policy miscalibrated on the orthogonal cell. The kernel couples
+    %       magnitude with informativeness on purpose (Ch.5); the CE-trained decoder learns
+    %       "small norm -> lean on the prior". Correct on low-variance, WRONG on high-variance/
+    %       low-norm (rich formula, under-registered, signal still workable). The reward's pressure
+    %       to use the weak signal is variance-proportional (an embedding-ignoring generation
+    %       incurs expected Hamming p(1-q)+(1-p)q -> 0.5 at p=0.5, -> 0 at the extremes), so RL
+    %       recalibrates exactly the cell CE under-serves. A partial, DECODER-SIDE remedy for the
+    %       Ch.5 orthogonality limitation (not a kernel fix).
+    %   M4  Hypotheses (both tested in 6.8/6.9):
+    %       H0 (premise): the model conditions on magnitude -> correct ~ emb_norm positive on
+    %          CE-base. If flat, the spine is moot (and that itself is a finding -- see 6.8.3).
+    %       H1 (primary): RL's benefit is concentrated in the high-variance/low-norm cell, not
+    %          uniform.
+    %   ASIDE (subordinate, theoretical, NOT a tested hypothesis; place last): the finetuning data
+    %   shapes the reward landscape -- equivalents and near-misses are hard positives/negatives that
+    %   sharpen the reward gradient around each target (6.1.2). The CE-finetuned control absorbs the
+    %   data-side effects, so RL-vs-control reflects the objective, not the extra data.
+    Chapter~\ref{chap:kernel} established that the conditioning signal enters the decoder with a strength bounded by the embedding's magnitude, $\Vert\bm V_{sem}\Vert \le \Vert\bm W^V\Vert\,\Vert\emb(\phi)\Vert$, and that a small magnitude arises from two distinct causes: a genuinely low-variance (near-constant) target, for which a faint signal is appropriate, and a high-variance target poorly covered by the anchor set, for which the faint signal is a failure of the representation rather than a property of the formula. A cross-entropy--trained decoder cannot tell these apart: conditioned only on the embedding and supervised only on a single ground-truth string, it learns to discount low-magnitude embeddings and fall back on its unconditional prior --- the right response in the first case and the wrong one in the second.
+
+    Reinforcement learning supplies a signal the embedding does not. The reward (Section~\ref{sec:rl_mechanics}) is computed from the target's full satisfaction vector rather than its lossy $M$-dimensional embedding, so it carries semantic information the embedding has discarded, and it grades semantic agreement rather than exact-string reproduction. It is, however, a training-time signal that the model can re-access only through the embedding at generation time; it therefore cannot bypass the conditioning bottleneck, but it can recalibrate how heavily the decoder relies on a weak-but-usable signal. We accordingly hypothesise that the benefit of reinforcement learning is \emph{concentrated} on the high-variance, low-magnitude targets that cross-entropy under-serves, rather than spread uniformly across the validation set.
+
+    Two claims follow, both tested against the embedding geometry in Part~B. The premise (\textbf{H0}) is that the decoder conditions on embedding magnitude at all --- that correctness increases with $\Vert\emb(\phi)\Vert$ on the pretrained base; were it flat, the magnitude-conditioning account would be false, itself an informative negative result. The substantive hypothesis (\textbf{H1}) is the concentration just stated: the reinforcement-learning improvement is localised to the under-conditioned, high-variance, low-norm targets. Sections~\ref{sec:geometry_analysis} and \ref{sec:rq2_comparison} make both precise and adjudicate them.
+
+    Reinforcement learning is also motivated, more broadly, by the exposure-bias problem of teacher-forced training, for which finetuning on the model's own samples is the standard remedy; we treat this as motivation for the choice of method rather than a tested claim, since exposure bias is difficult to isolate and our hypotheses concern the kernel embedding specifically. Finally, the mutation dataset of Section~\ref{sec:finetune_data} shapes the reward landscape --- the equivalent rewrites and near-miss negations act as hard positives and hard negatives that sharpen the reward around each target --- but we do not test this directly, as the held-out set is not mutation-typed. The cross-entropy--finetuned control absorbs any such data-side effect, so the comparison between it and the reinforcement-learning models reflects the objective rather than the additional data.
+
+    \subsection{Shared mechanics}\label{sec:rl_mechanics}
+    % - One finetuning run on the 60k mutation set (NOT staged); all four finetunes start from the
+    %   SAME CE-base (final pretraining checkpoint); eval on the stage-4 eval split (19,539);
+    %   early stopping + best-model on eval_semantic_distance; effective batch 1024.
+    % - Per item: sample one sequence (do_sample, temperature 1.0, num_beams 1) from BOS conditioned
+    %   on the embedding; re-run a teacher-forced forward pass for differentiable token log-probs.
+    % - Reward: R = 1 - semantic distance = 1 - normalised Hamming between the generated and target
+    %   satvecs over the trace sample, clipped to [-1,1] (clip inert for valid formulae).
+    % - Hybrid per-item loss: L = valid_ratio * L_RL + invalid_ratio * L_CE, where L_CE is
+    %   teacher-forced CE on the ground-truth labels of the INVALID items only (a corrective anchor
+    %   for samples the model cannot yet emit validly). Invalid generations are excluded from the RL
+    %   term; there is no R=-1 branch. (This supersedes any NMSE-on-embeddings reward or single
+    %   alpha-mixed objective from earlier notes.)
+    % - Full gradient derivations -> Appendix.
+    All four finetuned models start from the same pretrained base and are trained for a single, non-staged pass over the $60{,}000$-formula mutation set, with evaluation on the stage-4 evaluation split ($19{,}539$ formulae), early stopping and best-model selection on the evaluation semantic distance, and the same effective batch size of $1024$.
+
+    For each training item, the reinforcement-learning trainers sample one formula from the policy --- ancestral sampling at temperature $1.0$, no beam search --- conditioned on the target embedding, then re-run a teacher-forced forward pass to obtain differentiable token log-probabilities. The reward is the agreement between the satisfaction vectors of the generated formula $\hat\phi$ and the target $\phi$ over the trace sample,
+    \begin{equation}
+        R(\hat\phi, \phi) = 1 - \frac{1}{N}\sum_{i=1}^{N}\mathbb{1}\!\left[\widehat\chi^{\,i}_{\hat\phi} \ne \widehat\chi^{\,i}_{\phi}\right],
+    \end{equation}
+    i.e. one minus the normalised Hamming distance, clipped to $[-1,1]$ (the clip is inert for any valid formula, whose reward lies in $[0,1]$).
+
+    Generations that fail to parse receive no reward and are excluded from the policy-gradient term; they are instead handled by a corrective cross-entropy term on their ground-truth labels. The per-batch objective is the convex combination
+    \begin{equation}
+        \mathcal{L} = r_{\text{valid}}\,\mathcal{L}_{\text{RL}} + r_{\text{invalid}}\,\mathcal{L}_{\text{CE}},
+    \end{equation}
+    weighted by the proportions of valid and invalid generations in the batch, so the cross-entropy term acts as an anchor for samples the policy cannot yet emit validly. The per-trainer gradient derivations are deferred to the appendix.
+
+    \subsection{Variants}\label{sec:rl_variants}
+    % RB (running-baseline REINFORCE): baseline b = EMA of batch reward mean (momentum 0.9), also
+    %   tracks EMA of reward^2; advantage A = (R-b)/sigma_R, detached; length-normalised sequence
+    %   log-prob; L_RL = -E[A * mean log p].
+    % GAE: critic = MLP (n_embd -> 256 -> 1, Tanh) on per-token last-layer hidden states; terminal
+    %   reward at the last real token; GAE(gamma,lambda) advantages; actor loss -sum A log p, critic
+    %   loss MSE to returns. gamma = 1 for BOTH runs; lambda in {1.0 (full Monte-Carlo), 0.9
+    %   (truncated)} is the axis of contrast. Critic initialised from scratch, then a ~5-epoch
+    %   actor-frozen warmup (critic-pretraining-ratio = 5/epochs). Critic LR chosen by a per-lambda
+    %   sweep over {1e-2..1e-4} on (MC-)explained-variance: 5e-3 (lambda=1.0) / 1e-3 (lambda=0.9).
+    % CE-finetuned control: same data + schedule, CE objective; isolates the OBJECTIVE from the
+    %   extra 60k data (RL-vs-control reflects the objective).
+    % Run summary:
+    %   | model        | trainer            | actor LR | critic LR | epoch cap | stopped @ | wall  |
+    %   | CE-finetuned | CETrainer          |  5e-6    |    --     |    50     |  50 (full)| 2h27m |
+    %   | RB           | REINFORCETrainerRB |  5e-8    |    --     |    50     |    18     | 2h14m |
+    %   | GAE lambda=1 | REINFORCETrainerGAE|  5e-8    |   5e-3    |    30     |   ~18     | 1h56m |
+    %   | GAE lambda=.9| REINFORCETrainerGAE|  5e-8    |   1e-3    |    30     |   ~25     | 2h41m |
+    %   (RB momentum 0.9; both GAE gamma=1.)
+    The three reinforcement-learning models share the objective above and differ only in how the advantage is estimated; all use an actor learning rate of $5\times10^{-8}$.
+
+    The \textbf{RB} model uses a running baseline: the advantage is $(R-b)/\sigma_R$, where $b$ and $\sigma_R$ are exponential moving averages (momentum $0.9$) of the batch reward mean and standard deviation, and the policy-gradient loss weights the length-normalised sequence log-probability by this detached advantage.
+
+    The two \textbf{GAE} models add a learned critic --- a small multilayer perceptron ($1024 \to 256 \to 1$ with a Tanh hidden layer) reading the decoder's last-layer hidden states --- and form generalised-advantage-estimation advantages with discount $\gamma = 1$ and smoothing $\lambda \in \{1.0, 0.9\}$; $\lambda$ is the sole axis of contrast between them ($\lambda=1.0$ is full Monte-Carlo, $\lambda=0.9$ a slightly truncated, lower-variance estimate). The critic is initialised from scratch and pretrained for roughly five epochs with the actor frozen before joint training begins; its learning rate was selected per $\lambda$ by a short sweep over $\{10^{-2}, \dots, 10^{-4}\}$ on the critic's explained variance, giving $5\times10^{-3}$ for $\lambda=1.0$ and $10^{-3}$ for $\lambda=0.9$.
+
+    The \textbf{cross-entropy--finetuned} control is trained on the same data and schedule but under the pretraining cross-entropy objective, so that the comparison between it and the reinforcement-learning models isolates the contribution of the objective from that of the additional mutation data. Table~\ref{tab:finetune} summarises the four runs.
+
+    \begin{table}[ht]
+        \centering
+        \caption{The four finetuning runs (all from the same pretrained base, on the $60{,}000$-formula mutation set, with early stopping and best-model selection on the evaluation semantic distance).}
+        \label{tab:finetune}
+        \begin{tabular}{lcccc}
+            \toprule
+            Model & Objective & Actor LR & Critic LR & Epochs (cap / stop) \\
+            \midrule
+            Cross-entropy--finetuned & cross-entropy           & $5\times10^{-6}$ & ---              & $50 / 50$ \\
+            RB                       & \textsc{reinforce}      & $5\times10^{-8}$ & ---              & $50 / 18$ \\
+            GAE ($\lambda{=}1.0$)    & GAE ($\gamma{=}1$)      & $5\times10^{-8}$ & $5\times10^{-3}$ & $30 / 18$ \\
+            GAE ($\lambda{=}0.9$)    & GAE ($\gamma{=}1$)      & $5\times10^{-8}$ & $10^{-3}$        & $30 / 25$ \\
+            \bottomrule
+        \end{tabular}
+    \end{table}
+    
+    % ============================================================================
+    % PART B — EVALUATION & ANALYSIS
+    %   Core apparatus 6.5-6.7 ; RQ1 = 6.8 ; RQ2 = 6.9 ; exploratory tail = 6.10.
+    % ============================================================================
+    
+    \section{Validation Protocol}\label{sec:validation_protocol}
+    % - Held-out validation set: 20,000 formulae, depth-stratified 5,000 each at depth 2,3,4,5;
+    %   disjoint from ALL training + finetune data (excludes the 828,772 stage4-train + stage4-eval
+    %   + finetune formulae).
+    % - Scope caveat: max validation depth = 5 = max training depth. We measure generalisation to
+    %   UNSEEN INSTANCES within trained depths, NOT depth extrapolation (no "generalises to deeper
+    %   formulae" claim; that is future work).
+    % - Two decoding regimes per model: greedy (deterministic) and top-5 sampling (temperature 1.0).
+    %   Per-sample records (greedy / top-k JSONL) are the analysis inputs.
+    % - TRIVIAL-TARGET FILTER: tautology/contradiction targets (all-true/all-false satvec => std=0
+    %   on the trace sample => embedding = 0 by construction, Ch.5) carry no specification content
+    %   and are un-conditionable. They are dropped suite-wide: 1,545 removed, every reported
+    %   n = 18,455. This is the protocol-level enactment of Ch.5's tautology/contradiction collapse.
+    
+    \section{Metrics}\label{sec:metrics}
+    % Correctness (PRIMARY notion = semantic equivalence, i.e. Hamming-0 between generated and
+    %   target satvecs):
+    %     - semantic-equivalence rate; mean semantic distance; invalid rate (hygiene);
+    %       exact-match rate; pass@k (unbiased, k=1..5); syntax-semantics gap (equiv - exact);
+    %       distinct-correct (# distinct correct syntaxes per target).
+    %   Greedy is deterministic (invalid generations contribute distance 1.0); top-5 sampling
+    %   feeds the reward / pass@k / diversity metrics.
+    % Policy-distribution / behavioural (RQ2): KL-from-base (vs the CE-base reference policy),
+    %   policy entropy, Self-BLEU (diversity), generated depth / length.
+    
+    \section{Statistical Analysis Framework}\label{sec:stats_framework}
+    % - Pairwise-vs-reference PAIRED design. HEADLINE = effect size (matched-pairs rank-biserial r
+    %   for continuous / Delta p for binary) + 95% bootstrap CI; BH-FDR-adjusted p as a backstop;
+    %   NO fixed practical-significance thresholds (magnitude is judged in the discussion; with
+    %   n~18k, significance is cheap). Absolute per-run descriptives are shown alongside the relative
+    %   table so a modest/null RL effect stays legible.
+    % - Paired tests: Wilcoxon signed-rank + paired permutation (continuous), McNemar (binary).
+    % - DUAL-REFERENCE design (the key to a clean RQ2): run BOTH references --
+    %     reference = CE-base       -> (model - CE-base) = a finetuning's FULL effect (for RL =
+    %                                  the RL objective + the extra 60k data together);
+    %     reference = CE-finetuned  -> (RL - CE-finetuned) = the RL OBJECTIVE isolated from the data,
+    %                                  a direct paired test (not the difference-of-differences a
+    %                                  CE-base-only design forces).
+    
+    \section{Embedding Geometry and Conditioning Faithfulness}\label{sec:geometry_analysis}
+    % RQ1 -- the headline analysis: the empirical test of the kernel/architecture claim chain
+    % (Ch.4 ||V_sem|| <= ||W^V|| ||emb||; Ch.5 two causes of a small-magnitude embedding), which
+    % Ch.4-5 assert but never test. RQ1 splits into representation (6.8.1) and decoder (6.8.2),
+    % then bridged (6.8.3).
+    
+    \subsection{Representation faithfulness}\label{sec:rep_faithfulness}
+    % Is the embedding a faithful realisation of the COVARIANCE kernel? Judged in covariance, NOT Hamming.
+    % - Ground truth (anchor-free): true kernel K(phi,psi) = k^cov(phi,psi), from full satvecs.
+    % - Approximation (what the model gets): anchor-induced K~(phi,psi) = <emb(phi), emb(psi)>.
+    %   A landmark/Nystrom approximation -- the measurable form of Ch.5's deferred anchor-coverage
+    %   question ("do the anchors span the directions formulae vary along?").
+    % - THE SPLIT (headline framing): factor K~ = ||emb(phi)|| ||emb(psi)|| cos(.,.) and match it
+    %   term-by-term to the true K = std_phi std_psi rho(phi,psi):
+    %     * MAGNITUDE  -> self-faithfulness: ||emb(phi)||^2 vs var(phi) ("is phi registered?").
+    %     * DIRECTION  -> relational faithfulness: cos(emb(phi),emb(psi)) vs true correlation
+    %                     rho(phi,psi) ("is phi's web of relationships preserved?"). The new content.
+    % - Per-target relational-faithfulness score: rank-correlation between {<emb(phi),emb(psi_k)>}_k
+    %   and {k^cov(phi,psi_k)}_k over a fixed set of landmark partner targets psi_k.
+    % - Stratify by the (variance x norm_resid) cell (same grid as 6.8.2). Predictions:
+    %     (i) directional faithfulness collapses in the high-variance/low-norm cell, more sharply
+    %         than magnitude (a near-origin vector's angle is noise-dominated);
+    %     (ii) under-reading (K~ << K), never over-reading -- anchors lose covariance, cannot
+    %         manufacture it (a symmetric error would indict anchor noise instead).
+    % - Delivers the partition used downstream: faithful-but-weak (recoverable) vs false-neighbour
+    %   collapse (lost to every model).
+    % - The trivial tautology/contradiction targets (6.5) are the degenerate confirming extreme of
+    %   self-faithfulness collapse (variance -> 0 forces magnitude -> 0); excluded from the
+    %   regressions but cited as the limiting endpoint.
+    
+    \subsection{Decoder reliance on the embedding}\label{sec:decoder_reliance}
+    % Does greedy correctness track the embedding geometry?
+    % - Outcome = binary correct (= semantic equivalence, greedy). Mean semantic distance appears
+    %   only as a flagged descriptive (its variance-dependence is a Hamming-metric property, not a
+    %   model effect), never as a regression outcome.
+    % - Per-target features: variance = p(1-p) (informativeness, cause i); emb_norm = ||emb||;
+    %   norm_resid = emb_norm - E[emb_norm | variance] (a binned/FWL residual -- orthogonality,
+    %   decorrelated from variance, cause ii); target_depth. All z-scored. The residual is needed
+    %   because emb_norm / variance / std are near-collinear (r ~ 0.92-0.98), so a raw
+    %   emb_norm + variance logit suffers multicollinearity suppression.
+    % - PRIMARY READ = CE-base (the as-designed conditioned model). Others reported per-run for
+    %   completeness; the finetunes enter as a contrast only in 6.9 (Mechanism A).
+    % - H0 premise (CE-base): correct ~ emb_norm positive => the model conditions on magnitude.
+    % - Q2 primary (variance-stratified): within low/mid/high variance terciles, correct ~ emb_norm
+    %   + C(depth); the orthogonality claim = a positive norm slope PERSISTS at HIGH variance.
+    % - Q2 summary (residual): correct ~ variance + norm_resid + C(depth).
+    % - Descriptives: a (variance x norm_resid) 2-D heatmap of mean correctness (decorrelated axes
+    %   so the grid fills); a (variance, emb_norm) scatter with the empirical Cauchy-Schwarz envelope.
+    
+    \subsection{Mediation, and the problem RL must repair}\label{sec:geometry_bridge}
+    % Closes RQ1 (the "why") and hands the problem to RQ2.
+    % - MEDIATION: does relational faithfulness (6.8.1) SCREEN OFF norm_resid in the correctness
+    %   regression (on CE-base)? If adding faithfulness attenuates the norm_resid coefficient,
+    %   orthogonality hurts correctness BECAUSE it distorts the covariance geometry. (Collinearity
+    %   caveat: report faithfulness as the mechanism, norm as its proxy, not as independent effects.)
+    % - Delivers: validates/falsifies the magnitude-sensitivity design and the non-normalisation
+    %   choice; quantifies the orthogonality limitation (cross-reference the Limitations section).
+    % - HAND-OFF: the embedding under-conditions the high-variance/low-norm cell, and that failure
+    %   drives correctness errors -- the failure RL was introduced to repair (answered in 6.9 Mech. A).
+    % - PRE-REGISTERED INTERPRETATION CONTRACT (state before the numbers; every outcome is a result):
+    %     * correct ~ emb_norm FLAT (H0 fails): the decoder does not condition on magnitude -> the
+    %       Ch.4/Ch.5 magnitude-conditioning premise is empirically false (a major negative finding
+    %       about the architecture); 6.8.1 (model-free) and RQ2's aggregate result still stand.
+    %     * 6.8.1 faithful everywhere: failures are decoder-side, not representation-side -- which
+    %       STRENGTHENS the RL-recalibration story (a faithful-but-weak signal the decoder underuses).
+    %     * interaction null (Mech. A): the RQ1<->RQ2 link is falsified, H1 is wrong; RQ2's aggregate
+    %       result still stands on its own -- only the mechanistic "where" is retracted.
+    
+    \section{Finetuning Comparison}\label{sec:rq2_comparison}
+    % RQ2 -- owns the RL-vs-CE question. Opening framing: RL was introduced (6.4.1) to repair the
+    % conditioning failure 6.8.3 identifies; this section asks whether it improves over CE on
+    % CORRECTNESS and FLEXIBILITY, then explains any gain via Mechanisms A and B. Aggregate result
+    % first (it has its own payoff -- flexibility), mechanisms after.
+    
+    \subsection{Aggregate result: correctness and flexibility}\label{sec:rq2_aggregate}
+    % Does RL improve over CE? Dual reference (6.7): (model - CE-base) = full effect; (RL - CE-ft)
+    % = RL objective isolated.
+    % - CORRECTNESS: semantic-equivalence rate + mean semantic distance, paired; invalid rate as
+    %   hygiene; pass@k (k=1..5).
+    % - We expect RL's effect to surface in the ERROR DISTRIBUTION rather than the binary rate, so
+    %   we FEATURE mean semantic distance (continuous) and the paired "distance | both-wrong-and-valid"
+    %   contrast (graceful degradation: when wrong, is RL LESS wrong?), a direct observable of the
+    %   R = 1 - Hamming reward. Mean distance is the honest headline for "did RL improve"; the binary
+    %   rate is reported alongside. (Finding deferred to the Results chapter.)
+    % - FLEXIBILITY (the Many-Syntaxes payoff): distinct-correct (# distinct valid syntaxes per
+    %   target, conditional on >=1 correct) is the headline; syntax-semantics gap (equiv - exact)
+    %   secondary; pass@k supporting. A correct-only SPREAD metric (mean pairwise tree-edit distance
+    %   among the equivalent generations, target-weighted, on the common >=2-correct targets)
+    %   measures whether the distinct forms are genuinely different rather than near-duplicates.
+    %   (Self-BLEU is NOT used on the correct subset: filtering makes the set size vary, and the
+    %   multi-reference form is size-biased.)
+    
+    \subsection{Mechanism A — correctness via orthogonal-cell repair}\label{sec:rq2_mechanism_repair}
+    % WHY any correctness gain (the RQ1<->RQ2 link; tests H1). Placed here, after RQ2's setup,
+    % because it needs both piers: the 6.8 geometry AND the RL models.
+    % - CROSS-MODEL interaction: correct ~ model x (variance + norm_resid) + depth, cluster-robust
+    %   SE by formula_id, BH-FDR over the interaction family, + AME (probability scale). Tests "did
+    %   finetuning change geometry-reliance?" -- prediction: RL's benefit concentrates in the
+    %   high-variance/low-norm cell.
+    % - Cleanest form re-tests H1 on the FAITHFUL-BUT-WEAK subset (6.8.1's population A), excluding
+    %   the false-neighbour collapse no model can recover. (If unavailable, fall back to the raw
+    %   interaction.)
+    % - If null: per the 6.8.3 contract, the link is retracted but the aggregate result stands.
+    
+    \subsection{Mechanism B — flexibility via syntax-invariance exploitation}\label{sec:rq2_mechanism_syntax}
+    % WHY any flexibility gain (pays off "Many Syntaxes, One Semantics" + the syntax-invariant
+    % embedding). CE pins ONE syntax per embedding; the syntax-blind reward credits the whole
+    % equivalence class.
+    % - Headline metric: distinct-correct conditional-on-correct (+ the correct-only spread from
+    %   6.9.1); syntax-semantics gap secondary.
+    % - Dual reference reads the data-vs-objective split: expected ordering CE-base < CE-ft <= RL;
+    %   the CE-base->CE-ft jump = the DATA effect (multiple equivalent labels), the CE-ft->RL jump =
+    %   the OBJECTIVE effect (credit for UNLABELLED equivalents), expected to be modest because
+    %   CE-finetuning already gets the labelled equivalents.
+    
+    \subsection{Policy-distribution footprint}\label{sec:rq2_dynamics}
+    % How RL reshapes the policy (supporting, not a headline): KL-from-base (how far the policy
+    % moved), policy entropy (sharpen vs flatten), Self-BLEU (sampling diversity).
+    % These shifts are the observable footprint of on-policy training -- the mechanism exposure-bias
+    % correction would produce -- but we do NOT offer them as an isolation of exposure bias.
+    
+    \section{Further Analyses}\label{sec:exploratory}
+    % Beyond RQ1/RQ2; pursue a selection, leave room for more. Candidates (all computed by the
+    % suite, none load-bearing for an RQ):
+    %   - Operator-level difficulty: per-model log-odds / logistic over has-OP (8 operators) + depth;
+    %     cross-model pooled interaction + AME (does RL move SPECIFIC operators?).
+    %   - Cross-model agreement & output similarity: Cohen's kappa on correctness + BLEU/exact-match
+    %     between greedy generations (are the finetunes actually different models?).
+    %   - Per-depth (2-5) breakdowns of RQ1/RQ2 (robustness; one main-text figure, tables to appendix).
+    %   - Conditional descriptives: depth/length gap | correct; distance | wrong-but-valid.
+    %   - Tie-back to RQ1: geometry x operator cross (do orthogonal targets over-represent specific
+    %     operators?) tests the heterogeneity premise behind the faithfulness story.
+    
+ 
 \chapter{Results}
 
 
