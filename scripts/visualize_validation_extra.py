@@ -28,8 +28,8 @@ import numpy as np
 import pandas as pd
 
 from scripts._validation_analysis import (
-    extra_contrast, extra_metrics, extra_plots, loaders, operator_analysis,
-    operator_crossmodel,
+    extra_contrast, extra_metrics, extra_plots, flexibility_metrics, loaders,
+    operator_analysis, operator_crossmodel,
 )
 
 
@@ -124,6 +124,9 @@ def main() -> None:
 
     print("[extra] computing top-K diagnostics (pass@k', distinct-correct)...", file=sys.stderr)
     _run_topk_diagnostics(df_topk_flat, runs, fig_dir, stats_dir, args)
+
+    print("[extra] computing RQ2 flexibility + graceful-degradation (I4/I5/I6)...", file=sys.stderr)
+    _run_flexibility_metrics(df_topk_flat, df_greedy, runs, fig_dir, stats_dir, args)
 
     print("[extra] computing target-side operator analysis...", file=sys.stderr)
     _run_operator_analysis(df_greedy, df_topk_flat, runs, fig_dir, stats_dir, args)
@@ -296,6 +299,77 @@ def _run_topk_diagnostics(
         ylabel="# distinct correct (mean | ≥1)",
         stem=fig_dir / "distinct_correct_any_correct",
     )
+
+
+# ---------------------------------------------------------------------------
+# RQ2 flexibility (I4 spread / I5 distinct-correct) + graceful degradation (I6)
+# ---------------------------------------------------------------------------
+
+
+def _run_flexibility_metrics(
+    df_topk_flat: pd.DataFrame,
+    df_greedy: pd.DataFrame,
+    runs: list[str],
+    fig_dir: Path,
+    stats_dir: Path,
+    args: argparse.Namespace,
+) -> None:
+    ref = args.reference_run
+    variants = [r for r in runs if r != ref]
+    bn, al, seed = args.bootstrap_n, args.alpha, args.rng_seed
+
+    # --- I5: distinct-correct as a paired contrast (conditional on >=1 correct) ---
+    dc = flexibility_metrics.distinct_correct_per_target(
+        df_topk_flat, runs=runs, conditional_on_any_correct=True)
+    if not dc.empty:
+        dc_sum, dc_pt = extra_contrast.compute_paired_diff_summary(
+            dc, reference_run=ref, variants=variants, n_bootstrap=bn, alpha=al, rng_seed=seed)
+        dc_sum.to_csv(stats_dir / "flex_distinct_correct_paired.csv", index=False)
+        extra_plots.plot_paired_diff_conditional(
+            dc_pt, dc_sum, variants=variants, runs=runs, reference_run=ref,
+            title=f"Paired Δ vs {ref} — # distinct correct | ≥1 correct",
+            ylabel="Δ # distinct correct", stem=fig_dir / "flex_distinct_correct_paired",
+            rng_seed=seed)
+
+    # --- I4: correct-only equivalence-class spread (tree-edit distance, target-weighted) ---
+    sp = flexibility_metrics.correct_only_spread_per_target(df_topk_flat)
+    if not sp.empty:
+        sp.to_csv(stats_dir / "flex_spread_per_target.csv", index=False)
+        sp_desc, _ = flexibility_metrics.correct_only_spread_contrast(
+            sp, runs=runs, reference_run=ref, n_bootstrap=bn, alpha=al, rng_seed=seed)
+        sp_desc.to_csv(stats_dir / "flex_spread_descriptive.csv", index=False)
+        extra_plots.plot_conditional_bar(
+            sp_desc.rename(columns={"mean_spread": "mean"}), runs=runs,
+            title="Correct-only equivalence-class spread (target-weighted TED, ≥2 correct)",
+            ylabel="mean pairwise tree-edit distance",
+            stem=fig_dir / "flex_spread_descriptive", hline=None)
+        sp_sum, sp_pt = extra_contrast.compute_paired_diff_summary(
+            sp[["run", "formula_id", "target_depth", "value"]],
+            reference_run=ref, variants=variants, n_bootstrap=bn, alpha=al, rng_seed=seed)
+        sp_sum.to_csv(stats_dir / "flex_spread_paired.csv", index=False)
+        extra_plots.plot_paired_diff_conditional(
+            sp_pt, sp_sum, variants=variants, runs=runs, reference_run=ref,
+            title=f"Paired Δ vs {ref} — correct-only spread (≥2 correct in both)",
+            ylabel="Δ mean pairwise TED", stem=fig_dir / "flex_spread_paired", rng_seed=seed)
+
+    # --- I6: wrong-and-valid set overlap (Jaccard) + paired graceful-degradation (greedy) ---
+    overlap = flexibility_metrics.wrong_valid_overlap(df_greedy, runs=runs)
+    if not overlap.empty:
+        overlap.to_csv(stats_dir / "flex_wrong_valid_overlap.csv", index=False)
+        extra_plots.plot_output_similarity_heatmap(
+            overlap, runs=runs, metric_col="jaccard",
+            title="Wrong-and-valid set overlap (Jaccard, greedy)",
+            stem=fig_dir / "flex_wrong_valid_overlap", vmin=0.0, vmax=1.0, cmap="magma")
+    wv = flexibility_metrics.wrong_valid_distance_per_target(df_greedy, runs=runs)
+    if not wv.empty:
+        wv_sum, wv_pt = extra_contrast.compute_paired_diff_summary(
+            wv, reference_run=ref, variants=variants, n_bootstrap=bn, alpha=al, rng_seed=seed)
+        wv_sum.to_csv(stats_dir / "flex_graceful_degradation_paired.csv", index=False)
+        extra_plots.plot_paired_diff_conditional(
+            wv_pt, wv_sum, variants=variants, runs=runs, reference_run=ref,
+            title=f"Paired Δ vs {ref} — semantic_distance | both wrong-and-valid (greedy)",
+            ylabel="Δ semantic_distance", stem=fig_dir / "flex_graceful_degradation_paired",
+            rng_seed=seed)
 
 
 # ---------------------------------------------------------------------------

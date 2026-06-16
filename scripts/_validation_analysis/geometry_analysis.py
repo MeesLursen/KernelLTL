@@ -292,3 +292,95 @@ def cross_model_interaction(df: pd.DataFrame, *, runs: list[str], reference_run:
                              "ci_high": float(np.quantile(d, 1 - alpha / 2))})
     return {"interactions": interactions, "ame": pd.DataFrame(ame_rows),
             "n_obs": int(len(stacked)), "n_targets": int(stacked["formula_id"].nunique())}
+
+
+# ---------------------------------------------------------------------------
+# I2 — cross-model interaction conditional on representation faithfulness
+# ---------------------------------------------------------------------------
+
+
+def cross_model_interaction_on_faithful(
+    df: pd.DataFrame,
+    faith_features: pd.DataFrame,
+    *,
+    runs: list[str],
+    reference_run: str,
+    faith_quantile: float = 0.5,
+    **kwargs,
+) -> dict:
+    """Re-run :func:`cross_model_interaction` on the FAITHFUL-BUT-WEAK subset (population A).
+
+    ``faith_features`` is the output of ``compute_faithfulness_features.py`` (needs
+    ``formula_id`` + ``relational_faithfulness``). Targets whose relational faithfulness falls
+    below ``faith_quantile`` are the false-neighbour collapse (population B) -- un-recoverable by
+    ANY model -- and are dropped, so the interaction reflects RL's effect only where a
+    usable-but-weak signal actually exists (the clean form of H1, Experiment Design
+    ``sec:rq2_mechanism_repair``).
+
+    Returns the same dict as :func:`cross_model_interaction`, plus ``faith_threshold`` and
+    ``n_dropped_unfaithful``.
+    """
+    merged = df.merge(
+        faith_features[["formula_id", "relational_faithfulness"]],
+        on="formula_id", how="inner",
+    )
+    thr = float(merged["relational_faithfulness"].quantile(faith_quantile))
+    faithful = merged[merged["relational_faithfulness"] >= thr].copy()
+    res = cross_model_interaction(faithful, runs=runs, reference_run=reference_run, **kwargs)
+    res["faith_threshold"] = thr
+    res["n_dropped_unfaithful"] = int(len(merged) - len(faithful))
+    return res
+
+
+# ---------------------------------------------------------------------------
+# Mediation — does relational faithfulness screen off norm_resid? (sec:geometry_bridge)
+# ---------------------------------------------------------------------------
+
+
+def faithfulness_mediation(
+    df: pd.DataFrame,
+    faith_features: pd.DataFrame,
+    *,
+    runs: list[str],
+    alpha: float = 0.05,
+) -> pd.DataFrame:
+    """Does relational faithfulness SCREEN OFF norm_resid in the correctness regression?
+
+    Per run, fit two depth-adjusted logits and compare the ``z_norm_resid`` coefficient:
+        base:     correct ~ z_variance + z_norm_resid + C(target_depth)
+        mediated: correct ~ z_variance + z_norm_resid + z_faithfulness + C(target_depth)
+    If the norm_resid coefficient ATTENUATES toward 0 when faithfulness enters, orthogonality
+    hurts correctness BECAUSE it distorts the covariance geometry -- faithfulness is the
+    MECHANISM, norm its PROXY (they are collinear, so we read the shift, not the two as
+    independent effects). Primary read is CE-base, the as-designed model.
+
+    Returns per-run: norm_resid_base / _mediated (+CIs), attenuation = 1 - mediated/base,
+    faith_coef (+CI, p). Robust HC1 SEs.
+    """
+    merged = df.merge(
+        faith_features[["formula_id", "relational_faithfulness"]],
+        on="formula_id", how="inner",
+    ).copy()
+    merged["z_faithfulness"] = _z(merged["relational_faithfulness"])
+    rows = []
+    for r in runs:
+        rdf = merged[merged["run"] == r]
+        if rdf["correct"].nunique() < 2:
+            continue
+        base = _fit_logit("correct ~ z_variance + z_norm_resid + C(target_depth)", rdf)
+        med = _fit_logit(
+            "correct ~ z_variance + z_norm_resid + z_faithfulness + C(target_depth)", rdf)
+        b0, b1 = float(base.params["z_norm_resid"]), float(med.params["z_norm_resid"])
+        ci0 = base.conf_int(alpha=alpha).loc["z_norm_resid"]
+        ci1 = med.conf_int(alpha=alpha).loc["z_norm_resid"]
+        fci = med.conf_int(alpha=alpha).loc["z_faithfulness"]
+        rows.append({
+            "run": r,
+            "norm_resid_base": b0, "nr_base_ci_low": float(ci0[0]), "nr_base_ci_high": float(ci0[1]),
+            "norm_resid_mediated": b1, "nr_med_ci_low": float(ci1[0]), "nr_med_ci_high": float(ci1[1]),
+            "attenuation": (1.0 - b1 / b0) if b0 != 0 else float("nan"),
+            "faith_coef": float(med.params["z_faithfulness"]),
+            "faith_ci_low": float(fci[0]), "faith_ci_high": float(fci[1]),
+            "faith_p": float(med.pvalues["z_faithfulness"]),
+        })
+    return pd.DataFrame(rows)

@@ -33,6 +33,13 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--validation-root", required=True)
     p.add_argument("--geometry-features", required=True)
+    p.add_argument("--faithfulness-features", default=None,
+                   help="Optional faithfulness_features.csv (compute_faithfulness_features.py): "
+                        "enables RQ1a representation-faithfulness descriptives, the mediation "
+                        "(does relational faithfulness screen off norm_resid), and the "
+                        "faithfulness-conditioned cross-model interaction (clean H1).")
+    p.add_argument("--faith-quantile", type=float, default=0.5,
+                   help="Faithfulness threshold (quantile) for the faithful-but-weak subset (I2).")
     p.add_argument("--output-dir", required=True)
     p.add_argument("--runs", nargs="+", required=True)
     p.add_argument("--reference-run", default="ce_base")
@@ -124,9 +131,52 @@ def main():
     gp.plot_crossmodel_interaction(res["interactions"], reference_run=ref,
                                    stem=fig_dir / "geometry_crossmodel_interaction", dpi=args.dpi)
 
+    # --- RQ1a representation faithfulness (optional; needs faithfulness_features.csv) ---
+    faith_summary = {}
+    if args.faithfulness_features:
+        _log("[geom] representation-faithfulness analyses ...")
+        faith = pd.read_csv(args.faithfulness_features)
+        dff = df.merge(faith[["formula_id", "relational_faithfulness"]],
+                       on="formula_id", how="inner")
+        one = dff[dff["run"] == ref]   # faithfulness is model-independent -> one per-target curve
+
+        # descriptive: faithfulness over the variance x norm_resid cell (does DIRECTION collapse?)
+        fgrid = ga.two_d_grid(one, runs=[ref], fx="variance", fy="norm_resid",
+                              nbins=args.grid_bins, outcome="relational_faithfulness")
+        fgrid.to_csv(stats_dir / "geometry_faith_2d_grid.csv", index=False)
+        gp.plot_2d_heatmap(fgrid, run=ref, stem=fig_dir / "geometry_faith_2d_heatmap", dpi=args.dpi)
+        for feat in ["variance", "norm_resid", "emb_norm"]:
+            mb = ga.marginal_binned(one, runs=[ref], feature=feat,
+                                    outcome="relational_faithfulness", n_bins=args.bins,
+                                    n_bootstrap=args.bootstrap_n, alpha=args.alpha, rng_seed=args.rng_seed)
+            mb.to_csv(stats_dir / f"geometry_faith_marginal_{feat}.csv", index=False)
+            gp.plot_marginal(mb, runs=[ref], feature=feat, outcome="relational_faithfulness",
+                             stem=fig_dir / f"geometry_faith_marginal_{feat}", dpi=args.dpi)
+
+        # mediation: does relational faithfulness screen off norm_resid? (sec:geometry_bridge)
+        med = ga.faithfulness_mediation(df, faith, runs=runs, alpha=args.alpha)
+        med.to_csv(stats_dir / "geometry_faith_mediation.csv", index=False)
+
+        # I2: faithfulness-conditioned cross-model interaction (clean H1) on population A
+        res2 = ga.cross_model_interaction_on_faithful(
+            df, faith, runs=runs, reference_run=ref, faith_quantile=args.faith_quantile,
+            alpha=args.alpha, n_sim=args.n_sim, rng_seed=args.rng_seed)
+        res2["interactions"].to_csv(stats_dir / "geometry_faith_interaction.csv", index=False)
+        res2["ame"].to_csv(stats_dir / "geometry_faith_ame.csv", index=False)
+        if not res2["interactions"].empty:
+            gp.plot_crossmodel_interaction(res2["interactions"], reference_run=ref,
+                                           stem=fig_dir / "geometry_faith_interaction", dpi=args.dpi)
+        faith_summary = {
+            "faith_threshold": res2.get("faith_threshold"),
+            "faith_n_dropped_unfaithful": res2.get("n_dropped_unfaithful"),
+            "faith_interaction_n_targets": res2.get("n_targets"),
+            "faith_mediation_runs": int(len(med)),
+        }
+
     summary = {"reference_run": ref, "runs": runs, "n_targets_nontrivial": int(df.formula_id.nunique()),
                "n_trivial_dropped": n_triv, "bootstrap_n": args.bootstrap_n,
-               "crossmodel_n_obs": res["n_obs"], "crossmodel_n_targets": res["n_targets"]}
+               "crossmodel_n_obs": res["n_obs"], "crossmodel_n_targets": res["n_targets"],
+               **faith_summary}
     with open(out / "geometry_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
     _log(f"[geom] done -> {stats_dir}, {fig_dir}")

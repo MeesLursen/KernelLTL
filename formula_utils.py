@@ -581,3 +581,66 @@ def is_valid_formula(s: str) -> bool:
         return True
     except Exception:
         return False
+
+
+# ------------------------- tree edit distance -------------------------
+
+
+def _node_label(formula: Formula) -> str:
+    """Relabel-cost label for tree_edit_distance: atoms carry their proposition and
+    operators their class, so ``p_0`` vs ``p_1`` and ``And`` vs ``Or`` are both unit-cost
+    relabels."""
+    if isinstance(formula, Atom):
+        return f"p_{formula.name}"
+    return type(formula).__name__
+
+
+def _formula_to_tuple(formula: Formula) -> tuple:
+    """Nested ``(label, children-forest)`` view of an AST, for tree_edit_distance."""
+    return (_node_label(formula), tuple(_formula_to_tuple(c) for c in _children(formula)))
+
+
+def tree_edit_distance(a: Formula, b: Formula, *, normalize: bool = True) -> float:
+    """Unit-cost ordered tree-edit distance between two formula ASTs.
+
+    Each node insert / delete / relabel costs 1; a relabel is free only when labels match
+    (same operator class, or same atom). Computed by the standard ordered-forest recursion
+    with per-call memoisation -- ample for formulae of depth <= 5. With ``normalize`` the
+    distance is divided by the total node count ``|a| + |b|``, giving a value in [0, 1]
+    (0 = identical trees, 1 = fully disjoint).
+
+    This is the size-unbiased pairwise distance used for the correct-only equivalence-class
+    spread (Experiment Design ``sec:rq2_mechanism_syntax``; ``flexibility_metrics.py``). A
+    commutative swap costs two relabels, not a maximal change -- the property BLEU-4 lacked.
+    """
+    def _forest_size(forest: tuple) -> int:
+        return sum(1 + _forest_size(kids) for (_, kids) in forest)
+
+    memo: dict[tuple, int] = {}
+
+    def _fd(F: tuple, G: tuple) -> int:
+        key = (F, G)
+        if key in memo:
+            return memo[key]
+        if not F and not G:
+            r = 0
+        elif not G:
+            r = _forest_size(F)
+        elif not F:
+            r = _forest_size(G)
+        else:
+            (ls, cs), (lt, ct) = F[-1], G[-1]            # rightmost trees
+            F1, G1 = F[:-1], G[:-1]
+            delete = _fd(F1 + cs, G) + 1                 # drop a's node, promote its children
+            insert = _fd(F, G1 + ct) + 1                 # add b's node
+            match = _fd(F1, G1) + _fd(cs, ct) + (0 if ls == lt else 1)
+            r = min(delete, insert, match)
+        memo[key] = r
+        return r
+
+    ta, tb = (_formula_to_tuple(a),), (_formula_to_tuple(b),)
+    dist = _fd(ta, tb)
+    if normalize:
+        n = _forest_size(ta) + _forest_size(tb)
+        return dist / n if n else 0.0
+    return float(dist)
