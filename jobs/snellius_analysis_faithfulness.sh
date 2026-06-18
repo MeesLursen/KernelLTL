@@ -3,11 +3,10 @@
 #SBATCH --output=logs/kernelltl_analysis_faithfulness_%j.out
 #SBATCH --error=logs/kernelltl_analysis_faithfulness_%j.err
 #SBATCH --time=03:00:00
-#SBATCH --partition=gpu_h100
-#SBATCH --constraint=scratch-node
+#SBATCH --partition=gpu_a100
 #SBATCH --gpus=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=180G
+#SBATCH --cpus-per-task=18
+#SBATCH --mem=120G
 
 set -euo pipefail
 
