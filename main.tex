@@ -517,12 +517,11 @@
         \end{tabular}
     \end{table}
     
-    \subsection{Fine-tuning dataset}\label{sec:finetune_data}
+    \subsection{Finetuning dataset}\label{sec:finetune_data}
     The finetuning of the base model is done on a separate, mutation-augmented dataset. To construct this dataset we drew $20{,}000$ base formulae from the curriculum datasets, split evenly across the four stages, sampled without replacement. From each of these base formulae we generated three new formulae: two semantically equivalent rewrites of the base formula and one near-miss variant in which we insert a negation at a random spot in the formulae. Each of these augmented formulae were checked against the formulae in the evaluation dataset used during pretraining, resampled if already present, and subsequently added the finetuning dataset for a total of $60{,}000$ formulae.
 
-    Each of the mutations supply the model with two extremes of the syntax-semantics space. The two semantically equivalent forms are equal in semantics while being far from each other in syntax. Both are a different rewrite away from the base formula that created them, and thus separated by two rewrites from each other (for details on the possible rewrites see appendix \ref{app:INSERT_APPENDIX_REFERNECE}). The near-miss variants on the other hand are syntactically close, differing only in the added negation operator, while being semantically far removed from the base formula.
-
-    The pretraining dataset generally provides one syntactical form per semantic equivalence class. The finetuning dataset is meant to supply the model with examples needed to decouple the semantic embedding from this exact syntactical representation learned during the pretraining phase, on the one hand providing different syntactical forms for the same semantics and on the other providing different semantics for similar syntactical forms.
+    Because the pretraining dataset generally provides only one syntactical form per semantic equivalence class, we constructed the finetuning dataset with the intent of providing the examples needed to decouple the semantic embedding from the single syntactical representation learned during the pretraining phase. Our construction draws on established practices in the field of \textit{representation learning}. The two kinds of mutations supply the model with two extremes of the syntax-semantics space. On the one hand we mutated one base formula into two semantically equivalent forms, equal in semantics while being far from each other in syntax. This follows the practice of training language models on semantically equivalent forms \citep{jain_contrastive_2021, bui_self-supervised_2021}. The near-miss variants on the other hand are syntactically close, differing only in the added negation operator, while being semantically far removed from the base formula. These serve as so-called \textit{hard negative} cases used to sharpen a model's sensitivity to small meaning-changing deviations in syntax \cite{gao_simcse_2022, robinson_contrastive_2021}.
+    
     
     \section{Curriculum Pretraining}\label{sec:curriculum_pretraining}
     We implemented our \texttt{LTLModel} model class on top of the HuggingFace \textsc{Transformers} (version \href{https://github.com/huggingface/transformers/tree/v4.57.6}{4.57.6}) \texttt{GPT2LMHeadModel} architecture, with cross-attention enabled. The model was created with $12$ layers of transformer blocks, each with $16$ attention heads and a hidden states dimension size of $1024$, and the best dropout value found during the following hyperparameter sweep.
@@ -531,6 +530,8 @@
     
     \begin{table}[h!]
     \centering
+    \caption{Common training hyperparameters across all four curriculum stages.}
+    \label{tab:curriculum_hyperparams}
     \begin{tabular}{ll}
         \toprule
         \textbf{Hyperparameter} & \textbf{Value} \\
