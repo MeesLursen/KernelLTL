@@ -427,7 +427,7 @@
     The orthogonality problem is therefore not one that any choice of kernel metric can resolve, since its origin does not lie in the metric at all. A high-variance formula is invisible to $\emb(\phi)$ exactly when the anchor set fails to span the directions along which that formula varies. The only genuine remedy is to ensure that our anchors cover the satisfaction space well enough so that no meaningful target formula is left orthogonal to all of $\Psi$. The problem of selecting $\Psi$ effectively is the subject of the following section.
 
     
-    \section{Anchor Set Selection}
+    \section{Anchor Set Selection}\label{sec:anchor_selection}
     Having established the embedding kernel, we now turn to the selection of the anchor set $\Psi = \{\psi_1, \dots, \psi_M\}$. To make the semantic embedding as expressive as possible, the anchors must cover a diverse and representative array of LTL behaviors, effectively spanning the space of possible trace evaluations. 
     
     While it might seem natural to select anchors that are mutually uncorrelated using the covariance kernel $k^{\cov}$, doing so discards crucial structural information. Because $k^{\cov}$ explicitly centers satisfaction vectors and strips away base rates, it is blind to absolute location in the trace space. For the purpose of providing a robust coordinate system, we want our selection metric to be sensitive to absolute truth values and spatial dispersion.
@@ -463,7 +463,7 @@
     
     By blending these two generative regimes, the resulting distribution $\mathcal{T}$ ensures that our sampled trace space $\widehat \Sigma$, while not representative of any singular real-world system, provides a rigorously challenging environment. It prevents trivialization of the temporal operators and forces the semantic embedding to capture a rich, varied profile of LTL behavior.
 
-    \subsection{Choosing $N$}
+    \subsection{Choosing $N$}\label{sec:choosing_n}
     With the trace distribution $\mathcal{T}$ defined, we must determine the necessary size of our trace sample $N = |\widehat{\Sigma}|$. Because our semantic embeddings $\emb(\phi)$ are constructed by empirically evaluating similarities over this finite sample rather than calculating exact expectations over $\mathcal{T}$, the embeddings are subject to sampling noise. We require $N$ to be large enough to guarantee that the empirical kernel evaluations tend to their true population values with high probability.
 
     The empirical objects on which every embedding is built are \emph{satisfaction probabilities}: the empirical rates at which formulae are satisfied by a randomly drawn trace from $\widehat\Sigma$. The target formula's base rate $\bar\chi_\phi := \tfrac{1}{N}\sum_i \widehat\chi^i_\phi$, each anchor's base rate $\bar\chi_{\psi_j}$, and each joint rate $\bar\chi_{\phi\psi_j} := \tfrac{1}{N}\sum_i \widehat\chi^i_\phi\, \widehat\chi^i_\psi$ at which $\phi$ and $\psi_j$ are simultaneously satisfied, are all of this form. Each is a sample mean of $\{0,1\}$-valued i.i.d.\ Bernoulli random variables under $\widehat\Sigma \sim \mathcal{T}$, converging to a corresponding population probability ($p_\phi$, $p_{\psi_j}$, and $q_{\phi\psi_j}$ respectively), to which we can apply Hoeffding's inequality:
@@ -479,44 +479,8 @@
     \begin{equation}\label{eq:n_min}
         N \;\ge\; \frac{1}{2\eta^2}\,\ln\!\frac{2(2M+1)}{\delta}.
     \end{equation}
+    Once the desired tolerance $\eta$, confidence $\delta$, and anchor count $M$ are chosen, this equation sets a lower bound on the number of traces required to realize them. The specific values we adopt are reported with the kernel instantiation in Section~\ref{sec:kernel_instantiation}.
 
-    We instantiate the bound with $M = 1024$, $\eta = 0.005$, and $\delta = 0.01$, yielding a strict minimum of $N \ge 258{,}469$. We adopt $N = 500{,}000$, approximately twice this minimum. At this sample size, with probability at least $99\%$, every relevant satisfaction probability lies within
-    \begin{equation*}
-        \sqrt{\frac{\ln(2(2M+1)/\delta)}{2N}} \;\approx\; 0.0036
-    \end{equation*}
-    of its population value, uniformly across the anchor set.
-
-    This simultaneous control on the satisfaction probabilities propagates directly to the kernel. From the definition of covariance,
-    \begin{equation}\label{eq:kcov_decomposition}
-        k^{\cov}(\phi, \psi_j) \;=\;\bar\chi_{\phi\psi_j} \;-\; \bar\chi_\phi\, \bar\chi_{\psi_j},
-    \end{equation}
-    and analogously 
-    \begin{equation}
-        k^{\cov}_\mathcal{T}(\phi, \psi_j) := q_{\phi\psi_j} - p_\phi\, p_{\psi_j},
-    \end{equation} for the population kernel. Taking the difference between the two and rearranging yields
-    \begin{align*}
-        k^{\cov}(\phi, \psi_j) - k^{\cov}_\mathcal{T}(\phi, \psi_j)
-        &\;=\; \bigl(\bar\chi_{\phi\psi_j} - \bar\chi_\phi\, \bar\chi_{\psi_j}\bigr) \;-\; \bigl(q_{\phi\psi_j} - p_\phi\, p_{\psi_j}\bigr) \\
-        &\;=\; \bigl(\bar\chi_{\phi\psi_j} - q_{\phi\psi_j}\bigr) \;-\; \bigl(\bar\chi_\phi\, \bar\chi_{\psi_j} - p_\phi\, p_{\psi_j}\bigr)
-    \end{align*}
-    Taking the absolute value of both sides and applying the triangle inequality then yields
-    \begin{equation}\label{eq:kcov_outer_triangle}
-        \bigl|k^{\cov}(\phi, \psi_j) - k^{\cov}_\mathcal{T}(\phi, \psi_j)\bigr| \;\le\; \bigl|\bar\chi_{\phi\psi_j} - q_{\phi\psi_j}\bigr| \;+\; \bigl|\bar\chi_\phi\, \bar\chi_{\psi_j} - p_\phi\, p_{\psi_j}\bigr|
-    \end{equation}
-    The first term on the right-hand side is precisely the deviation that Hoeffding bounds for the joint rate $\bar\chi_{\phi\psi_j}$. The second is a difference of products, which Hoeffding does not address directly, so we have to reduce it through an add-and-subtract step. Inserting the terms $-\bar\chi_\phi \, p_{\psi_j}\;+\; \bar\chi_\phi \, p_{\psi_j}$ and regrouping gives the algebraic identity
-    \begin{equation*}
-        \bar\chi_\phi\, \bar\chi_{\psi_j} - p_\phi\, p_{\psi_j} \;=\; \bar\chi_\phi\,\bigl(\bar\chi_{\psi_j} - p_{\psi_j}\bigr) \, + \, p_{\psi_j}\,\bigl(\bar\chi_\phi - p_\phi\bigr),
-    \end{equation*}
-    which now shows this difference of products as a sum of two terms, each containing the deviation of a single sample mean from its population value. Applying the triangle inequality to this two-term sum and using the fact that both $\bar\chi_\phi, p_{\psi_j} \in [0, 1]$ to drop the leading factors gives the bound
-    \begin{equation}\label{eq:product_bound}
-        \bigl|\bar\chi_\phi\, \bar\chi_{\psi_j} - p_\phi\, p_{\psi_j}\bigr| \;\le\; \bar\chi_\phi\,\bigl|\bar\chi_{\psi_j} - p_{\psi_j}\bigr| \, + \, p_{\psi_j}\,\bigl|\bar\chi_\phi - p_\phi\bigr| \;\le\; \bigl|\bar\chi_{\psi_j} - p_{\psi_j}\bigr| \;+\; \bigl|\bar\chi_\phi - p_\phi\bigr|
-    \end{equation}
-    Substituting \eqref{eq:product_bound} into \eqref{eq:kcov_outer_triangle} collects the kernel deviation into a sum of three single-variable deviations, each of which is controlled at tolerance $\eta$ by the joint Hoeffding event of \eqref{eq:hoeffding_union}:
-    \begin{equation}\label{eq:kcov_propagation}
-        \bigl| k^{\cov}(\phi, \psi_j) - k^{\cov}_\mathcal{T}(\phi, \psi_j) \bigr| \;\le\; \bigl|\bar\chi_{\phi\psi_j} - q_{\phi\psi_j}\bigr| \;+\; \bigl|\bar\chi_\phi - p_\phi\bigr| \;+\; \bigl|\bar\chi_{\psi_j} - p_{\psi_j}\bigr| \;\le\; 3\eta
-    \end{equation}
-    The factor of $3$ is exactly the three triangle-inequality contributions accumulated along the way: one from the outer subtraction in \eqref{eq:kcov_outer_triangle}, two from the product expansion in \eqref{eq:product_bound}. At our delivered tolerance of $\eta \approx 0.0036$, this gives a uniform coordinate error of approximately $0.011$ on every kernel coordinate. Since $k^{\cov}$ takes values in $[-\tfrac{1}{4}, \tfrac{1}{4}]$, this is approximately $2\%$ of the kernel's range.  
-    
 
 \chapter{Experiment Design}\label{chap:experiment_design}
     \section{Overview}\label{sec:exp_overview}
@@ -527,13 +491,13 @@
 
     \section{Kernel instantiation}\label{sec:kernel_instantiation}
     All the data used in our experiments was produced by our implementation \texttt{KernelLTL} of the covariance kernel detailed in chapter \ref{chap:kernel}. It was built once and persisted so that every part of the training process could make use of the same anchor set $\Psi$, trace sample $\widehat \Sigma$, feature matrix $F$, and random number generator $RNG$. The kernel was created with a sample of traces of length $T = 20$ with $\mathit{AP} = 5$ atomic propositions, with formulae evaluation fixed at the time index $t_0 = 0$, under a master $RNG$ seed of $1$. The anchor set comprised $M = 1024$ formulae selected by the $k^{\pm}$ rejection scheme detailed in Section~\ref{sec:anchor_selection}, at similarity threshold $\tau = 0.6$, with candidates drawn from the sampler of Algorithm~\ref{alg:formula_sampling_algorithm} at maximum depth $6$.
-
-    The trace sample was fixed at $N = 500{,}000$, drawn from the mixture distribution of Section~\ref{sec:trace_sampling_details}. The mixture consisted of $70\%$ high-variance, i.i.d.\ Bernoulli$(0.5)$ traces and the remaining $30\%$ were the low-variance, temporally-correlated Markov traces with flip probability $0.1$ (with the all-true and all-false traces always included). This choice for $N$ follows the uniform-convergence bound of Equation~\eqref{eq:n_min}: instantiated at $M = 1024$, tolerance $\eta = 0.005$, and confidence $\delta = 0.01$, the bound requires $N \ge 258{,}469$, and we adopt $N = 500{,}000$ (roughly twice the minimum), at which every satisfaction probability feeding an embedding lies within $\approx 0.0036$ of its population value uniformly across the anchor set, and every kernel coordinate within $\approx 0.011$ (Equation~\eqref{eq:kcov_propagation}).
+    
+    The trace sample was fixed at $N = 500{,}000$, drawn from the mixture distribution of Section~\ref{sec:trace_sampling_details}. The mixture consisted of $70\%$ high-variance, i.i.d.\ Bernoulli$(0.5)$ traces and the remaining $30\%$ were the low-variance, temporally-correlated Markov traces with flip probability $p_{\text{flip}}=0.1$. The size of the trace sample $N$ was taken above he lower bound of Equation~\eqref{eq:n_min}. Instantiated at $M = 1024$, tolerance $\eta = 0.005$, and confidence $\delta = 0.01$, the bound requires a strict minimum of $N \ge 258{,}469$ traces. We landed on $N = 500{,}000$, approximately twice this minimum. At this sample size, with probability at least $99\%$, each of the empirical base- and joint-rate values involved in calculating the embedding vector $\emb(\phi)$ is within $\approx 0.0036$ and each kernel coordinate $k^{\cov}(\phi, \psi_j)$ within $\approx 0.011$ of their respective true values (Appendix~\ref{app:tolerance_derivation}). With the range of the kernel values being $[-\tfrac14, \tfrac14]$ of $k^{\cov}$, this amounts to a deviation of at most approximately $2\%$. 
 
 
     \section{Training Data}\label{sec:training_data}
     \subsection{Curriculum datasets}\label{sec:curriculum_data}
-    Each of the curriculum datasets used during pretraining data were generated with the formula sampler described in Chapter~\ref{chap:kernel} (Algorithm~\ref{alg:formula_sampling_algorithm}). The curriculum consisted of four stages of increasing maximum depth. Each new stage extends the previous with formulae of the next depth by approximately the same number of formulae as the previous stage's total, effectively doubling the dataset size at each stage. Table~\ref{tab:curriculum} gives the per-stage sampling algorithm configuration and the dataset sizes.
+    Each of the curriculum datasets used during pretraining data were generated with the formula sampler described in Algorithm~\ref{alg:formula_sampling_algorithm}. The curriculum consisted of four stages of increasing maximum depth. Each new stage extends the previous with formulae of the next depth by approximately the same number of formulae as the previous stage's total, effectively doubling the dataset size at each stage. Table~\ref{tab:curriculum} gives the per-stage sampling algorithm configuration and the dataset sizes.
 
     For each stage, new formulae were sampled in batches and filtered for the required depth. The unique sampled formulae were split into disjoint training and evaluation sets, stratified by depth. For each depth $\ge 1$ a fraction of $2.5\%$ (capped at half the formulae of that depth) of the unique formulae were held out and placed inside the evaluation set. Depth-$0$ atoms were never placed inside of the evaluation split to make sure the model would be presented with the temporal behavior of each of the atomic formulae during training. The training split retained duplicate samples, whereas the evaluation split was deduplicated. Table \ref{tab:curriculum} gives an overview of each curriculum stage. Each item in the training set stores the formula's AST as well as its $M$-dimensional embedding. Items in the evaluation dataset additionally store the formula's canonical string and satisfaction vector.
 
@@ -563,44 +527,62 @@
     \section{Curriculum Pretraining}\label{sec:curriculum_pretraining}
     We implemented our \texttt{LTLModel} model class on top of the HuggingFace \textsc{Transformers} (version \href{https://github.com/huggingface/transformers/tree/v4.57.6}{4.57.6}) \texttt{GPT2LMHeadModel} architecture, with cross-attention enabled. The model was created with $12$ layers of transformer blocks, each with $16$ attention heads and a hidden states dimension size of $1024$, and the best dropout value found during the following hyperparameter sweep.
     
-    Prior to training, the \textit{dropout}, \textit{weight decay} and \textit{learning rate} hyperparameters for the pretraining phase were set with two consecutive sweeps over the first stage of the curriculum, selected by the values that achieved the lowest average \textit{semantic distance}, i.e. the normalized Hamming distance between target formulae and generated formulae in the stage 1 evaluation dataset. The first sweep consisted of varying the learning rate over the values $\{5\times10^{-6}, 10^{-5}, 5\times10^{-5}, 10^{-4}, 5\times10^{-4}\}$ while keeping the dropout and weight decay parameters fixed at $0.1$ and $0.01$ respectively. The best found learning rate $10^{-4}$ was then carried into a joint Bayesian hyperparameter sweep of 20 trials over dropout $\in [0, 0.2]$ and weight decay $\in [0.005, 0.02]$ using the \textsc{Optuna} (version \href{https://github.com/optuna/optuna/tree/v4.8.0}{4.8.0}) hyperparameter optimization integration with the \textsc{Transformers} library. These trials did not report any improvement over the initial learning rate sweep, and thus the base values \textit{learning rate} $=10^{-4}$, \textit{dropout} $=0.1$ and \textit{weight decay} $=0.01$ were kept.
-
-    The model with randomly initialized weights was then trained on the four stages of our curriculum, using a custom subclass of the \textsc{Transformers} \texttt{Trainer} class adjusted to suit our data collection needs. For each stage of the curriculum the weight decay, dropout and warmup parameters were [...] Each successive stage of training resumed with the model weights of the best model of the previous stage, selected according to which of the checkpoints after each epoch of training produced the lowest cross-entropy loss measured on the stage's corresponding evaluation dataset. 
+    Prior to training, the \textit{dropout}, \textit{weight decay} and \textit{learning rate} hyperparameters for the pretraining phase were set with two consecutive sweeps over the first stage of the curriculum, selected by the values that achieved the lowest average \textit{semantic distance}, i.e. the normalized Hamming distance between target formulae and generated formulae in the stage 1 evaluation dataset. The first sweep consisted of varying the learning rate over the values $\{5\times10^{-6}, 10^{-5}, 5\times10^{-5}, 10^{-4}, 5\times10^{-4}\}$ while keeping the dropout and weight decay parameters fixed at $0.1$ and $0.01$ respectively. The best found learning rate $10^{-4}$ was then carried into a joint Bayesian hyperparameter sweep of 20 trials over dropout $\in [0, 0.2]$ and weight decay $\in [0.005, 0.02]$ using the \textsc{Optuna} (version \href{https://github.com/optuna/optuna/tree/v4.8.0}{4.8.0}) hyperparameter optimization integration with the \textsc{Transformers} library. These trials did not report any improvement over the initial learning rate sweep, and thus the base values \textit{learning rate} $=10^{-4}$, \textit{dropout} $=0.1$ and \textit{weight decay} $=0.01$ were kept as the initial hyperparameters for the first stage of training. For each subsequent stage the weight decay and dropout parameters were held constant, while the learning rate was decreased gradually between stages. See Table~\ref{tab:curriculum_hyperparams} for an overview of the hyperparameter and configuration details shared between each stage of training, and see Table~\ref{tab:pretraining} for the respective learning rates.
     
-    
-    The pretraining phase fixes the base model that all four finetuned variants inherit. The network is the \texttt{LTLModel} of Chapter~\ref{chap:architecture}, a HuggingFace \textsc{Transformers} \texttt{GPT2LMHeadModel} \citep{wolf_transformers_2020} with cross-attention enabled, configured through our \texttt{GPT2Config} subclass \texttt{LTLConfig} ($1024$-dimensional hidden states, $12$ layers, $16$ heads), and it consumes the canonical strings produced by the \texttt{PreTrainedTokenizer}-based \texttt{LTLTokenizer} of Section~\ref{sec:tokenization}. Its objective is the teacher-forced cross-entropy of Section~\ref{sec:prelim_ce}: at each position the model maximises the log-probability of the next ground-truth token of the canonical string $\mathrm{str}(\phi)$, conditioned on the target formula's semantic embedding $\emb(\phi)$ injected as cross-attention \texttt{encoder\_hidden\_states} through the mechanism of Chapter~\ref{chap:kernel} (Equation~\eqref{eq:prelim_ce}). Minimising this objective is maximum-likelihood estimation of the map from an embedding to the single canonical syntax that realises it.
-
-    The data is presented as the four-stage, depth-staged curriculum of Section~\ref{sec:curriculum_data}. Each stage extends the previous one with formulae a level deeper and roughly doubles the dataset, and each resumes from the weights and optimiser state of the last, so that the model is confronted with progressively deeper temporal structure only once it has converged on the shallower fragment out of which that structure is composed.
-
-    All training is carried out with the HuggingFace \texttt{Trainer} \citep{wolf_transformers_2020}, which we subclass as \texttt{CETrainer} to expose per-step training metrics and to evaluate semantic distance through a custom \texttt{TrainerCallback}; the run is configured through \texttt{TrainingArguments}, each batch is assembled by a custom \texttt{data\_collator} that pads the tokenised formula and attaches its embedding, and the four-GPU distributed-data-parallel execution, checkpointing, and best-model bookkeeping are delegated to the \texttt{Trainer} itself. Early stopping and best-model selection are provided by an \texttt{EarlyStoppingCallback} together with the \texttt{load\_best\_model\_at\_end} and \texttt{metric\_for\_best\_model} settings of \texttt{TrainingArguments}.
-
-    Optimisation uses the AdamW optimiser supplied by the \texttt{Trainer} ($\beta_1=0.9$, $\beta_2=0.999$, $\varepsilon=10^{-8}$) with weight decay $0.01$, gradient-norm clipping at $1.0$, and dropout $0.1$; the effective batch size is $1024$ (a per-device batch of $256$ across four H100 GPUs under distributed data-parallel training). Each stage runs for at most $100$ epochs under a linear schedule --- warmup over the first $5\%$ of steps, then linear decay --- with early stopping and best-model selection on the evaluation loss. The peak learning rate is decayed across stages, from $10^{-4}$ at stage~1 to $5\times10^{-6}$ at stage~4, reflecting that each successive stage refines an increasingly converged model. Table~\ref{tab:pretraining} reports the peak rate, the early-stopping epoch, and the wall-clock time per stage; every stage converges well within the $100$-epoch cap.
-
-    \begin{table}[ht]
-        \centering
-        \caption{Per-stage pretraining schedule and convergence (early stopping on the evaluation loss; $100$-epoch cap).}
-        \label{tab:pretraining}
-        \begin{tabular}{cccc}
-            \toprule
-            Stage & Peak learning rate & Stopping epoch & Wall-clock \\
-            \midrule
-            1 & $10^{-4}$        & $35$ & $7$\,m \\
-            2 & $5\times10^{-5}$ & $23$ & $12$\,m \\
-            3 & $10^{-5}$        & $31$ & $52$\,m \\
-            4 & $5\times10^{-6}$ & $51$ & $5$\,h\,$07$\,m \\
-            \bottomrule
-        \end{tabular}
+    \begin{table}[h!]
+    \centering
+    \begin{tabular}{ll}
+        \toprule
+        \textbf{Hyperparameter} & \textbf{Value} \\
+        \midrule
+        Optimizer & AdamW (fused) \\
+        \quad $(\beta_1, \beta_2, \varepsilon)$ & $(0.9,\ 0.999,\ 10^{-8})$ \\
+        Activation function & GELU (new) \\
+        Weight decay & $0.01$ \\
+        Attention/embedding/residual dropout & $0.1$ \\
+        Gradient clipping (max norm) & $1.0$ \\
+        Learning-rate scheduler & linear decay \\
+        Warmup ratio & $0.05$ \\
+        Per-device batch size & $256$ \\
+        Gradient accumulation steps & $1$ \\
+        Num. parallel processes & $4$ (effective batch $1024$) \\
+        Mixed precision & bfloat16 \\
+        Maximum epochs & $100$ \\
+        Label smoothing & $0.0$ \\
+        Evaluation/save interval & every epoch \\
+        Metric for best model & evaluation cross-entropy loss \\
+        Early stopping patience & $10$ epochs \\
+        Early stopping threshold & $0.0$ \\
+        Random seed & $42$ \\
+        \bottomrule
+    \end{tabular}
+    \caption{Common training hyperparameters across all four curriculum stages.}
+    \label{tab:curriculum_hyperparams}
     \end{table}
 
-    
-    \section{Hyperparameter Search}\label{sec:hpo}
-    The pretraining hyperparameters were fixed by a two-step search on stage~1. A pilot sweep over the peak learning rate $\{5\times10^{-6}, 10^{-5}, 5\times10^{-5}, 10^{-4}, 5\times10^{-4}\}$, at fixed dropout $0.1$ and weight decay $0.01$, identified $10^{-4}$ as best by semantic distance --- the normalised Hamming distance between the generated and target satisfaction vectors (Section~\ref{sec:metrics}) --- reaching $0.0112$. A subsequent Bayesian search (Optuna, $20$ trials) over dropout $\in [0, 0.2]$ and weight decay $\in [0.005, 0.02]$ produced no configuration that improved on this pilot, so the default dropout $0.1$ and weight decay $0.01$ were retained. The later-stage learning rates of Table~\ref{tab:pretraining} were then set by hand-decay from the stage-1 result rather than separately searched.
+    The model with randomly initialized weights was then trained on the four stages of our curriculum, using a custom subclass \texttt{CETrainer} of the \textsc{Transformers} \texttt{Trainer} class, adjusted to suit our data collection needs. Training was done on four Nvidia \textsc{H100} GPUs. Each successive stage of training resumed with the model weights of the best model of the previous stage, selected according to which of the checkpoints after each epoch of training produced the lowest cross-entropy loss measured on the stage's corresponding evaluation dataset.
+
+    \begin{table}[ht]S
+    \centering
+    \caption{Per-stage pretraining schedule and convergence (early stopping on the evaluation loss; $100$-epoch cap).}
+    \label{tab:pretraining}
+    \begin{tabular}{cccc}
+        \toprule
+        Stage & Peak learning rate & Stopping epoch & Wall-clock \\
+        \midrule
+        1 & $10^{-4}$        & $35$ & $7$\,m \\
+        2 & $5\times10^{-5}$ & $23$ & $12$\,m \\
+        3 & $10^{-5}$        & $31$ & $52$\,m \\
+        4 & $5\times10^{-6}$ & $51$ & $5$\,h\,$07$\,m \\
+        \bottomrule
+    \end{tabular}
+    \end{table}
 
     
     \section{Reinforcement-Learning Finetuning}\label{sec:rl_finetuning}
     
     \subsection{Rationale}\label{sec:rl_motivation}
-    The base model fixed by pretraining is a conditional language model trained by teacher-forced cross-entropy: at every position it is supervised to reproduce the next token of a single canonical string, conditioned on the target embedding (\S\ref{sec:prelim_ce}). Two limitations of this regime motivate the finetuning phase, and we address them with two distinct levers. The first is a limitation of the \emph{supervision}: each semantic equivalence class is represented in the pretraining data by essentially one canonical syntax, so the maximum-likelihood objective couples each embedding to that one form and is obliged to penalise every equivalent alternative. The mutation dataset of \S\ref{sec:finetune_data}, which pairs each embedding with syntactically divergent equivalents and syntactically adjacent near-misses, is the lever aimed at this gap. The second is a limitation of the \emph{objective}, and is the subject of the rest of this rationale.
+    The base model fixed by pretraining is a conditional language model trained by teacher-forced cross-entropy: at every position it is supervised to reproduce the next token of a single canonical string, conditioned on the target embedding (\S\ref{sec:prelim_ce}). Two limitations of this regime motivate the finetuning phase, and we address them with two distinct levers. The first is a limitation of the \emph{supervision}: each semantic equivalence class is represented in the pretraining data by essentially one canonical syntax, so the maximum-likelihood objective couples each embedding to that one form and is obliged to penalize every equivalent alternative. The mutation dataset of \S\ref{sec:finetune_data}, which pairs each embedding with syntactically divergent equivalents and syntactically adjacent near-misses, is the lever aimed at this gap. The second is a limitation of the \emph{objective}, and is the subject of the rest of this rationale.
     
     Teacher-forced cross-entropy supervises the model only on ground-truth prefixes and rewards only exact reproduction of the reference string. It therefore inherits the exposure bias of \S\ref{sec:prelim_ce} --- at generation time the model must condition on its own samples, which it never saw during training --- and, more consequentially for our purposes, it has no way to credit a generation that is semantically correct but syntactically different from the reference. Reinforcement learning replaces the reference-matching signal with a reward computed from the generated formula's own behavior (\S\ref{sec:rl_mechanics}), grading semantic agreement over the trace sample rather than string identity, and read off the model's own samples. 
     
@@ -866,16 +848,42 @@ Anchor cosine similarity threshold was only set to exclude large \emph{positive}
 
 \chapter{Appendices}
 
-% =====================================================================
-%  APPENDIX — Objective gradients and the CE/RL optimality nesting
-%  Consumed by: 6.5.2 (mechanics), 6.5.3 (variants), 6.5.4 (Moves 1-2,4).
-%  Reuses notation from Table~\ref{tab:prelim_notation} and Eq.~\eqref{eq:prelim_ce}.
-%  SOURCE: misc/passage.tex — STALE in three ways, flagged inline below.
-% =====================================================================
+\section{Propagation of the Trace Tolerance to the Kernel Coordinates}\label{app:tolerance_derivation}
+    \emph{Section~\ref{sec:choosing_n} fixed a trace budget that controls every satisfaction probability feeding an embedding to within a tolerance $\eta$ (Equation~\eqref{eq:hoeffding_union}). Here we show that this control propagates to the kernel coordinates $k^{\cov}(\phi,\psi_j)$ that the embedding is built from.} From the definition of covariance,
+    \begin{equation}\label{eq:kcov_decomposition}
+        k^{\cov}(\phi, \psi_j) \;=\;\bar\chi_{\phi\psi_j} \;-\; \bar\chi_\phi\, \bar\chi_{\psi_j},
+    \end{equation}
+    and analogously 
+    \begin{equation}
+        k^{\cov}_\mathcal{T}(\phi, \psi_j) := q_{\phi\psi_j} - p_\phi\, p_{\psi_j},
+    \end{equation} for the population kernel. Taking the difference between the two and rearranging yields
+    \begin{align*}
+        k^{\cov}(\phi, \psi_j) - k^{\cov}_\mathcal{T}(\phi, \psi_j)
+        &\;=\; \bigl(\bar\chi_{\phi\psi_j} - \bar\chi_\phi\, \bar\chi_{\psi_j}\bigr) \;-\; \bigl(q_{\phi\psi_j} - p_\phi\, p_{\psi_j}\bigr) \\
+        &\;=\; \bigl(\bar\chi_{\phi\psi_j} - q_{\phi\psi_j}\bigr) \;-\; \bigl(\bar\chi_\phi\, \bar\chi_{\psi_j} - p_\phi\, p_{\psi_j}\bigr)
+    \end{align*}
+    Taking the absolute value of both sides and applying the triangle inequality then yields
+    \begin{equation}\label{eq:kcov_outer_triangle}
+        \bigl|k^{\cov}(\phi, \psi_j) - k^{\cov}_\mathcal{T}(\phi, \psi_j)\bigr| \;\le\; \bigl|\bar\chi_{\phi\psi_j} - q_{\phi\psi_j}\bigr| \;+\; \bigl|\bar\chi_\phi\, \bar\chi_{\psi_j} - p_\phi\, p_{\psi_j}\bigr|
+    \end{equation}
+    The first term on the right-hand side is precisely the deviation that Hoeffding bounds for the joint rate $\bar\chi_{\phi\psi_j}$. The second is a difference of products, which Hoeffding does not address directly, so we have to reduce it through an add-and-subtract step. Inserting the terms $-\bar\chi_\phi \, p_{\psi_j}\;+\; \bar\chi_\phi \, p_{\psi_j}$ and regrouping gives the algebraic identity
+    \begin{equation*}
+        \bar\chi_\phi\, \bar\chi_{\psi_j} - p_\phi\, p_{\psi_j} \;=\; \bar\chi_\phi\,\bigl(\bar\chi_{\psi_j} - p_{\psi_j}\bigr) \, + \, p_{\psi_j}\,\bigl(\bar\chi_\phi - p_\phi\bigr),
+    \end{equation*}
+    which now shows this difference of products as a sum of two terms, each containing the deviation of a single sample mean from its population value. Applying the triangle inequality to this two-term sum and using the fact that both $\bar\chi_\phi, p_{\psi_j} \in [0, 1]$ to drop the leading factors gives the bound
+    \begin{equation}\label{eq:product_bound}
+        \bigl|\bar\chi_\phi\, \bar\chi_{\psi_j} - p_\phi\, p_{\psi_j}\bigr| \;\le\; \bar\chi_\phi\,\bigl|\bar\chi_{\psi_j} - p_{\psi_j}\bigr| \, + \, p_{\psi_j}\,\bigl|\bar\chi_\phi - p_\phi\bigr| \;\le\; \bigl|\bar\chi_{\psi_j} - p_{\psi_j}\bigr| \;+\; \bigl|\bar\chi_\phi - p_\phi\bigr|
+    \end{equation}
+    Substituting \eqref{eq:product_bound} into \eqref{eq:kcov_outer_triangle} collects the kernel deviation into a sum of three single-variable deviations, each of which is controlled at tolerance $\eta$ by the joint Hoeffding event of \eqref{eq:hoeffding_union}:
+    \begin{equation}\label{eq:kcov_propagation}
+        \bigl| k^{\cov}(\phi, \psi_j) - k^{\cov}_\mathcal{T}(\phi, \psi_j) \bigr| \;\le\; \bigl|\bar\chi_{\phi\psi_j} - q_{\phi\psi_j}\bigr| \;+\; \bigl|\bar\chi_\phi - p_\phi\bigr| \;+\; \bigl|\bar\chi_{\psi_j} - p_{\psi_j}\bigr| \;\le\; 3\eta
+    \end{equation}
+    The factor of $3$ is exactly the three triangle-inequality contributions accumulated along the way: one from the outer subtraction in \eqref{eq:kcov_outer_triangle}, two from the product expansion in \eqref{eq:product_bound}. \emph{Each kernel coordinate is therefore controlled to within $3\eta$ of its population value; the instantiated tolerance for our adopted $\eta$ is reported in Section~\ref{sec:kernel_instantiation}.}
 
-\chapter{Gradient Derivations for the Training Objectives}\label{app:objective_gradients}
 
-    \section{Notation and Setup}\label{app:obj_setup}
+    \section{Gradient Derivations for the Training Objectives}\label{app:objective_gradients}
+
+    \subsection{Notation and Setup}\label{app:obj_setup}
     \begin{itemize}
         \item Recall Table~\ref{tab:prelim_notation} and \eqref{eq:prelim_ce}.
         \item Add the output-layer specialisation used throughout: final hidden state
@@ -885,7 +893,7 @@ Anchor cosine similarity threshold was only set to exclude large \emph{positive}
         \item Add the critic $V_{\bm\psi}(\bm h_t)$ for the GAE derivation (§\ref{app:obj_gae}).
     \end{itemize}
 
-    \section{Cross-Entropy Loss Gradient}\label{app:obj_ce}
+    \subsection{Cross-Entropy Loss Gradient}\label{app:obj_ce}
     % Reusable from passage.tex §97-206 ESSENTIALLY AS-IS (no stale dependencies).
     \begin{itemize}
         \item Logit derivative:
@@ -905,7 +913,7 @@ Anchor cosine similarity threshold was only set to exclude large \emph{positive}
               \cite{elhage_toy_2022, olah_zoom_2020}
     \end{itemize}
 
-    \section{Policy-Gradient (REINFORCE) Loss Gradient}\label{app:obj_re}
+    \subsection{Policy-Gradient (REINFORCE) Loss Gradient}\label{app:obj_re}
     % Reusable from passage.tex §208-255, BUT:
     %   STALE-FIX 1: advantage A is the CURRENT RB form (see §\ref{app:obj_rb}); do NOT
     %               reintroduce the NMSE reward here. Keep R abstract until §\ref{app:obj_rb}.
@@ -923,7 +931,7 @@ Anchor cosine similarity threshold was only set to exclude large \emph{positive}
         \item State unbiasedness via \eqref{eq:prelim_reinforce} \cite{williams_simple_1992}.
     \end{itemize}
 
-    \section{The Hybrid Valid/Invalid Objective}\label{app:obj_hybrid}
+    \subsection{The Hybrid Valid/Invalid Objective}\label{app:obj_hybrid}
     % NEW — must be written from scratch. REPLACES passage.tex §257-264 (alpha-mixing /
     %   "Multi-Objective Learning" — DROPPED, stale). This is the CURRENT per-batch loss.
     \begin{itemize}
@@ -938,9 +946,9 @@ Anchor cosine similarity threshold was only set to exclude large \emph{positive}
               Explicitly state this supersedes the earlier single-alpha mixed objective.
     \end{itemize}
 
-    \section{Variant-Specific Advantage Estimators}\label{app:obj_variants}
+    \subsection{Variant-Specific Advantage Estimators}\label{app:obj_variants}
 
-        \subsection{Running-Baseline REINFORCE (RB)}\label{app:obj_rb}
+        \subsubsection{Running-Baseline REINFORCE (RB)}\label{app:obj_rb}
         \begin{itemize}
             \item Length-normalised sequence log-prob:
                   $\overline{\log p} = \frac{1}{|\hat{\bm y}|}\sum_t \log p_{\bm\theta}(\hat y_{t+1}\mid\cdot)$.
@@ -949,7 +957,7 @@ Anchor cosine similarity threshold was only set to exclude large \emph{positive}
             \item $\mathcal{L}_{\text{RL}} = -\,\mathbb{E}_{\text{valid}}\!\left[A\,\overline{\log p}\right]$.
         \end{itemize}
 
-        \subsection{Generalised Advantage Estimation (GAE)}\label{app:obj_gae}
+        \subsubsection{Generalised Advantage Estimation (GAE)}\label{app:obj_gae}
         \begin{itemize}
             \item Per-token values $v_t = V_{\bm\psi}(\bm h_t)$; terminal reward placed at the
                   last real token only.
@@ -963,7 +971,7 @@ Anchor cosine similarity threshold was only set to exclude large \emph{positive}
                   credit-assignment problem of §\ref{sec:prelim_rl}.
         \end{itemize}
 
-    \section{The CE/RL Optimality Nesting}\label{app:obj_nesting}
+    \subsection{The CE/RL Optimality Nesting}\label{app:obj_nesting}
     % Reusable from passage.tex §268-283 with ONE substitution:
     %   STALE-FIX 3: NMSE-based reward -> R = 1 - normalised Hamming. Argument is identical:
     %               equivalent formula -> same satvec -> Hamming 0 -> maximal reward.
@@ -980,12 +988,6 @@ Anchor cosine similarity threshold was only set to exclude large \emph{positive}
         \item \textbf{Conclusion (cited by 6.5.4 Move 2):} RL admits the semantically-equivalent
               syntaxes CE penalises — the formal handle on "RL buys semantic flexibility".
     \end{itemize}
-
-    \section{Remark: Reward Clipping}\label{app:obj_clip}
-    % Optional, short. From passage.tex §60 but RE-SCOPED:
-    %   under R = 1 - Hamming, valid rewards already lie in [0,1], so the clip to [-1,1] is
-    %   INERT for valid generations. Keep only the bottom-clip-does-not-bias-the-optimum point
-    %   \cite{mnih_playing_2013, pohlen_observe_2018}; drop the NMSE framing.
 
 
 \end{document}
