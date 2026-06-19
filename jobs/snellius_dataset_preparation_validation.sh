@@ -89,7 +89,7 @@ fi
 # RUN VALIDATION DATASET CREATION
 # ============================================================================
 CMD=(
-    python -u scripts/prepare_final_validation.py
+    python -u scripts/prepare_validation_dataset.py
     --kernel-dir "$KERNEL_DIR"
     --exclude-dataset-dirs "${EXCLUDE_DATASET_DIRS[@]}"
     --output-dir "$FINAL_OUTPUT_DIR"
