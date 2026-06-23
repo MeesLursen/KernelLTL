@@ -110,7 +110,7 @@ def q2_residual(df: pd.DataFrame, *, runs: list[str], alpha: float = 0.05) -> pd
         if rdf["correct"].nunique() < 2:
             continue
         res = _fit_logit("correct ~ z_variance + z_norm_resid + C(target_depth)", rdf)
-        for pred, label in [("z_variance", "variance"), ("z_norm_resid", "orthogonality")]:
+        for pred, label in [("z_variance", "variance"), ("z_norm_resid", "norm_resid")]:
             ci = res.conf_int(alpha=alpha).loc[pred]
             rows.append({"run": r, "predictor": label, "coef": float(res.params[pred]),
                          "ci_low": float(ci[0]), "ci_high": float(ci[1]),
@@ -203,12 +203,18 @@ def _restrict_common(df: pd.DataFrame, runs: list[str]) -> pd.DataFrame:
 
 
 def cross_model_interaction(df: pd.DataFrame, *, runs: list[str], reference_run: str,
-                            alpha: float = 0.05, n_sim: int = 2000, rng_seed: int = 0) -> dict:
-    """Pooled `correct ~ model x (z_variance + z_norm_resid) + z_target_depth`,
+                            alpha: float = 0.05, n_sim: int = 2000, rng_seed: int = 0,
+                            extra_covariates: tuple[str, ...] = ()) -> dict:
+    """Pooled `correct ~ model x (z_variance + z_norm_resid) + z_target_depth [+ extra]`,
     cluster-robust SE by formula_id. Interaction coef = per-+1-SD slope difference vs the
-    reference (does finetuning change geometry-reliance?). BH-FDR over the interaction family."""
+    reference (does finetuning change geometry-reliance?). BH-FDR over the interaction family.
+
+    ``extra_covariates`` (e.g. the ``has_*`` operator indicators, joined by the caller) enter
+    as ADDITIVE main-effect controls (not model-interacted): they hold operator composition
+    fixed so the geometry slope-change test is operator-adjusted, without spawning a
+    model x operator interaction family (that is operator_crossmodel's job)."""
     interact = ["z_variance", "z_norm_resid"]
-    covar = ["z_target_depth"]
+    covar = ["z_target_depth"] + list(extra_covariates)
     variants = [r for r in runs if r != reference_run]
     stacked = _restrict_common(df, runs).dropna(subset=["correct"] + interact + covar)
     empty = {"interactions": pd.DataFrame(), "ame": pd.DataFrame(),

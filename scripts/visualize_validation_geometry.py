@@ -21,8 +21,11 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts._validation_analysis import feasibility as fb
 from scripts._validation_analysis import geometry_analysis as ga
+from scripts._validation_analysis import geometry_operator as go
 from scripts._validation_analysis import geometry_plots as gp
+from scripts._validation_analysis import operator_crossmodel as oc
 
 
 def _log(m):
@@ -42,6 +45,9 @@ def parse_args():
                    help="Faithfulness threshold (quantile) for the faithful-but-weak subset (I2).")
     p.add_argument("--output-dir", required=True)
     p.add_argument("--runs", nargs="+", required=True)
+    p.add_argument("--ablation-runs", nargs="*", default=[],
+                   help="Embedding-ablation runs (e.g. ce_base_ablation_zero ...) for the RQ1 "
+                        "feasibility floor (G1b). Compared against --reference-run (the conditioned base).")
     p.add_argument("--reference-run", default="ce_base")
     p.add_argument("--bootstrap-n", type=int, default=10000)
     p.add_argument("--n-sim", type=int, default=2000)
@@ -69,12 +75,23 @@ def load_greedy_correctness(root: Path, runs) -> pd.DataFrame:
     for label in runs:
         d = _resolve_run_dir(root, label)
         rows = [json.loads(l) for l in open(d / "per_sample" / "greedy.jsonl")]
-        g = pd.DataFrame(rows)[["formula_id", "is_semantic_equivalent", "semantic_distance", "target_depth"]]
+        g = pd.DataFrame(rows)[["formula_id", "is_semantic_equivalent", "is_invalid",
+                                "semantic_distance", "target_depth"]]
         g["correct"] = g["is_semantic_equivalent"].astype(int)
+        g["is_invalid"] = g["is_invalid"].astype(int)
         g["run"] = label
-        frames.append(g[["run", "formula_id", "correct", "semantic_distance", "target_depth"]])
+        frames.append(g[["run", "formula_id", "correct", "is_invalid", "semantic_distance", "target_depth"]])
         _log(f"[geom] {label} -> {d.name} ({len(g)} rows)")
     return pd.concat(frames, ignore_index=True)
+
+
+def load_target_meta(root: Path, ref_run: str) -> pd.DataFrame:
+    """One row per formula_id with target_formula_str + target_depth (model-independent),
+    read from the reference run's greedy.jsonl — feeds the operator parsing for G2/G4."""
+    d = _resolve_run_dir(root, ref_run)
+    rows = [json.loads(l) for l in open(d / "per_sample" / "greedy.jsonl")]
+    g = pd.DataFrame(rows)[["formula_id", "target_formula_str", "target_depth"]]
+    return g.drop_duplicates("formula_id").reset_index(drop=True)
 
 
 def main():
@@ -85,6 +102,7 @@ def main():
     stats_dir.mkdir(parents=True, exist_ok=True)
     fig_dir.mkdir(parents=True, exist_ok=True)
     runs, ref = args.runs, args.reference_run
+    variants = [r for r in runs if r != ref]
 
     features = pd.read_csv(args.geometry_features)
     n_triv = int(features.get("is_trivial", pd.Series(0)).sum())
@@ -93,6 +111,23 @@ def main():
     corr = load_greedy_correctness(Path(args.validation_root), runs)
     df = ga.build_frame(features, corr)
     _log(f"[geom] analysis frame: {len(df)} rows, {df.formula_id.nunique()} non-trivial targets")
+
+    # --- RQ1 feasibility floor (G1b): conditioned base vs embedding-ablated baselines ---
+    if args.ablation_runs:
+        _log(f"[geom] RQ1 feasibility floor: {ref} vs {list(args.ablation_runs)}")
+        nontrivial = set(df["formula_id"])
+        floor_runs = [ref] + list(args.ablation_runs)
+        floor_corr = load_greedy_correctness(Path(args.validation_root), floor_runs)
+        floor_corr = floor_corr[floor_corr["formula_id"].isin(nontrivial)]
+        floor_desc = fb.feasibility_floor_descriptive(
+            floor_corr, runs=floor_runs, n_bootstrap=args.bootstrap_n,
+            alpha=args.alpha, rng_seed=args.rng_seed)
+        floor_desc.to_csv(stats_dir / "feasibility_floor_descriptive.csv", index=False)
+        fb.feasibility_floor_drop(
+            floor_corr, conditioned_run=ref, ablation_runs=list(args.ablation_runs),
+            n_bootstrap=args.bootstrap_n, alpha=args.alpha, rng_seed=args.rng_seed
+        ).to_csv(stats_dir / "feasibility_floor_drop.csv", index=False)
+        gp.plot_feasibility_floor(floor_desc, stem=fig_dir / "feasibility_floor", dpi=args.dpi)
 
     # --- Q1: marginal magnitude ---
     q1 = ga.q1_marginal(df, runs=runs, alpha=args.alpha)
@@ -108,7 +143,7 @@ def main():
     gp.plot_residual_forest(resid, runs=runs, stem=fig_dir / "geometry_q2_residual_forest", dpi=args.dpi)
 
     # --- descriptive marginal curves (binary + flagged distance) ---
-    for feat in ["emb_norm", "variance"]:
+    for feat in ["emb_norm", "variance", "norm_resid"]:
         for outcome in ["correct", "semantic_distance"]:
             mb = ga.marginal_binned(df, runs=runs, feature=feat, outcome=outcome, n_bins=args.bins,
                                     n_bootstrap=args.bootstrap_n, alpha=args.alpha, rng_seed=args.rng_seed)
@@ -130,6 +165,79 @@ def main():
     res["ame"].to_csv(stats_dir / "geometry_crossmodel_ame.csv", index=False)
     gp.plot_crossmodel_interaction(res["interactions"], reference_run=ref,
                                    stem=fig_dir / "geometry_crossmodel_interaction", dpi=args.dpi)
+
+    # --- G2: geometry x operator bridge (model-independent, per target) ---
+    _log("[geom] G2 geometry x operator bridge + G4 regression-set characterization ...")
+    target_meta = load_target_meta(Path(args.validation_root), ref)
+    geom_op = go.build_geometry_operator_frame(features, target_meta)
+
+    op_contrast = go.operator_geometry_contrast(
+        geom_op, n_bootstrap=args.bootstrap_n, alpha=args.alpha, rng_seed=args.rng_seed)
+    op_contrast.to_csv(stats_dir / "geomop_operator_geometry_contrast.csv", index=False)
+    op_reg = go.operator_orthogonality_regression(geom_op, alpha=args.alpha)
+    op_reg.to_csv(stats_dir / "geomop_operator_orthogonality_regression.csv", index=False)
+    # G2 bridge -> correctness: does the geometry effect survive operator adjustment?
+    op_adj = go.operator_adjusted_correctness(df, geom_op, runs=runs, alpha=args.alpha)
+    op_adj.to_csv(stats_dir / "geomop_geometry_attenuation.csv", index=False)
+    gp.plot_geometry_attenuation(op_adj, runs=runs, stem=fig_dir / "geomop_geometry_attenuation", dpi=args.dpi)
+    # unified joint-model coefficient forest (RQ2 diagnostic + RQ3 cross-model), both outcomes:
+    #   CE-base-only = clean RQ2 diagnostic; all-models = RQ2->RQ3 comparison.
+    for outcome in ["correct", "semantic_distance"]:
+        jc = go.geomop_adjusted_coefficients(df, geom_op, runs=runs, outcome=outcome, alpha=args.alpha)
+        jc.to_csv(stats_dir / f"geomop_joint_coef_{outcome}.csv", index=False)
+        gp.plot_geomop_joint_forest(jc, runs=[ref], outcome=outcome,
+                                    stem=fig_dir / f"geomop_joint_forest_{outcome}_base", dpi=args.dpi)
+        gp.plot_geomop_joint_forest(jc, runs=runs, outcome=outcome,
+                                    stem=fig_dir / f"geomop_joint_forest_{outcome}_allmodels", dpi=args.dpi)
+
+    # --- cross-family-adjusted RQ3 interactions (operators <-> geometry on one frame) -------
+    has_cols = [f"has_{op}" for op in go.OPERATORS if f"has_{op}" in geom_op.columns]
+    df_aug = df.copy()
+    df_aug["formula_id"] = df_aug["formula_id"].astype(int)
+    _gop = geom_op[["formula_id"] + has_cols].copy()
+    _gop["formula_id"] = _gop["formula_id"].astype(int)
+    df_aug = df_aug.merge(_gop, on="formula_id", how="inner")
+    # (a) geometry slope-change test, OPERATOR-adjusted (operators as additive controls)
+    res_oa = ga.cross_model_interaction(df_aug, runs=runs, reference_run=ref, alpha=args.alpha,
+                                        n_sim=args.n_sim, rng_seed=args.rng_seed,
+                                        extra_covariates=tuple(has_cols))
+    res_oa["interactions"].to_csv(stats_dir / "geometry_crossmodel_interaction_opadj.csv", index=False)
+    res_oa["ame"].to_csv(stats_dir / "geometry_crossmodel_ame_opadj.csv", index=False)
+    gp.plot_crossmodel_interaction(res_oa["interactions"], reference_run=ref,
+                                   stem=fig_dir / "geometry_crossmodel_interaction_opadj", dpi=args.dpi)
+    # (b) operator difficulty-change test, GEOMETRY-adjusted (z_variance + z_norm_resid controls)
+    oc_res = oc.fit_pooled_interaction(df_aug, runs=runs, reference_run=ref, outcome_col="correct",
+                                       alpha=args.alpha, n_sim=args.n_sim, rng_seed=args.rng_seed,
+                                       extra_controls=("z_variance", "z_norm_resid"))
+    oc_res["interactions"].to_csv(stats_dir / "geomop_operator_crossmodel_interaction_geomadj.csv", index=False)
+    oc_res["ame"].to_csv(stats_dir / "geomop_operator_crossmodel_ame_geomadj.csv", index=False)
+
+    for g in go.GEOM_COLS:
+        gp.plot_operator_geometry_contrast(op_contrast, geom=g,
+                                           stem=fig_dir / f"geomop_contrast_{g}", dpi=args.dpi)
+    for resp in ["norm_resid", "variance"]:
+        gp.plot_operator_orthogonality_forest(op_reg, response=resp,
+                                              stem=fig_dir / f"geomop_orthogonality_{resp}", dpi=args.dpi)
+
+    # --- G4: RL-regression set (cross-run vs reference) ---
+    flips = go.compute_correctness_flips(corr, reference_run=ref, variants=variants)
+    # keep the non-trivial set only, consistent with the geometry convention everywhere else
+    flips = flips[flips["formula_id"].isin(set(geom_op["formula_id"]))]
+    if not flips.empty:
+        go.flip_counts(flips, variants=variants).to_csv(
+            stats_dir / "geomop_flip_counts.csv", index=False)
+        prof = go.profile_flip_geometry(flips, geom_op, variants=variants,
+                                        n_bootstrap=args.bootstrap_n, alpha=args.alpha, rng_seed=args.rng_seed)
+        prof.to_csv(stats_dir / "geomop_flip_geometry_profile.csv", index=False)
+        lor = go.flip_operator_logodds(flips, geom_op, variants=variants,
+                                       n_bootstrap=args.bootstrap_n, alpha=args.alpha, rng_seed=args.rng_seed)
+        lor.to_csv(stats_dir / "geomop_flip_operator_logodds.csv", index=False)
+        for g in go.GEOM_COLS:
+            gp.plot_flip_geometry(prof, geom=g, variants=variants,
+                                  stem=fig_dir / f"geomop_flip_geometry_{g}", dpi=args.dpi)
+        if not lor.empty:
+            gp.plot_flip_operator_logodds(lor, variants=variants,
+                                          stem=fig_dir / "geomop_flip_operator_logodds", dpi=args.dpi)
 
     # --- RQ1a representation faithfulness (optional; needs faithfulness_features.csv) ---
     faith_summary = {}

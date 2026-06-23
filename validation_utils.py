@@ -53,6 +53,61 @@ def _pad_T(t: torch.Tensor, T_target: int, pad_value: float = 0.0) -> torch.Tens
 
 
 
+EMBEDDING_ABLATIONS = ("none", "zero", "mean", "shuffle")
+
+
+def _apply_embedding_ablation(
+    embs: torch.Tensor,
+    mode: str,
+    *,
+    mean_embedding: torch.Tensor | None = None,
+    generator: torch.Generator | None = None,
+) -> torch.Tensor:
+    """Destroy or corrupt the conditioning signal, for the embedding-ablation floor (G1b).
+
+    ``none``    -- pass through (the real conditioned model).
+    ``zero``    -- the zero embedding: the unconditional prior. (The kernel also maps every
+                   tautology/contradiction to the zero embedding, so the decoder has seen it
+                   and learned to fall back on its prior there.)
+    ``mean``    -- the dataset-mean embedding for every target: a constant, target-agnostic
+                   signal of realistic magnitude.
+    ``shuffle`` -- another target's embedding (permuted within the batch): a real,
+                   in-distribution signal that does not match the target.
+
+    The targets / satisfaction vectors the caller scores against are NOT permuted, so
+    ``shuffle`` measures generating from a mismatched embedding. Returns a tensor the same
+    shape as ``embs``.
+    """
+    if mode == "none":
+        return embs
+    if mode == "zero":
+        return torch.zeros_like(embs)
+    if mode == "mean":
+        if mean_embedding is None:
+            raise ValueError("embedding_ablation='mean' requires mean_embedding")
+        # flatten to the feature vector [H] so expand_as broadcasts onto either a 2-D
+        # [B, H] (greedy pass) or 3-D [B, 1, H] (seq dim) embedding tensor.
+        me = mean_embedding.to(device=embs.device, dtype=embs.dtype).reshape(-1)
+        return me.expand_as(embs).contiguous()
+    if mode == "shuffle":
+        B = embs.size(0)
+        if B < 2:
+            return embs
+        perm = torch.randperm(B, generator=generator)
+        return embs[perm.to(embs.device)].contiguous()
+    raise ValueError(f"unknown embedding_ablation mode: {mode!r} (expected {EMBEDDING_ABLATIONS})")
+
+
+def _make_ablation_generator(mode: str, seed: int, process_index: int) -> torch.Generator | None:
+    """Seeded CPU generator for the ``shuffle`` ablation (per-process for DDP determinism)."""
+    if mode != "shuffle":
+        return None
+    g = torch.Generator()
+    g.manual_seed(int(seed) + int(process_index))
+    return g
+
+
+
 def _sentence_bleu(candidate: list[str], references: list[list[str]], max_n: int = 4) -> float:
     """Sentence-level BLEU. Behaviour matches training_utils.SemanticEvaluationCallback._sentence_bleu."""
     if not candidate or not references:
@@ -168,6 +223,9 @@ def run_greedy_pass(
     accelerator: Accelerator,
     output_jsonl_path: str,
     semantic_eval_batch_size: int = 10240,
+    embedding_ablation: str = "none",
+    mean_embedding: torch.Tensor | None = None,
+    ablation_seed: int = 0,
 ) -> dict[str, Any]:
     """Greedy validation pass.
 
@@ -188,11 +246,15 @@ def run_greedy_pass(
     original_training = bool(gen_model.training)
     gen_model.eval()
 
+    ablation_gen = _make_ablation_generator(embedding_ablation, ablation_seed, accelerator.process_index)
+
     buffered_batches: list[dict[str, torch.Tensor]] = []
 
     with torch.no_grad(), accelerator.autocast():
         for batch in eval_dataloader:
             embs = batch["encoder_hidden_states"].to(device, non_blocking=True)
+            embs = _apply_embedding_ablation(
+                embs, embedding_ablation, mean_embedding=mean_embedding, generator=ablation_gen)
             target_sats = batch["target_satisfaction"].to(device)
             target_strs = batch["target_formula_strs"]
             formula_ids = batch["formula_ids"].to(device)
@@ -506,6 +568,9 @@ def run_topk_pass(
     output_flat_path: str,
     output_grouped_path: str,
     semantic_eval_batch_size: int = 10240,
+    embedding_ablation: str = "none",
+    mean_embedding: torch.Tensor | None = None,
+    ablation_seed: int = 0,
 ) -> dict[str, Any]:
     """Top-K (T=1, do_sample=True) validation pass.
 
@@ -531,11 +596,15 @@ def run_topk_pass(
     original_training = bool(gen_model.training)
     gen_model.eval()
 
+    ablation_gen = _make_ablation_generator(embedding_ablation, ablation_seed, accelerator.process_index)
+
     buffered_batches: list[dict[str, torch.Tensor]] = []
 
     with torch.no_grad(), accelerator.autocast():
         for batch in eval_dataloader:
             embs = batch["encoder_hidden_states"].to(device, non_blocking=True)
+            embs = _apply_embedding_ablation(
+                embs, embedding_ablation, mean_embedding=mean_embedding, generator=ablation_gen)
             target_sats = batch["target_satisfaction"].to(device)
             target_strs = batch["target_formula_strs"]
             formula_ids = batch["formula_ids"].to(device)

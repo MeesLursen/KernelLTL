@@ -41,6 +41,7 @@ from model_class import LTLModel
 from tokenizer_pretrained_class import LTLTokenizer
 
 from validation_utils import (
+    EMBEDDING_ABLATIONS,
     aggregate_greedy_by_depth,
     aggregate_topk_by_depth,
     run_greedy_pass,
@@ -79,6 +80,14 @@ def parse_args() -> argparse.Namespace:
                         help="Skip the greedy pass.")
     parser.add_argument("--no-topk", action="store_true",
                         help="Skip the top-K pass.")
+
+    parser.add_argument("--embedding-ablation", choices=list(EMBEDDING_ABLATIONS), default="none",
+                        help="Corrupt the conditioning signal to measure the embedding-ablation "
+                             "floor (G1b): 'zero' (unconditional prior), 'mean' (constant "
+                             "dataset-mean embedding), or 'shuffle' (another target's embedding). "
+                             "'none' is the real conditioned model.")
+    parser.add_argument("--ablation-seed", type=int, default=0,
+                        help="Seed for the 'shuffle' embedding ablation.")
 
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--bf16", action="store_true")
@@ -185,6 +194,16 @@ def main() -> None:
     if ref_path is not None and not os.path.isdir(ref_path):
         raise FileNotFoundError(f"CE reference model directory not found: {ref_path}")
 
+    # Embedding-ablation floor (G1b): the 'mean' mode needs the dataset-mean embedding.
+    mean_embedding = None
+    if args.embedding_ablation == "mean":
+        if dataset.embeddings is None:
+            raise ValueError("--embedding-ablation mean requires the dataset to carry embeddings")
+        mean_embedding = dataset.embeddings.to(dtype=torch.float32).mean(dim=0)
+    if accelerator.is_main_process and args.embedding_ablation != "none":
+        print(f"[ablation] conditioning ablation = {args.embedding_ablation} "
+              f"(seed {args.ablation_seed})")
+
     greedy_jsonl = os.path.join(args.output_dir, "per_sample", "greedy.jsonl")
     topk_flat_jsonl = os.path.join(args.output_dir, "per_sample", "topk_flat.jsonl")
     topk_grouped_jsonl = os.path.join(args.output_dir, "per_sample", "topk_grouped.jsonl")
@@ -195,6 +214,8 @@ def main() -> None:
         "ce_reference_model_dir": ref_path,
         "n_dataset_samples": len(dataset),
         "top_k": args.top_k,
+        "embedding_ablation": args.embedding_ablation,
+        "ablation_seed": args.ablation_seed,
     }
 
     if not args.no_greedy:
@@ -212,6 +233,9 @@ def main() -> None:
             accelerator=accelerator,
             output_jsonl_path=greedy_jsonl,
             semantic_eval_batch_size=args.semantic_eval_batch_size,
+            embedding_ablation=args.embedding_ablation,
+            mean_embedding=mean_embedding,
+            ablation_seed=args.ablation_seed,
         )
         if accelerator.is_main_process:
             summary["greedy"] = greedy_summary
@@ -236,6 +260,9 @@ def main() -> None:
             output_flat_path=topk_flat_jsonl,
             output_grouped_path=topk_grouped_jsonl,
             semantic_eval_batch_size=args.semantic_eval_batch_size,
+            embedding_ablation=args.embedding_ablation,
+            mean_embedding=mean_embedding,
+            ablation_seed=args.ablation_seed,
         )
         if accelerator.is_main_process:
             summary["topk"] = topk_summary

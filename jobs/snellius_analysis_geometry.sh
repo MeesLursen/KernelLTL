@@ -32,6 +32,9 @@ FEATURES_CSV="$ANALYSIS_DIR/geometry_features.csv"
 
 RUNS=(ce_base ce_finetune rb_momentum_09 gae_lambda_09 gae_lambda_1)
 REFERENCE_RUN="ce_base"
+# Embedding-ablation floor runs (G1b), produced by jobs/snellius_validate_ablation.sh.
+# Leave empty to skip the RQ1 feasibility-floor step.
+ABLATION_RUNS=(ce_base_ablation_zero ce_base_ablation_mean ce_base_ablation_shuffle)
 
 echo "=============================================="
 echo "Job ID: ${SLURM_JOB_ID:-N/A}  Node: ${SLURMD_NODENAME:-N/A}  Start: $(date)"
@@ -72,7 +75,24 @@ python -u scripts/visualize_validation_geometry.py \
     --geometry-features "$FEATURES_CSV" \
     --output-dir "$ANALYSIS_DIR" \
     --runs "${RUNS[@]}" \
+    --ablation-runs "${ABLATION_RUNS[@]}" \
     --reference-run "$REFERENCE_RUN" \
+    --bootstrap-n 10000 \
+    --alpha 0.05 \
+    --rng-seed 0
+
+# --- dual-reference: ce_finetune for the cross-model interactions (RL-objective isolation).
+#     Separate output dir; --ablation-runs omitted so the RQ1 floor (tied to the conditioned
+#     base) is skipped -- only the reference-dependent interactions matter for this pass. ---
+ANALYSIS_DIR2="$ANALYSIS_DIR/ref_ce_finetune"
+mkdir -p "$ANALYSIS_DIR2"
+echo "Second reference: ce_finetune -> $ANALYSIS_DIR2 (floor skipped)"
+python -u scripts/visualize_validation_geometry.py \
+    --validation-root "$VAL_ROOT" \
+    --geometry-features "$FEATURES_CSV" \
+    --output-dir "$ANALYSIS_DIR2" \
+    --runs "${RUNS[@]}" \
+    --reference-run "ce_finetune" \
     --bootstrap-n 10000 \
     --alpha 0.05 \
     --rng-seed 0

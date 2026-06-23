@@ -118,6 +118,24 @@ python -u scripts/visualize_validation_extra.py \
     --dpi             "$DPI" \
     --logistic-regularized-fallback
 
+# --- dual-reference: ce_finetune (isolates the RL objective from finetuning), separate dir ---
+REF2="ce_finetune"
+ANALYSIS_OUTPUT_DIR2="$ANALYSIS_OUTPUT_DIR/ref_ce_finetune"
+mkdir -p "$ANALYSIS_OUTPUT_DIR2"
+echo "Second reference: $REF2 -> $ANALYSIS_OUTPUT_DIR2"
+python -u scripts/visualize_validation_extra.py \
+    --validation-root "$VALIDATION_ROOT" \
+    --dataset-dir     "$DATASET_DIR" \
+    --output-dir      "$ANALYSIS_OUTPUT_DIR2" \
+    --runs            "${RUNS[@]}" \
+    --reference-run   "$REF2" \
+    --tokenizer-dir   "$TOKENIZER_DIR" \
+    --bootstrap-n     "$BOOTSTRAP_N" \
+    --alpha           "$ALPHA" \
+    --rng-seed        "$RNG_SEED" \
+    --dpi             "$DPI" \
+    --logistic-regularized-fallback
+
 END=$(date +%s)
 DURATION=$((END - START))
 

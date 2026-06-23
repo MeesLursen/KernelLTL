@@ -79,8 +79,15 @@ def fit_pooled_interaction(
     alpha: float = 0.05,
     n_sim: int = 2000,
     rng_seed: int = 0,
+    extra_controls: tuple[str, ...] = (),
 ) -> dict:
     """Fit the pooled model and return interaction tests + AME differences.
+
+    ``extra_controls`` (e.g. ``("z_variance", "z_norm_resid")``) are extra columns the caller
+    has joined onto ``df_op``; they enter the design model-interacted (so each model keeps its
+    own geometry slope -- the full adjustment that the ce_finetune slope change requires) but
+    are EXCLUDED from the reported interaction family, so the operator BH-FDR set and the AME
+    loop (operators only) are unchanged -- just geometry-adjusted.
 
     Returns dict with keys:
       ``interactions``  : DataFrame (variant, predictor, op, coef, se,
@@ -90,7 +97,9 @@ def fit_pooled_interaction(
       ``n_obs``, ``n_targets`` : ints
     """
     variants = [r for r in runs if r != reference_run]
-    pred_cols = _predictor_cols()
+    # extra_controls appended AFTER operators+covariates so OPERATORS.index(op) still maps
+    # into the design; model-interacted (full adjustment) but excluded from reporting below.
+    pred_cols = _predictor_cols() + list(extra_controls)
     stacked = _restrict_common(df_op, runs)
     stacked = stacked.dropna(subset=[outcome_col] + pred_cols)
     if stacked.empty or stacked[outcome_col].nunique() < 2:
@@ -127,6 +136,8 @@ def fit_pooled_interaction(
     inter_rows = []
     for v in variants:
         for p in pred_cols:
+            if p in extra_controls:        # geometry controls: adjusted-for, not reported
+                continue
             name = f"m::{v}:{p}"
             if name not in params.index:
                 continue
