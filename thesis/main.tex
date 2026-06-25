@@ -493,7 +493,7 @@
     
     
     \section{Shared experimental apparatus}\label{sec:shared_apparatus}
-    Before we move on to the experiments, we will first be laying out the shared apparatus that each of them relied on. In Section \ref{sec:kernel_instantiation} we will be describing the precise instantiation of our kernel used to produce the semantic embeddings for the formulae in our datasets. Then, in Section \ref{sec:model_validation} we will be describing the construction of our dataset used to validate each of the models we trained during the experiments. In Section \ref{sec:metrics} we describe what data was collected during the validation process and in Section \ref{sec:stats_framework} we describe what statistical conventions back up our analyses.  
+    Before we move on to the experiments, we will first be laying out the shared apparatus that each of them relied on. In Section \ref{sec:kernel_instantiation} we will be describing the precise instantiation of our kernel used to produce the semantic embeddings for the formulae in our datasets. Then, in Section \ref{sec:model_validation} we will be describing the construction of our dataset used to validate each of the models we trained during the experiments. In Section \ref{sec:data_collection} we describe what data was collected during the validation process and in Section \ref{sec:stats_framework} we describe what statistical conventions back up our analyses.  
     
     \subsection{Kernel instantiation}\label{sec:kernel_instantiation}
     
@@ -526,7 +526,7 @@
         \end{tabular}
     \end{table}
     
-    \subsection{Data collecttion}\label{sec:metrics}
+    \subsection{Data collection}\label{sec:data_collection}
     [IN THIS SECTION WE NEED TO GIVE AN OVERVIEW OF ALL OF THE COLLECTED METRICS THAT HAVE ACTUALLY BEEN USED TO PERFORM THE ANALYSES LATER IN THIS CHAPTER $>>>$ WE HAVE TO REVISIT THIS AT A LATER TIME] 
     
     (NOTES: - metrics that rely on raw data collected per generated token was first averaged over the generated sequence. Averaged reported of these metrics are thus the average \textit{per-sequence} metric.
@@ -541,7 +541,7 @@
     
     
     \section{Experiment 1 --- Can the model recover specifications?} \label{sec:exp1_feasibility}
-    The first of our experiments tested how well the trained base model was able to find the correct specification for a given semantic embedding. It establishes a baseline of feasibility for the task of mining linear temporal logic specifications from an anchor-based embedding of their semantics using the transformer architecture with cross-attention. The first part of this section will be devoted to detailing the curriculum datasets and training procedure. This is followed by the results from the two validation passes, as well as an ablation study in which we corrupted the semantic embeddings in certain ways to assess the model's reliance on this input. The latter acts as a sanity check: since the semantic embedding is the only input we provide the model at generation time, it should derive information from only this embedding \emph{and nothing else}. 
+    The first of our experiments tests how well the trained base model recovers a correct specification for a given semantic embedding. It establishes a baseline of feasibility for the task of mining linear temporal logic specifications from an anchor-based embedding of their semantics using the transformer architecture with cross-attention. The first part of this section will be devoted to detailing the curriculum datasets and training procedure. This is followed by the results from the two validation passes, as well as an ablation study in which we corrupted the semantic embeddings in several controlled ways to assess the model's reliance on this input. The latter acts as a sanity check on what constitutes the model's correctness. Between targets, the embedding is the only input that varies. Then, the ability to recover the \emph{specific} formula must come solely from that embedding. Corrupting it should collapse correctness toward what the model's weights alone can produce.
 
     
     \subsection{Curriculum datasets}\label{sec:curriculum_data}
