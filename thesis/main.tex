@@ -621,13 +621,24 @@
     \end{table}
 
     \subsection{Ablation study on the semantic embeddings}
+    To test whether the base model's correctness is borne by the conditioning signal rather than by its weights alone, we re-ran the greedy pass on the validation dataset with the semantic embeddings corrupted, leaving every other part of the procedure untouched. The corruption took three forms, each removing a different facet of the information the embedding carries. All three act only on the conditioning input and only at generation time, on a model whose weights are frozen. Together with the deterministic nature of the generation process in the greedy pass, this makes each ablated output a clean function of the corrupted input.
     
+    The first replaced the embedding with the \emph{zero vector}, which removes the conditioning signal entirely: the cross-attention value vector vanishes ($\bm V = \bm W^V \bm 0 = \bm 0$, in the notation of Chapter~\ref{chap:kernel}), and the model generates outputs based only on the distribution induced by its weights. We have already shown that the zero vector under the covariance kernel corresponds to trivial formulae with constant satisfaction vectors under our trace sample. A well calibrated model should recognize this and generate the same trivial formula each time.
+    
+    The second replaced each target's embedding with that of \emph{another, randomly assigned target}, i.e. we shuffled the order of the embeddings for all of the items in the dataset. This corruption supplies a valid embedding for each of the items in the dataset, but belonging to a different formula. We should see the model output valid formulae at the same rate as the regular greedy pass, should see a semantic equivalent rate at the chance that the reassigned embedding belongs to a formula equivalent to the target and that the model recovers it, and should see a semantic distance tending to the average semantic distance between formulae in our dataset. 
+    
+    The third replaced every embedding with the constant \emph{dataset-mean embedding}, assigning each target in the dataset the average embedding computed over all the embeddings in the dataset. If the mean embedding of this dataset happens to correspond to a class of formulae that the model is able to recover, we would see the model output the same formula in this class for each target in the dataset, would see an equivalence rate proportional to the number of times a formula in this class appears, and would see a semantic distance tending to the average distance between that class and the target formulae. Else, we should see either the same generation of a formula close in embedding to the mean embedding, or the same invalid generation for each item in the dataset.
+
     
     \NEW{\subsection{Feasibility analyses and hypotheses}\label{sec:rq1_analyses}}
     
     \NEW{Feasibility is judged descriptively: we report the base model's greedy semantic-equivalence rate, mean semantic distance, and invalid rate over the held-out set, broken down by target depth, to establish whether---and at which depths---the kernel-conditioned decoder recovers correct specifications above a trivial floor. To verify that any competence is genuinely \emph{conditioned} on the embedding rather than a syntactic prior, we re-run the greedy pass with the conditioning signal destroyed in three ways: a zero embedding (the unconditional prior), the constant dataset-mean embedding, and a shuffled embedding belonging to another target. This yields the premise \textbf{H1}: correctness rises with the embedding magnitude $\Vert\emb(\phi)\Vert$, and collapses to the ablation floor when the signal is removed. A flat or floor-level conditioned result would itself be an informative negative finding, falsifying the premise on which Parts~II and~III rest.}
     
     \NEW{Having established whether the baseline works and that it uses the embedding, the natural next question is where it fails---and whether that failure is a property of the representation it conditions on. This is the subject of Part~II.}
+
+    \subsection{Experiment 1 results}\label{sec:exp1_results}
+
+    \subsection{Experiment 1 discussion}\label{sec:exp1_discussion}
     
     \NEW{\section{Part II --- Diagnosis: where does the baseline fail?}\label{sec:geometry_analysis}}
     
@@ -700,13 +711,15 @@
 
 \chapter{Conclusion, Limitations, and Future Work}
 
-\section{Conclusion}
+    \section{Conclusion}
+    
+    \section{Limitations} \label{sec:limitations}
+    
+    Anchor cosine similarity threshold was only set to exclude large \emph{positive} similarity, while large negative similarity was permitted. A better choice would have been to perform the rejection based sampling on the absolute value of the dot product similarity. [Insert small analysis of how much coverage we lost with this.]
 
-\section{Limitations} \label{sec:limitations}
+    The number of trivial formulae in the datasets.
 
-Anchor cosine similarity threshold was only set to exclude large \emph{positive} similarity, while large negative similarity was permitted. A better choice would have been to perform the rejection based sampling on the absolute value of the dot product similarity. [Insert small analysis of how much coverage we lost with this.]
-
-\section{Future work} \label{sec:future_work}
+    \section{Future work} \label{sec:future_work}
 
 \clearpage
 \printbibliography[heading=bibintoc,title=Bibliography]
