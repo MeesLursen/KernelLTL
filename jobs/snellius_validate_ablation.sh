@@ -2,7 +2,7 @@
 #SBATCH --job-name=kernelltl_validate_ablation
 #SBATCH --output=logs/kernelltl_validate_ablation_%j.out
 #SBATCH --error=logs/kernelltl_validate_ablation_%j.err
-#SBATCH --time=02:00:00
+#SBATCH --time=03:00:00
 #SBATCH --partition=gpu_h100
 #SBATCH --gpus=2
 #SBATCH --cpus-per-task=32
@@ -13,15 +13,20 @@
 #
 # Re-runs the GREEDY validation pass of the CE base under destroyed/corrupted
 # conditioning, to establish the floor above which "the model conditions on the
-# embedding" is a meaningful claim (RQ1). Three ablations:
-#   zero    -- unconditional prior (zero embedding)
-#   mean    -- constant dataset-mean embedding (target-agnostic)
-#   shuffle -- another target's embedding (mismatched but in-distribution)
+# embedding" is a meaningful claim (RQ1). The corruption is NOT applied in the
+# pipeline anymore: it is baked into three pre-built datasets whose embeddings
+# are already corrupted (over the non-trivial targets only), while every row /
+# formula_id stays aligned with the original validation set:
+#   validation_ablation_zero    -- unconditional prior (zero embedding)
+#   validation_ablation_mean    -- constant non-trivial-mean embedding
+#   validation_ablation_shuffle -- another non-trivial target's embedding
 #
-# Output folders ce_base_ablation_<mode> sit next to the real runs and are
-# loadable by visualize_validation_geometry.py as extra "runs" for the
-# feasibility comparison. Greedy-only (--no-topk): the floor is a greedy
-# correctness number; no KL reference needed.
+# Each dataset's satisfactions.pt is a relative symlink to ../validation, so we
+# stage the original validation dir alongside the ablation dirs and rsync WITHOUT
+# -L (symlinks preserved, satvecs not triplicated). Output folders
+# ce_base_ablation_<mode> sit next to the real runs and are loadable by
+# visualize_validation_geometry.py as extra "runs" for the feasibility floor.
+# Greedy-only by construction (validation_ablation.py): no top-K, no KL ref.
 # ==========================================================================
 
 set -e
@@ -32,7 +37,7 @@ VENV_DIR="$HOME_DIR/venv"
 
 KERNEL_DIR="$HOME_DIR/artifacts/kernel"
 TOKENIZER_DIR="$HOME_DIR/artifacts/tokenizer"
-VALIDATION_DATASET_DIR="$PROJECT_DIR/artifacts/datasets/validation"
+DATASETS_DIR="$PROJECT_DIR/artifacts/datasets"
 CE_BASE_MODEL_DIR="$PROJECT_DIR/artifacts/models/CE/run2/stage4/final_model"
 
 PROJECT_OUTPUT_BASE="$PROJECT_DIR/artifacts/validation"
@@ -40,10 +45,9 @@ SCRATCH_BASE="/scratch-local/$USER/KernelLTL"
 
 PER_DEVICE_EVAL_BATCH_SIZE=96
 SEMANTIC_EVAL_BATCH_SIZE="256000"
-ABLATION_SEED=0
 MIXED_PRECISION="--bf16"
 
-ABLATIONS=(mean shuffle)
+ABLATIONS=(zero mean shuffle)
 
 echo "=============================================="
 echo "KernelLTL embedding-ablation floor (G1b)"
@@ -72,18 +76,29 @@ echo "Number of GPUs: $NUM_GPUS"
 # Stage shared artifacts + the CE base model onto scratch-local once.
 SCRATCH_KERNEL_DIR="$SCRATCH_BASE/kernel"
 SCRATCH_TOKENIZER_DIR="$SCRATCH_BASE/tokenizer"
-SCRATCH_VALIDATION_DIR="$SCRATCH_BASE/datasets/validation"
+SCRATCH_DATASETS_DIR="$SCRATCH_BASE/datasets"
 SCRATCH_MODEL_DIR="$SCRATCH_BASE/models/ce_base/final_model"
-mkdir -p "$SCRATCH_KERNEL_DIR" "$SCRATCH_TOKENIZER_DIR" "$SCRATCH_VALIDATION_DIR" "$SCRATCH_MODEL_DIR"
+mkdir -p "$SCRATCH_KERNEL_DIR" "$SCRATCH_TOKENIZER_DIR" "$SCRATCH_DATASETS_DIR" "$SCRATCH_MODEL_DIR"
 
 echo "Staging shared artifacts to scratch-local..."
 rsync -a --delete "$KERNEL_DIR/" "$SCRATCH_KERNEL_DIR/"
 rsync -a --delete "$TOKENIZER_DIR/" "$SCRATCH_TOKENIZER_DIR/"
-rsync -a --delete "$VALIDATION_DATASET_DIR/" "$SCRATCH_VALIDATION_DIR/"
 rsync -a --delete "$CE_BASE_MODEL_DIR/" "$SCRATCH_MODEL_DIR/"
+
+# The original validation dir holds the shared satisfactions.pt that each ablation
+# dataset symlinks to (../validation/satisfactions.pt). Stage it first so the
+# relative symlinks resolve on scratch. rsync -a (NOT -L) preserves the symlinks
+# and avoids triplicating the satvecs.
+echo "Staging validation + ablation datasets to scratch-local..."
+rsync -a --delete "$DATASETS_DIR/validation/" "$SCRATCH_DATASETS_DIR/validation/"
+for ABL in "${ABLATIONS[@]}"; do
+    rsync -a --delete "$DATASETS_DIR/validation_ablation_$ABL/" \
+        "$SCRATCH_DATASETS_DIR/validation_ablation_$ABL/"
+done
 
 for ABL in "${ABLATIONS[@]}"; do
     RUN_NAME="ce_base_ablation_$ABL"
+    SCRATCH_DATASET_DIR="$SCRATCH_DATASETS_DIR/validation_ablation_$ABL"
     SCRATCH_OUTPUT_DIR="$SCRATCH_BASE/validation/$RUN_NAME"
     PROJECT_OUTPUT_DIR="$PROJECT_OUTPUT_BASE/$RUN_NAME"
     mkdir -p "$SCRATCH_OUTPUT_DIR" "$PROJECT_OUTPUT_DIR"
@@ -91,26 +106,24 @@ for ABL in "${ABLATIONS[@]}"; do
     echo ""
     echo "=============================================="
     echo "Ablation: $ABL  ->  $RUN_NAME"
+    echo "Dataset:  $SCRATCH_DATASET_DIR"
     echo "=============================================="
 
     CMD_ARGS=(
         "--kernel-dir" "$SCRATCH_KERNEL_DIR"
         "--tokenizer-dir" "$SCRATCH_TOKENIZER_DIR"
-        "--eval-dataset-dir" "$SCRATCH_VALIDATION_DIR"
+        "--eval-dataset-dir" "$SCRATCH_DATASET_DIR"
         "--model-load-dir" "$SCRATCH_MODEL_DIR"
         "--output-dir" "$SCRATCH_OUTPUT_DIR"
         "--per-device-eval-batch-size" "$PER_DEVICE_EVAL_BATCH_SIZE"
         "--semantic-eval-batch-size" "$SEMANTIC_EVAL_BATCH_SIZE"
-        "--embedding-ablation" "$ABL"
-        "--ablation-seed" "$ABLATION_SEED"
-        "--no-topk"
         $MIXED_PRECISION
     )
 
     if [ "$NUM_GPUS" -gt 1 ]; then
-        torchrun --nproc_per_node="$NUM_GPUS" scripts/validate_model.py "${CMD_ARGS[@]}"
+        torchrun --nproc_per_node="$NUM_GPUS" scripts/validation_ablation.py "${CMD_ARGS[@]}"
     else
-        python scripts/validate_model.py "${CMD_ARGS[@]}"
+        python scripts/validation_ablation.py "${CMD_ARGS[@]}"
     fi
 
     echo "Syncing $RUN_NAME outputs to project storage..."
