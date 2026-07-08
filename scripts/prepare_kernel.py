@@ -77,20 +77,23 @@ def _sample_traces(kernel: LTLKernel, args: argparse.Namespace, num_traces: int)
 
 
 def _sample_anchors(kernel: LTLKernel, args: argparse.Namespace) -> None:
+    # The samplers take a (low, high) leaf-probability range; a single --anchor-p-leaf
+    # value is threaded through as the degenerate range (p, p).
+    p_leaf_range = (args.anchor_p_leaf, args.anchor_p_leaf)
     if args.anchor_sampler == "cosine":
         kernel.sample_anchor_formulas_kernel_cosine_controlled(
             m=args.anchor_count,
-            p_leaf=args.anchor_p_leaf,
+            p_leaf_range=p_leaf_range,
             max_depth=args.anchor_max_depth,
             force_tree=args.anchor_force_tree,
             batch_size=args.cosine_batch_size,
-            threshold= args.cosine_threshold,
+            threshold=args.cosine_threshold,
             max_attempts_per_formula=args.cosine_max_attempts,
         )
     else:
         kernel.sample_anchor_formulas_kernel(
             m=args.anchor_count,
-            p_leaf=args.anchor_p_leaf,
+            p_leaf_range=p_leaf_range,
             max_depth=args.anchor_max_depth,
             force_tree=args.anchor_force_tree,
         )

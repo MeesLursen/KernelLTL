@@ -158,31 +158,45 @@ class LTLKernel:
 
 
 
-    def sample_anchor_formulas_kernel_cosine_controlled(self, m: int = 1024, p_leaf_range: float = (0.4,0.6), max_depth: int = 6, force_tree: bool = True, batch_size = 512, threshold = 0.8, max_attempts_per_formula = 100):
+    def sample_anchor_formulas_kernel_cosine_controlled(self, m: int = 1024, p_leaf_range: tuple[float, float] = (0.4, 0.6), max_depth: int = 6, force_tree: bool = True, batch_size: int = 512, threshold: float = 0.8, max_attempts_per_formula: int = 100):
         """
-        Method for adding a random sample of formulae to the kernel.
-        - m: specifies the number of sampled formulae.
-        - p_leaf_range: (Default = 0.5) specifies the odds of each node being a leaf. Higher probability reduces average (bounded) formula complexity.
-        - max_depth: (Default = 6) specifies the maximum formula complexity.
-        - force_tree: (Default = True) forces the root of the syntax tree to be an operator. Without this, p_leaf_range percent of the sample will be just an AP.
+        Rejection-sample ``m`` anchor formulae under a symmetric Hamming-band constraint.
 
-        Implicit arguments are: AP, T, seed.
-        - AP: specifies the number of atomic propositions available to each formula.
-        - rng: specifies the random number generator used, for reproducibility.
+        Anchors are selected under the signed-dot kernel sim^pm(psi, psi_i) = k^pm/N, the
+        normalized dot product of the +/-1 satisfaction vectors (2*satvec - 1). Because
+        k^pm = N - 2*D_H, we have sim^pm = 1 - 2*D_H/N, so bounding ``|sim^pm| <= threshold``
+        is exactly a symmetric Hamming band (1-threshold)/2 <= D_H/N <= (1+threshold)/2: a
+        candidate is rejected if it is too *similar* (near-duplicate) OR too *anti-similar*
+        (near-complement / negation) to any accepted anchor. Trivial candidates (tautologies
+        / contradictions, i.e. constant satvecs) are rejected outright -- their centered
+        feature row is 0, so they contribute nothing to any embedding under the covariance
+        kernel and are degenerate anchors.
+
+        - m: number of anchors to accept.
+        - p_leaf_range: leaf-probability range passed to the formula sampler.
+        - max_depth: maximum syntax-tree depth for candidates.
+        - force_tree: force the candidate root to be an operator.
+        - batch_size: batch size for evaluating a candidate's satvec on the traces.
+        - threshold: similarity band half-width tau in (0, 1).
+        - max_attempts_per_formula: attempts before giving up on the next anchor.
+
+        Implicit arguments are AP, T, seed (via self.rng), for reproducibility.
         """
-    
+
         if self.traces is None:
-            raise ValueError('Please sample traces before calling sample_anchor_formulas_kernel2 so cosine similarity can be computed.')
+            raise ValueError('Please sample traces before calling sample_anchor_formulas_kernel_cosine_controlled so similarity can be computed.')
 
         N = self.traces.size(dim=0)
         if N == 0:
-            raise ValueError('Traces tensor is empty, cannot evaluate cosine similarity.')
+            raise ValueError('Traces tensor is empty, cannot evaluate similarity.')
 
-        one = torch.tensor(1.0, dtype=torch.float32, device=self.device)
-        zero = torch.tensor(-1.0, dtype=torch.float32, device=self.device)
-
-        selected_formulas: list[Formula]       = []
-        normalized_vectors: list[torch.Tensor] = []
+        sqrt_N = float(N) ** 0.5
+        # Preallocated matrix of accepted +/-1 vectors scaled by 1/sqrt(N); one accepted anchor per row.
+        accepted_norm = torch.empty((m, N), dtype=torch.float32, device=self.device)
+        selected_formulas: list[Formula] = []
+        n_accepted = 0
+        rejected_trivial = 0
+        rejected_similar = 0
 
         for idx in range(m):
             attempts = 0
@@ -196,29 +210,36 @@ class LTLKernel:
                                             rng=self.rng,
                                             device=self.device)[0]
 
-                candidate_vec = self._evaluate_formula_on_traces(formula=candidate,batch_size=batch_size)
-                candidate_vec = torch.where(candidate_vec, one, zero)
-                denom = torch.linalg.norm(candidate_vec)
-                if denom > 1e-8:
-                    candidate_norm = candidate_vec / denom
-                else:
-                    candidate_norm = torch.zeros_like(candidate_vec)
+                sats = self._evaluate_formula_on_traces(formula=candidate, batch_size=batch_size)  # (N,) bool
 
-                too_similar = False
-                for prev_vec in normalized_vectors:
-                    if torch.dot(candidate_norm, prev_vec).item() > threshold:
-                        too_similar = True
-                        break
-
-                if too_similar:
+                # Reject trivial candidates (constant satvec -> zero embedding, degenerate anchor).
+                if bool(torch.all(sats)) or not bool(torch.any(sats)):
+                    rejected_trivial += 1
                     continue
 
+                candidate_norm = (sats.to(dtype=torch.float32) * 2.0 - 1.0) / sqrt_N  # +/-1 signed vector / sqrt(N)
+
+                if n_accepted > 0:
+                    sims = accepted_norm[:n_accepted] @ candidate_norm  # (n_accepted,) = sim^pm to each accepted anchor
+                    if float(sims.abs().max()) > threshold:             # symmetric band: reject near-duplicate OR near-complement
+                        rejected_similar += 1
+                        continue
+
+                accepted_norm[n_accepted] = candidate_norm
                 selected_formulas.append(candidate)
-                normalized_vectors.append(candidate_norm)
+                n_accepted += 1
                 break
             else:
-                raise RuntimeError(f'Unable to sample a sufficiently distinct formula after {max_attempts_per_formula} attempts for index {idx}.')
+                raise RuntimeError(
+                    f'Unable to sample a sufficiently distinct, non-trivial formula after '
+                    f'{max_attempts_per_formula} attempts for anchor index {idx} '
+                    f'(rejected_trivial={rejected_trivial}, rejected_similar={rejected_similar}).'
+                )
 
+        print(
+            f'Accepted {n_accepted} anchors at threshold tau={threshold} '
+            f'(rejected_trivial={rejected_trivial}, rejected_similar={rejected_similar}).'
+        )
         self.add_anchor_formulas(selected_formulas)
 
 
@@ -277,18 +298,49 @@ class LTLKernel:
         return sats
 
 
-    def _compute_embedding_from_sats(self, phi_sats: torch.Tensor, move_to_cpu: bool) -> torch.Tensor:
+    def _covariance_embeddings(self, phi_sats_2d: torch.Tensor) -> torch.Tensor:
+        """Exact, reproducible covariance-kernel embeddings for a batch of satvecs.
+
+        Implements the base-rate form of the covariance kernel,
+            k^cov(phi, psi_j) = A_j / N - (B_j * C) / N^2,
+        where, over the N traces, A_j = |{psi_j and phi both hold}| (joint count),
+        B_j = |{psi_j holds}| (anchor count) and C = |{phi holds}| (target count).
+        This equals the centered dot product (F_centered @ phi_centered)/N exactly.
+
+        All three counts are exact integers: the 0/1 matmul A = Phi @ F^T never rounds
+        in float32 because every partial sum is an integer <= N < 2**24. The counts are
+        combined in int64 and the ONLY floating-point operation is a single float64
+        division by N^2, so the embedding is bit-identical on any IEEE-754 hardware,
+        independent of BLAS / GPU / thread count. See kernel reproducibility notes.
+
+        - phi_sats_2d: (B, N) tensor of {0,1}/bool satisfaction vectors.
+        Returns: (B, m) float32 embeddings.
+        """
         if self.F is None:
             raise ValueError("The Feature Matrix has not yet been built. Please do so using the build_F() method.")
         if self.traces is None:
             raise ValueError('Please sample traces before computing embeddings.')
 
         N = self.traces.size(dim=0)
-        phi_vals = phi_sats.to(device=self.device, dtype=torch.float32)
-        phi_centered = phi_vals - phi_vals.mean()
-        F_centered = self.F - self.F.mean(dim=1, keepdim=True)
-        emb = (F_centered @ phi_centered) / float(N)
+        if N >= (1 << 24):
+            raise ValueError(
+                f"N={N} exceeds 2**24; the 0/1 count matmul would no longer be exact in float32."
+            )
 
+        Phi = phi_sats_2d.to(device=self.device, dtype=torch.float32)   # (B, N), values in {0, 1}
+        joint = Phi @ self.F.t()                                        # (B, m) exact integer joint counts A
+        target_counts = Phi.sum(dim=1)                                  # (B,)   exact integer counts C
+        anchor_counts = self.F.sum(dim=1)                               # (m,)   exact integer counts B_j
+
+        A = joint.to(torch.int64)
+        C = target_counts.to(torch.int64).unsqueeze(1)                  # (B, 1)
+        B = anchor_counts.to(torch.int64).unsqueeze(0)                  # (1, m)
+        numerator = A * N - B * C                                       # (B, m) int64, exact (|.| <= N^2 < 2**53)
+        emb = numerator.to(torch.float64) / float(N * N)               # single IEEE-754 division
+        return emb.to(torch.float32)
+
+
+    def _maybe_move_to_cpu(self, emb: torch.Tensor, move_to_cpu: bool) -> torch.Tensor:
         if move_to_cpu and self.device in ('cuda', 'mps'):
             emb = emb.cpu()
             if self.device == 'cuda':
@@ -296,6 +348,11 @@ class LTLKernel:
             else:
                 torch.mps.empty_cache()
         return emb
+
+
+    def _compute_embedding_from_sats(self, phi_sats: torch.Tensor, move_to_cpu: bool) -> torch.Tensor:
+        emb = self._covariance_embeddings(phi_sats.reshape(1, -1)).squeeze(0)
+        return self._maybe_move_to_cpu(emb, move_to_cpu)
 
 
 
@@ -330,6 +387,21 @@ class LTLKernel:
     def compute_embedding_from_satisfaction(self, phi_sats: torch.Tensor, move_to_cpu: bool = False) -> torch.Tensor:
         """Compute the kernel embedding directly from a boolean satisfaction vector."""
         return self._compute_embedding_from_sats(phi_sats, move_to_cpu=move_to_cpu)
+
+
+    def compute_embeddings_from_satisfactions(self, phi_sats_2d: torch.Tensor, move_to_cpu: bool = False) -> torch.Tensor:
+        """Exact, reproducible covariance embeddings for a batch of satisfaction vectors.
+
+        Batched counterpart of :meth:`compute_embedding_from_satisfaction`; see
+        :meth:`_covariance_embeddings`. Intended for recomputing dataset embeddings from
+        stored satvecs. Pass modest batches: with N = |traces| large, the (B, N) input
+        dominates memory (e.g. B in the low hundreds to ~1024 for N = 500k). Placement /
+        cache management is left to the caller (see move_to_cpu note on the primitive).
+        - phi_sats_2d: (B, N) {0,1}/bool tensor.
+        Returns: (B, m) float32 embeddings.
+        """
+        emb = self._covariance_embeddings(phi_sats_2d)
+        return self._maybe_move_to_cpu(emb, move_to_cpu)
 
 
 

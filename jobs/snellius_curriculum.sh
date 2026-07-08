@@ -2,11 +2,11 @@
 #SBATCH --job-name=kernelltl-curriculum
 #SBATCH --output=logs/kernelltl_curriculum_%j.out
 #SBATCH --error=logs/kernelltl_curriculum_%j.err
-#SBATCH --time=00:59:00
+#SBATCH --time=20:00:00
 #SBATCH --partition=gpu_h100
-#SBATCH --gpus=2
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=360G
+#SBATCH --gpus=4
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=720G
 
 # ============================================================================
 # Snellius Multi-Stage Curriculum Training Script for KernelLTL
