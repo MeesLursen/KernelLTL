@@ -135,6 +135,18 @@ def parse_args() -> argparse.Namespace:
     hpo_group.add_argument("--weight-decay-max", type=_non_negative_float, default=0.05)
     hpo_group.add_argument("--weight-decay-log", action="store_true", help="Use log sampling for weight decay")
 
+    # Shared-study controls: multiple single-GPU worker processes can join one
+    # study (e.g. sqlite storage on node-local scratch), each running a share
+    # of the trials in parallel.
+    hpo_group.add_argument("--study-name", type=str, default=None, help="Optuna study name (required for shared studies)")
+    hpo_group.add_argument("--study-storage", type=str, default=None, help="Optuna storage URL, e.g. sqlite:////scratch/.../study.db")
+    hpo_group.add_argument("--load-if-exists", action="store_true", help="Join an existing study instead of failing on name collision")
+    hpo_group.add_argument(
+        "--skip-final-train",
+        action="store_true",
+        help="Skip the final full training pass after HPO (use when workers share a study and selection happens outside)",
+    )
+
     return parser.parse_args()
 
 
@@ -286,11 +298,16 @@ def main() -> None:
     args = parse_args()
     _validate_hpo_args(args)
 
-    # HF hyperparameter_search is intended for single-process trial orchestration.
+    # DDP is supported: HF's optuna backend runs the study on rank 0 and broadcasts
+    # each trial's parameters to the other ranks as a FixedTrial. Consequences honoured
+    # below: (1) every searched parameter must be suggested inside hp_space, because
+    # only trial.params survives the broadcast (model_init runs after it); (2) pruning
+    # must be disabled -- a pruned trial would abort rank 0 mid-run while other ranks
+    # keep training, deadlocking the process group.
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
-    if local_rank != -1 or world_size > 1:
-        raise RuntimeError("Use this HPO script in single-process mode (no torchrun/DDP).")
+    if local_rank != -1 and torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
 
     if args.eval_dataset_dir is None:
         raise ValueError("--eval-dataset-dir is required for objective computation during HPO")
@@ -308,23 +325,11 @@ def main() -> None:
 
     training_args = _load_training_args(args)
 
-    # Keep current trial dropout available for model_init; updated again for final run.
+    # Current trial dropout, set by hp_space (which runs on every rank via
+    # Trainer._hp_search_setup before model_init); updated again for the final run.
     current_dropout = {"value": args.dropout_min}
 
     def model_init(trial=None):
-        if trial is not None:
-            if args.dropout_min == args.dropout_max:
-                trial_dropout = float(args.dropout_min)
-            else:
-                trial_dropout = float(
-                    trial.suggest_float(
-                        "dropout",
-                        args.dropout_min,
-                        args.dropout_max,
-                        step=args.dropout_step,
-                    )
-                )
-            current_dropout["value"] = trial_dropout
         return _build_model(args, kernel, tokenizer, dropout=float(current_dropout["value"]))
 
     max_length_hint = collate_max_length
@@ -377,7 +382,25 @@ def main() -> None:
         semantic_callback.attach_trainer(trainer)
 
     def hp_space(trial):
-        trial_dropout = current_dropout["value"]
+        # ALL searched parameters are suggested here so they land in trial.params
+        # before the DDP broadcast. Dropout is not a TrainingArguments field, so it
+        # is deliberately NOT part of the returned dict (Trainer would only warn);
+        # it reaches the model through current_dropout -> model_init, which
+        # _hp_search_setup guarantees is set on every rank (FixedTrial re-suggest
+        # returns the broadcast value).
+        if args.dropout_min == args.dropout_max:
+            trial_dropout = float(args.dropout_min)
+        else:
+            trial_dropout = float(
+                trial.suggest_float(
+                    "dropout",
+                    args.dropout_min,
+                    args.dropout_max,
+                    step=args.dropout_step,
+                )
+            )
+        current_dropout["value"] = trial_dropout
+
         if args.weight_decay_min == args.weight_decay_max:
             weight_decay = float(args.weight_decay_min)
         else:
@@ -400,53 +423,83 @@ def main() -> None:
             )
         return float(metrics[args.objective_metric])
 
-    print("Starting HF hyperparameter_search (backend=optuna)...")
+    import optuna
+
+    study_kwargs: Dict[str, Any] = {"pruner": optuna.pruners.NopPruner()}
+    if args.study_name is not None:
+        study_kwargs["study_name"] = args.study_name
+    if args.study_storage is not None:
+        study_kwargs["storage"] = args.study_storage
+    if args.load_if_exists:
+        study_kwargs["load_if_exists"] = True
+
+    print(f"Starting HF hyperparameter_search (backend=optuna, world_size={world_size}, study_kwargs={study_kwargs})...")
     best_run = trainer.hyperparameter_search(
         backend="optuna",
         direction=args.hpo_direction,
         hp_space=hp_space,
         compute_objective=compute_objective,
         n_trials=args.n_trials,
+        **study_kwargs,
     )
 
-    best_hparams = dict(best_run.hyperparameters)
-    best_dropout = float(best_hparams.get("dropout", args.dropout_min))
-    best_weight_decay = float(best_hparams.get("weight_decay", args.weight_decay_min))
+    # Under DDP, hyperparameter_search returns the BestRun on rank 0 only.
+    best_dropout: float | None = None
+    best_weight_decay: float | None = None
+    if best_run is not None:
+        best_hparams = dict(best_run.hyperparameters)
+        best_dropout = float(best_hparams.get("dropout", args.dropout_min))
+        best_weight_decay = float(best_hparams.get("weight_decay", args.weight_decay_min))
 
-    print("HPO completed.")
-    print(f"Best run id: {best_run.run_id}")
-    print(f"Best objective: {best_run.objective}")
-    print(f"Best dropout: {best_dropout}")
-    print(f"Best weight_decay: {best_weight_decay}")
+        print("HPO completed.")
+        print(f"Best run id: {best_run.run_id}")
+        print(f"Best objective: {best_run.objective}")
+        print(f"Best dropout: {best_dropout}")
+        print(f"Best weight_decay: {best_weight_decay}")
 
-    os.makedirs(training_args.logging_dir, exist_ok=True)
-    best_run_path = os.path.join(training_args.logging_dir, "hpo_best_run.json")
-    with open(best_run_path, "w") as f:
-        json.dump(
-            {
-                "run_id": best_run.run_id,
-                "objective": float(best_run.objective),
-                "objective_metric": args.objective_metric,
-                "direction": args.hpo_direction,
-                "hyperparameters": best_hparams,
-            },
-            f,
-            indent=2,
-        )
+        os.makedirs(training_args.logging_dir, exist_ok=True)
+        best_run_path = os.path.join(training_args.logging_dir, "hpo_best_run.json")
+        with open(best_run_path, "w") as f:
+            json.dump(
+                {
+                    "run_id": best_run.run_id,
+                    "objective": float(best_run.objective),
+                    "objective_metric": args.objective_metric,
+                    "direction": args.hpo_direction,
+                    "hyperparameters": best_hparams,
+                },
+                f,
+                indent=2,
+            )
+    else:
+        print(f"[rank {local_rank}] hyperparameter_search finished; results live on rank 0.")
 
-    # Final training pass with best discovered hyperparameters.
+    if args.skip_final_train:
+        print("Skipping final training pass (--skip-final-train); selection happens outside this script.")
+        return
+
+    # Final training pass with best discovered hyperparameters (all ranks train,
+    # so under DDP the best parameters are broadcast from rank 0 first).
+    if world_size > 1:
+        import torch.distributed as dist
+
+        payload = [best_dropout, best_weight_decay]
+        dist.broadcast_object_list(payload, src=0)
+        best_dropout, best_weight_decay = float(payload[0]), float(payload[1])
+
     trainer.args.weight_decay = best_weight_decay
     current_dropout["value"] = best_dropout
 
     train_result = trainer.train()
     print(train_result)
 
-    log_dir = training_args.logging_dir
-    os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, "trainer_log_history.log")
-    with open(log_path, "w") as f:
-        for entry in trainer.state.log_history:
-            f.write(json.dumps(entry) + "\n")
+    if best_run is not None:
+        log_dir = training_args.logging_dir
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, "trainer_log_history.log")
+        with open(log_path, "w") as f:
+            for entry in trainer.state.log_history:
+                f.write(json.dumps(entry) + "\n")
 
     save_dir = args.model_save_dir or os.path.join(args.output_dir, "final_model")
     trainer.save_model(save_dir)
