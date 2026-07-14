@@ -74,7 +74,7 @@ DROPOUT_MAX=0.2
 DROPOUT_STEP=0.05
 WD_MIN=0.005
 WD_MAX=0.02
-HPO_EPOCHS=25                  # trial budget; early stopping cuts most trials short
+HPO_EPOCHS=10                  # trial budget; early stopping cuts most trials short
 HPO_PATIENCE=5
 HPO_BATCH_SIZE=256             # per device; x4 GPUs -> effective 1024, same as Phase A
 
