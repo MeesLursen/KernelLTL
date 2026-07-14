@@ -54,18 +54,18 @@ SCRATCH_ROOT="$SCRATCH_BASE/models/CE/hpo_v2"
 
 # Selection objective. Thesis + existing infra select on eval_semantic_distance;
 # switch to "eval_loss" only if you deliberately change the selection criterion.
-OBJECTIVE_METRIC="eval_semantic_distance"
+OBJECTIVE_METRIC="eval_loss"
 
 # Standard settings (thesis): the Phase-A regularisation, and Phase-C trigger reference.
 STD_DROPOUT=0.1
 STD_WD=0.01
 
 # Phase A / C: LR grid at full fidelity (thesis values).
-LR_VALUES=("5e-6" "1e-5" "5e-5" "1e-4" "5e-4")
+LR_VALUES=("1e-5" "5e-5" "1e-4" "5e-4" "1e-3" "5e-3")
 FULL_EPOCHS=100
 FULL_PATIENCE=10
 FULL_BATCH_SIZE=256            # per device, 4 GPUs -> effective 1024
-WARMUP_RATIO=0.05
+WARMUP_RATIO=$(echo "scale=6; 1/$FULL_EPOCHS" | bc -l)
 
 # Phase B: Optuna over dropout/weight decay (thesis ranges), DDP per trial.
 N_TRIALS=20
@@ -77,7 +77,6 @@ WD_MAX=0.02
 HPO_EPOCHS=25                  # trial budget; early stopping cuts most trials short
 HPO_PATIENCE=5
 HPO_BATCH_SIZE=256             # per device; x4 GPUs -> effective 1024, same as Phase A
-HPO_WARMUP_STEPS=120           # ~5% of a 25-epoch DDP run (~96 steps/epoch at eff. batch 1024)
 
 # Phase-C trigger tolerances: "different from standard" means dropout not equal
 # to STD_DROPOUT (grid-stepped, so exact compare) or wd relatively off by > this.
@@ -299,7 +298,7 @@ PYEOF
         "--weight-decay-max"            "$WD_MAX"
         "--learning-rate"               "$BEST_LR"
         "--num-train-epochs"            "$HPO_EPOCHS"
-        "--warmup-steps"                "$HPO_WARMUP_STEPS"
+        "--warmup-ratio"                "$WARMUP_RATIO"
         "--per-device-train-batch-size" "$HPO_BATCH_SIZE"
         "--per-device-eval-batch-size"  "$HPO_BATCH_SIZE"
         "--logging-steps"               "$STEP_INTERVAL"
