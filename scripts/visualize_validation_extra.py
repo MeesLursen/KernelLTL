@@ -45,8 +45,8 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--validation-root", default="artifacts/validation")
     p.add_argument("--dataset-dir", default="artifacts/datasets/validation",
-                   help="Validation dataset dir; its trivial_ids.csv is auto-used to drop "
-                        "tautology/contradiction targets from all results.")
+                   help="Validation dataset dir (retained for compatibility; trivial targets are "
+                        "excluded from the datasets at build time, so nothing is dropped here).")
     p.add_argument("--output-dir", default="artifacts/validation/_analysis")
     p.add_argument("--runs", nargs="+", required=True)
     p.add_argument("--reference-run", default="ce_base")

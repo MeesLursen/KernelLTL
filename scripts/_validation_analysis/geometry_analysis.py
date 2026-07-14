@@ -45,14 +45,15 @@ def _z(s: pd.Series) -> pd.Series:
 
 
 def build_frame(features: pd.DataFrame, correctness: pd.DataFrame, *, n_var_bins: int = 50) -> pd.DataFrame:
-    """Join geometry features to per-(run, formula_id) correctness, DROP trivial
-    (std==0) targets, compute the orthogonality residual and z-scored predictors.
+    """Join geometry features to per-(run, formula_id) correctness, compute the
+    orthogonality residual and z-scored predictors.
 
     ``correctness`` columns: run, formula_id, correct, semantic_distance, target_depth.
-    norm_resid = emb_norm - E[emb_norm | variance] (binned, on the non-trivial set).
+    norm_resid = emb_norm - E[emb_norm | variance] (binned). Trivial (std==0) targets are
+    already excluded from the datasets at build time, so no filtering is needed here.
     """
-    feat = features[features.get("is_trivial", 0) == 0].copy()
-    # orthogonality residual on the non-trivial set
+    feat = features.copy()
+    # orthogonality residual
     feat["_vbin"] = pd.qcut(feat["variance"], min(n_var_bins, feat["variance"].nunique()),
                             labels=False, duplicates="drop")
     feat["norm_resid"] = feat["emb_norm"] - feat.groupby("_vbin")["emb_norm"].transform("mean")

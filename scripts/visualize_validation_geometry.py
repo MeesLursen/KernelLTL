@@ -1,7 +1,8 @@
 """Driver: embedding-geometry vs. correctness (Q1 magnitude / Q2 orthogonality).
 
 Light step — consumes the cached geometry_features.csv (from compute_geometry_features.py).
-Drops trivial (tautology/contradiction, std==0) targets via the is_trivial flag, then runs:
+Trivial (tautology/contradiction, std==0) targets are already excluded from the datasets at
+build time, so every target here is non-trivial. Runs:
   Q1  correct ~ emb_norm                                  (marginal magnitude)
   Q2  variance-stratified norm slopes                     (primary orthogonality test)
   Q2  correct ~ variance + norm_resid + C(depth)          (FWL residual summary)
@@ -105,20 +106,19 @@ def main():
     variants = [r for r in runs if r != ref]
 
     features = pd.read_csv(args.geometry_features)
-    n_triv = int(features.get("is_trivial", pd.Series(0)).sum())
-    _log(f"[geom] features: {len(features)} targets ({n_triv} trivial dropped)")
+    _log(f"[geom] features: {len(features)} targets")
 
     corr = load_greedy_correctness(Path(args.validation_root), runs)
     df = ga.build_frame(features, corr)
-    _log(f"[geom] analysis frame: {len(df)} rows, {df.formula_id.nunique()} non-trivial targets")
+    _log(f"[geom] analysis frame: {len(df)} rows, {df.formula_id.nunique()} targets")
 
     # --- RQ1 feasibility floor (G1b): conditioned base vs embedding-ablated baselines ---
     if args.ablation_runs:
         _log(f"[geom] RQ1 feasibility floor: {ref} vs {list(args.ablation_runs)}")
-        nontrivial = set(df["formula_id"])
+        target_ids = set(df["formula_id"])
         floor_runs = [ref] + list(args.ablation_runs)
         floor_corr = load_greedy_correctness(Path(args.validation_root), floor_runs)
-        floor_corr = floor_corr[floor_corr["formula_id"].isin(nontrivial)]
+        floor_corr = floor_corr[floor_corr["formula_id"].isin(target_ids)]
         floor_desc = fb.feasibility_floor_descriptive(
             floor_corr, runs=floor_runs, n_bootstrap=args.bootstrap_n,
             alpha=args.alpha, rng_seed=args.rng_seed)
@@ -221,7 +221,7 @@ def main():
 
     # --- G4: RL-regression set (cross-run vs reference) ---
     flips = go.compute_correctness_flips(corr, reference_run=ref, variants=variants)
-    # keep the non-trivial set only, consistent with the geometry convention everywhere else
+    # restrict to the geometry-operator target set, consistent with the convention elsewhere
     flips = flips[flips["formula_id"].isin(set(geom_op["formula_id"]))]
     if not flips.empty:
         go.flip_counts(flips, variants=variants).to_csv(
@@ -281,8 +281,8 @@ def main():
             "faith_mediation_runs": int(len(med)),
         }
 
-    summary = {"reference_run": ref, "runs": runs, "n_targets_nontrivial": int(df.formula_id.nunique()),
-               "n_trivial_dropped": n_triv, "bootstrap_n": args.bootstrap_n,
+    summary = {"reference_run": ref, "runs": runs, "n_targets": int(df.formula_id.nunique()),
+               "bootstrap_n": args.bootstrap_n,
                "crossmodel_n_obs": res["n_obs"], "crossmodel_n_targets": res["n_targets"],
                **faith_summary}
     with open(out / "geometry_summary.json", "w") as f:

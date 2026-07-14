@@ -1,4 +1,4 @@
-"""Compute per-target embedding-geometry features for the validation set.
+~"""Compute per-target embedding-geometry features for the validation set.
 
 This is the HEAVY step (it touches the ~10 GB satisfactions tensor), intended to
 run once on Snellius and cache a small CSV that the light analysis driver
@@ -14,7 +14,6 @@ saved validation dataset) we compute:
   alignment    || emb(phi) / std_psi ||_2 / std_phi (anchor-coverage; the norm of
                the Pearson-correlation embedding rho_i = cov_i/(std_phi std_psi_i))
   alignment_proxy  emb_norm / std_phi               (cheap fallback, no anchor stds)
-  is_trivial   1 if std_phi == 0 (tautology/contradiction; alignment undefined -> 0)
 
 The std/alignment split mirrors the two causes of a small-magnitude embedding
 named in the kernel chapter (low variance vs. anchor orthogonality).
@@ -113,8 +112,7 @@ def main() -> None:
     # alignment = || emb / std_psi ||_2 / std_phi  (norm of the Pearson embedding).
     std_psi_safe = std_psi.clamp(min=1e-12)
     rho_scaled = (E / std_psi_safe).norm(dim=1).numpy()             # || emb_i / std_psi_i ||
-    is_trivial = std_phi <= 1e-12
-    std_phi_safe = np.where(is_trivial, np.nan, std_phi)
+    std_phi_safe = np.clip(std_phi, 1e-12, None)
     alignment = rho_scaled / std_phi_safe
     alignment_proxy = emb_norm / std_phi_safe
     alignment = np.nan_to_num(alignment, nan=0.0)
@@ -128,17 +126,10 @@ def main() -> None:
         "emb_norm": emb_norm,
         "alignment": alignment,
         "alignment_proxy": alignment_proxy,
-        "is_trivial": is_trivial.astype(int),
     })
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     df.to_csv(args.output, index=False)
     _log(f"[geometry] wrote {len(df)} rows -> {args.output}")
-
-    # Emit the canonical trivial_ids.csv next to the dataset, so the analysis
-    # loaders auto-discover and drop tautology/contradiction targets everywhere.
-    triv_path = os.path.join(args.validation_dataset_dir, "trivial_ids.csv")
-    df.loc[df["is_trivial"] == 1, ["formula_id"]].to_csv(triv_path, index=False)
-    _log(f"[geometry] trivial (std==0) targets: {int(is_trivial.sum())} -> {triv_path}")
     _log("[geometry] feature summary:\n" + df.drop(columns=['formula_id']).describe().to_string())
 
 
