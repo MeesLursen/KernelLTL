@@ -38,6 +38,8 @@ TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 # Home output directory (for persisted copies)
 PROJECT_OUTPUT_DIR="$PROJECT_DIR/artifacts/models/CE"
 
+# Run identifier: keeps this fresh curriculum separate from run2/ (the old leaked run)
+RUN_TAG="run3"
 
 # Scratch (fast) storage
 SCRATCH_BASE="/scratch-local/$USER/KernelLTL"
@@ -47,6 +49,13 @@ SCRATCH_OUTPUT_BASE="$SCRATCH_BASE/models/CE"
 DEFAULT_LEARNING_RATE=1e-4
 DEFAULT_BATCH_SIZE=256
 DEFAULT_WARMUP_RATIO=0.05
+
+# HPO-selected hyperparameters (job 24611750: eval_loss winner c_lr_1e-4)
+#   dropout is applied only at the fresh stage1 init (baked into the config, then
+#   inherited by every later stage via the loaded checkpoint).
+#   weight_decay is passed on every stage so it survives the training_args reload.
+DROPOUT=0.15
+WEIGHT_DECAY=0.015412276933612225
 
 # Mixed precision
 MIXED_PRECISION="--bf16"
@@ -66,14 +75,16 @@ EARLY_STOPPING_THRESHOLD=0.0
 
 # ============================================================================
 
+# LR halves each stage, starting from 1e-4 (the phase-A/HPO winner):
+#   stage1 1e-4  ->  stage2 5e-5  ->  stage3 2.5e-5  ->  stage4 1.25e-5
+# Within a stage the (linear) scheduler decays that peak to 0, so this is the
+# per-stage peak LR.
 STAGE_CONFIGS=(
-    "finetune:$PROJECT_DIR/artifacts/datasets/finetune/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:25:5e-6"
-)   
-    # "stage0:$PROJECT_DIR/artifacts/datasets/stage0/train:$PROJECT_DIR/artifacts/datasets/stage0/eval:10:1e-4"
-    # "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:100:1e-4"
-    # "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts/datasets/stage2/eval:100:5e-5"
-    # "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:100:1e-5"
-    # "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:100:5e-6" 
+    "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:100:1e-4"
+    "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts/datasets/stage2/eval:100:5e-5"
+    "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:100:2.5e-5"
+    "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:100:1.25e-5"
+)
 
 # ============================================================================
 # ENVIRONMENT SETUP
@@ -115,9 +126,10 @@ echo "Number of GPUs: $NUM_GPUS"
 # ============================================================================
 # RUN CURRICULUM STAGES
 # ============================================================================
-PREV_MODEL_PROJECT_DIR="$PROJECT_OUTPUT_DIR/run2/stage4/final_model"
-PREV_MODEL_DIR="$SCRATCH_OUTPUT_BASE/run2/stage4/final_model"
-PREV_TRAINING_ARGS_DIR="$SCRATCH_OUTPUT_BASE/run2/stage4/final_model"
+# Fresh curriculum: stage1 initialises a new model (no checkpoint to resume from).
+PREV_MODEL_PROJECT_DIR=""
+PREV_MODEL_DIR=""
+PREV_TRAINING_ARGS_DIR=""
 
 if [ -n "$PREV_MODEL_PROJECT_DIR" ] && [ -d "$PREV_MODEL_PROJECT_DIR" ]; then
     # Copy previous model dir from home to scratch-local
@@ -138,10 +150,10 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     LR=${LR:-$DEFAULT_LEARNING_RATE}
     STEP_INTERVAL=$(echo "scale=6; 1/$EPOCHS" | bc -l)
     
-    STAGE_OUTPUT_DIR="$SCRATCH_OUTPUT_BASE/$STAGE_NAME"
+    STAGE_OUTPUT_DIR="$SCRATCH_OUTPUT_BASE/$RUN_TAG/$STAGE_NAME"
     STAGE_MODEL_SAVE_DIR="$STAGE_OUTPUT_DIR/final_model"
 
-    STAGE_PROJECT_OUTPUT_DIR="$PROJECT_OUTPUT_DIR/$STAGE_NAME"
+    STAGE_PROJECT_OUTPUT_DIR="$PROJECT_OUTPUT_DIR/$RUN_TAG/$STAGE_NAME"
     STAGE_PROJECT_MODEL_SAVE_DIR="$STAGE_PROJECT_OUTPUT_DIR/final_model"
     
     echo ""
@@ -151,7 +163,8 @@ for i in "${!STAGE_CONFIGS[@]}"; do
     echo "  Eval dataset: $EVAL_DIR"
     echo "  Epochs: $EPOCHS"
     echo "  Learning rate: $LR"
-    echo "  Batch size: $BATCH_SIZE"
+    echo "  Batch size: $DEFAULT_BATCH_SIZE"
+    echo "  Weight decay: $WEIGHT_DECAY"
     echo "=============================================="
     
     mkdir -p "$STAGE_OUTPUT_DIR"
@@ -187,6 +200,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--per-device-train-batch-size" "$DEFAULT_BATCH_SIZE"
         "--per-device-eval-batch-size" "$DEFAULT_BATCH_SIZE"
         "--warmup-ratio" "$DEFAULT_WARMUP_RATIO"
+        "--weight-decay" "$WEIGHT_DECAY"
         "--logging-steps" "$STEP_INTERVAL"
         "--eval-steps" "$STEP_INTERVAL"
         "--save-steps" "$STEP_INTERVAL"
@@ -206,15 +220,18 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         CMD_ARGS+=("--debug" "$DEBUG_OPTION")
     fi
 
-    # Load previous stage model (if not first stage)
+    # Later stages resume the previous stage's model + training args.
+    # The first (fresh) stage instead initialises a new model with the tuned dropout;
+    # --dropout and --model-load-dir are mutually exclusive in curriculum_train.py.
     if [ -n "$PREV_MODEL_DIR" ] && [ -d "$PREV_MODEL_DIR" ]; then
         echo "  Loading model from previous stage: $PREV_MODEL_DIR"
         CMD_ARGS+=("--model-load-dir" "$PREV_MODEL_DIR")
-    fi
-    
-    # Load previous stage training args (if not first stage)
-    if [ -n "$PREV_TRAINING_ARGS_DIR" ] && [ -d "$PREV_TRAINING_ARGS_DIR" ]; then
-        CMD_ARGS+=("--training-args-load-dir" "$PREV_TRAINING_ARGS_DIR")
+        if [ -n "$PREV_TRAINING_ARGS_DIR" ] && [ -d "$PREV_TRAINING_ARGS_DIR" ]; then
+            CMD_ARGS+=("--training-args-load-dir" "$PREV_TRAINING_ARGS_DIR")
+        fi
+    else
+        echo "  Fresh model init (dropout=$DROPOUT)"
+        CMD_ARGS+=("--dropout" "$DROPOUT")
     fi
     
     # Run training
