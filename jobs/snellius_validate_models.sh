@@ -28,8 +28,8 @@ HOME_DIR="$HOME/KernelLTL"
 VENV_DIR="$HOME_DIR/venv"
 
 # Shared artifacts
-KERNEL_DIR="$HOME_DIR/artifacts/kernel"
-TOKENIZER_DIR="$HOME_DIR/artifacts/tokenizer"
+KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
+TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 
 # Validation dataset (5k formulas at depths {2,3,4,5})
 VALIDATION_DATASET_DIR="$PROJECT_DIR/artifacts/datasets/validation"

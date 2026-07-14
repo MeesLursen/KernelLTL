@@ -25,7 +25,7 @@ HOME_DIR="$HOME/KernelLTL"
 PROJECT_DIR="/projects/prjs2029/KernelLTL"
 VENV_DIR="$HOME_DIR/venv"
 
-KERNEL_DIR="$HOME_DIR/artifacts/kernel"
+KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
 VAL_DATASET_DIR="$PROJECT_DIR/artifacts/datasets/validation"   # embeddings.pt + satisfactions.pt
 VAL_ROOT="$PROJECT_DIR/artifacts/validation"
 ANALYSIS_DIR="$VAL_ROOT/_analysis"

@@ -32,8 +32,8 @@ PROJECT_DIR="/projects/prjs2029/KernelLTL"
 VENV_DIR="$HOME_DIR/venv"
 
 # Shared artifacts
-KERNEL_DIR="$HOME_DIR/artifacts/kernel"
-TOKENIZER_DIR="$HOME_DIR/artifacts/tokenizer"
+KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
+TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 
 # Home output directory (for persisted copies)
 PROJECT_OUTPUT_DIR="$PROJECT_DIR/artifacts/models/CE"

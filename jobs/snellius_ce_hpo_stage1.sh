@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # ============================================================================
-# Staged CE hyperparameter selection on stage 1 (v2 datasets, kernel_v2).
+# Staged CE hyperparameter selection on stage 1 (depth-graded datasets + regenerated kernel).
 #
 # Mirrors the thesis protocol (main.tex, "Prior to training..."):
 #   Phase A: LR grid {5e-6, 1e-5, 5e-5, 1e-4, 5e-4} at dropout=0.1, wd=0.01
@@ -43,10 +43,10 @@ PROJECT_DIR="/projects/prjs2029/KernelLTL"
 HOME_DIR="$HOME/KernelLTL"
 VENV_DIR="$HOME_DIR/venv"
 
-KERNEL_DIR="$PROJECT_DIR/artifacts/kernel_v2"
-TOKENIZER_DIR="$HOME_DIR/artifacts/tokenizer"
-TRAIN_DIR="$PROJECT_DIR/artifacts/datasets_v2/curriculum/stage1/train"
-EVAL_DIR="$PROJECT_DIR/artifacts/datasets_v2/stage1/eval"
+KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
+TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
+TRAIN_DIR="$PROJECT_DIR/artifacts/datasets/stage1/train"
+EVAL_DIR="$PROJECT_DIR/artifacts/datasets/stage1/eval"
 
 HPO_ROOT="$PROJECT_DIR/artifacts/models/CE/hpo_v2"     # persistent results
 SCRATCH_BASE="/scratch-local/$USER/KernelLTL"

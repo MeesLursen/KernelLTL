@@ -34,8 +34,8 @@ HOME_DIR="$HOME/KernelLTL"
 VENV_DIR="$HOME_DIR/venv"
 
 # Shared artifacts
-KERNEL_DIR="$HOME_DIR/artifacts/kernel"
-TOKENIZER_DIR="$HOME_DIR/artifacts/tokenizer"
+KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
+TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 
 # Stage/dataset selection
 TRAIN_DIR="$PROJECT_DIR/artifacts/datasets/stage1/train"

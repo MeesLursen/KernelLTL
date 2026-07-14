@@ -18,7 +18,7 @@ HOME_DIR="$HOME/KernelLTL"
 VENV_DIR="$HOME_DIR/venv"
 
 # Source assets
-KERNEL_DIR="$HOME_DIR/artifacts/kernel"
+KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
 STAGE_TRAIN_DIRS=(
     "$PROJECT_DIR/artifacts/datasets/stage1/train"
     "$PROJECT_DIR/artifacts/datasets/stage2/train"

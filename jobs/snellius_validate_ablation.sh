@@ -35,8 +35,8 @@ PROJECT_DIR="/projects/prjs2029/KernelLTL"
 HOME_DIR="$HOME/KernelLTL"
 VENV_DIR="$HOME_DIR/venv"
 
-KERNEL_DIR="$HOME_DIR/artifacts/kernel"
-TOKENIZER_DIR="$HOME_DIR/artifacts/tokenizer"
+KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
+TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 DATASETS_DIR="$PROJECT_DIR/artifacts/datasets"
 CE_BASE_MODEL_DIR="$PROJECT_DIR/artifacts/models/CE/run2/stage4/final_model"
 

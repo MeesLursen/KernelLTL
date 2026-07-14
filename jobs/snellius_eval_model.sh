@@ -24,8 +24,8 @@ HOME_DIR="$HOME/KernelLTL"
 VENV_DIR="$HOME_DIR/venv"
 
 # Shared artifacts
-KERNEL_DIR="$HOME_DIR/artifacts/kernel"
-TOKENIZER_DIR="$HOME_DIR/artifacts/tokenizer"
+KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
+TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 
 # Output roots
 PROJECT_OUTPUT_BASE="$PROJECT_DIR/artifacts/eval"

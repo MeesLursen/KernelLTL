@@ -33,8 +33,8 @@ HOME_DIR="$HOME/KernelLTL"
 VENV_DIR="$PROJECT_DIR/venv"
 
 # Shared artifacts
-KERNEL_DIR="$HOME_DIR/artifacts/kernel"
-TOKENIZER_DIR="$HOME_DIR/artifacts/tokenizer"
+KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
+TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 
 # Shared model root with independent RE/CE branches
 BASE_MODELS_ROOT="$PROJECT_DIR/artifacts/models"

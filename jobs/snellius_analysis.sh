@@ -33,7 +33,7 @@ VENV_DIR="$HOME_DIR/venv"
 
 VALIDATION_ROOT="$PROJECT_DIR/artifacts/validation"
 DATASET_DIR="$PROJECT_DIR/artifacts/datasets/validation"   # holds trivial_ids.csv (auto-drops tautologies/contradictions)
-TOKENIZER_DIR="$HOME_DIR/artifacts/tokenizer"
+TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 
 ANALYSIS_OUTPUT_DIR="$PROJECT_DIR/artifacts/validation/_analysis"
 
