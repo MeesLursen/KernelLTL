@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=kernelltl-curriculum
-#SBATCH --output=logs/kernelltl_curriculum_%j.out
-#SBATCH --error=logs/kernelltl_curriculum_%j.err
-#SBATCH --time=20:00:00
+#SBATCH --job-name=kernelltl-trial-s1
+#SBATCH --output=logs/kernelltl_trial_s1_%j.out
+#SBATCH --error=logs/kernelltl_trial_s1_%j.err
+#SBATCH --time=06:00:00
 #SBATCH --partition=gpu_h100
 #SBATCH --gpus=4
 #SBATCH --cpus-per-task=64
@@ -38,8 +38,18 @@ TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 # Home output directory (for persisted copies)
 PROJECT_OUTPUT_DIR="$PROJECT_DIR/artifacts/models/CE"
 
-# Run identifier: keeps this fresh curriculum separate from run2/ (the old leaked run)
-RUN_TAG="run4"
+# TRIAL hyperparameters: weight-decay ablation on stage1.
+#   weight_decay = 0 (the point of the trial); lr = 1e-4 (phase-A / HPO winner);
+#   warmup = 1 epoch (1/EPOCHS, HPO-consistent). Fresh model init, single stage only.
+#   dropout is selectable so both p_drop values can be swept from this one file:
+#     sbatch --export=ALL,TRIAL_DROPOUT=0.1  jobs/snellius_curriculum_trial_stage1.sh
+#     sbatch --export=ALL,TRIAL_DROPOUT=0.15 jobs/snellius_curriculum_trial_stage1.sh
+DROPOUT="${TRIAL_DROPOUT:-0.1}"
+WEIGHT_DECAY=0.0
+
+# Run identifier keyed to the dropout so the two sweeps write to distinct dirs
+# (e.g. trial_stage1_wd0_d0.1, trial_stage1_wd0_d0.15) and never clobber run4/.
+RUN_TAG="trial_stage1_wd0_d${DROPOUT}"
 
 # Scratch (fast) storage
 SCRATCH_BASE="/scratch-local/$USER/KernelLTL"
@@ -48,15 +58,6 @@ SCRATCH_OUTPUT_BASE="$SCRATCH_BASE/models/CE"
 # Training defaults (can be overridden per stage)
 DEFAULT_LEARNING_RATE=1e-4
 DEFAULT_BATCH_SIZE=256
-# Warmup is one epoch's worth of steps (warmup_ratio = 1/EPOCHS = STEP_INTERVAL),
-# matching the schedule the HPO was run under. Passed as --warmup-ratio below.
-
-# HPO-selected hyperparameters (job 24611750: eval_loss winner c_lr_1e-4)
-#   dropout is applied only at the fresh stage1 init (baked into the config, then
-#   inherited by every later stage via the loaded checkpoint).
-#   weight_decay is passed on every stage so it survives the training_args reload.
-DROPOUT=0.15
-WEIGHT_DECAY=0.01
 
 # Mixed precision
 MIXED_PRECISION="--bf16"
@@ -76,15 +77,9 @@ EARLY_STOPPING_THRESHOLD=0.0
 
 # ============================================================================
 
-# LR halves each stage, starting from 1e-4 (the phase-A/HPO winner):
-#   stage1 1e-4  ->  stage2 5e-5  ->  stage3 2.5e-5  ->  stage4 1.25e-5
-# Within a stage the (linear) scheduler decays that peak to 0, so this is the
-# per-stage peak LR.
+# Single-stage trial: stage1 only, fresh model, lr=1e-4 (peak, linearly decayed to 0).
 STAGE_CONFIGS=(
     "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:100:1e-4"
-    "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts/datasets/stage2/eval:100:5e-5"
-    "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:100:2.5e-5"
-    "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:100:1.25e-5"
 )
 
 # ============================================================================
