@@ -204,6 +204,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--dataloader-pin-memory"
         $MIXED_PRECISION
         "--semantic-eval-batch-size" "$EVAL_BATCH_SIZE"
+        "--stage-name" "$RUN_TAG"
         "--metric-for-best-model"        "eval_loss"
         "--greater-is-better"            "false"
         "--early-stopping-patience" "$EARLY_STOPPING_PATIENCE"
