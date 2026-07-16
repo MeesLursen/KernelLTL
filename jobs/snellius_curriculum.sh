@@ -38,8 +38,9 @@ TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 # Home output directory (for persisted copies)
 PROJECT_OUTPUT_DIR="$PROJECT_DIR/artifacts/models/CE"
 
-# Run identifier: keeps this fresh curriculum separate from run2/ (the old leaked run)
-RUN_TAG="run4"
+# Run identifier: constant-LR + select/stop on eval_semantic_distance.
+# Kept beside run3 (halving, eval_loss) and run4_constlr (const LR, eval_loss) for comparison.
+RUN_TAG="run5_semdist"
 
 # Scratch (fast) storage
 SCRATCH_BASE="/scratch-local/$USER/KernelLTL"
@@ -56,7 +57,7 @@ DEFAULT_BATCH_SIZE=256
 #   inherited by every later stage via the loaded checkpoint).
 #   weight_decay is passed on every stage so it survives the training_args reload.
 DROPOUT=0.15
-WEIGHT_DECAY=0.01
+WEIGHT_DECAY=0.015412276933612225
 
 # Mixed precision
 MIXED_PRECISION="--bf16"
@@ -76,15 +77,15 @@ EARLY_STOPPING_THRESHOLD=0.0
 
 # ============================================================================
 
-# LR halves each stage, starting from 1e-4 (the phase-A/HPO winner):
-#   stage1 1e-4  ->  stage2 5e-5  ->  stage3 2.5e-5  ->  stage4 1.25e-5
-# Within a stage the (linear) scheduler decays that peak to 0, so this is the
-# per-stage peak LR.
+# Constant peak LR = 1e-4 on every stage (the HPO winner). Each stage still runs its
+# own warmup -> linear-decay-to-0 within-stage, so "constant" means constant *peak*;
+# this removes the between-stage halving that appears to have starved the deeper stages
+# in run3. Isolates the curriculum (data ordering) from any LR anneal.
 STAGE_CONFIGS=(
     "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:100:1e-4"
-    "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts/datasets/stage2/eval:100:5e-5"
-    "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:100:2.5e-5"
-    "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:100:1.25e-5"
+    "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts/datasets/stage2/eval:100:1e-4"
+    "stage3:$PROJECT_DIR/artifacts/datasets/stage3/train:$PROJECT_DIR/artifacts/datasets/stage3/eval:100:1e-4"
+    "stage4:$PROJECT_DIR/artifacts/datasets/stage4/train:$PROJECT_DIR/artifacts/datasets/stage4/eval:100:1e-4"
 )
 
 # ============================================================================
@@ -209,7 +210,10 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--dataloader-pin-memory"
         $MIXED_PRECISION
         "--semantic-eval-batch-size" "$EVAL_BATCH_SIZE"
-        "--metric-for-best-model"        "eval_loss"
+        # Select/stop on the semantic objective, not token CE: at the deep stages
+        # eval_loss climbs (paraphrase penalty) while semantic distance keeps falling,
+        # so eval_loss selection saves a ~2x semantically-worse stage-4 checkpoint.
+        "--metric-for-best-model"        "eval_semantic_distance"
         "--greater-is-better"            "false"
         "--early-stopping-patience" "$EARLY_STOPPING_PATIENCE"
         "--early-stopping-threshold" "$EARLY_STOPPING_THRESHOLD"
