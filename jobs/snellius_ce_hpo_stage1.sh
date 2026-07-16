@@ -13,11 +13,12 @@ set -euo pipefail
 # ============================================================================
 # Staged CE hyperparameter selection on stage 1 (depth-graded datasets + regenerated kernel).
 #
-# Mirrors the thesis protocol (main.tex, "Prior to training..."):
-#   Phase A: LR grid {5e-6, 1e-5, 5e-5, 1e-4, 5e-4} at dropout=0.1, wd=0.01
+# Mirrors the thesis protocol (main.tex, "Prior to training..."), selecting on
+# eval_semantic_distance (the semantic objective), not token cross-entropy:
+#   Phase A: LR grid {1e-5, 5e-5, 1e-4, 5e-4} at dropout=0.1, wd=0.01
 #            (4-GPU DDP, full-fidelity runs, early stopping).
 #   Phase B: Optuna (20 sequential trials) over dropout in [0, 0.2] (step .05)
-#            and weight_decay in [0.005, 0.02], at the Phase-A best LR. Each
+#            and weight_decay in [0.0, 0.02], at the Phase-A best LR. Each
 #            trial trains with DDP across all 4 GPUs (same effective batch as
 #            Phase A). The standard (dropout, wd) is enqueued as the study's
 #            first trial, so the Phase-C trigger compares Optuna's best
@@ -72,7 +73,7 @@ N_TRIALS=20
 DROPOUT_MIN=0.0
 DROPOUT_MAX=0.2
 DROPOUT_STEP=0.05
-WD_MIN=0.005
+WD_MIN=0.0
 WD_MAX=0.02
 HPO_EPOCHS=100                  # trial budget; early stopping cuts most trials short
 HPO_PATIENCE=10                 # raised from 5: eval_semantic_distance is jittier than eval_loss,
