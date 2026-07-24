@@ -504,7 +504,7 @@
     \subsection{Model validation procedure}\label{sec:model_validation}
     All reported results in this chapter were computed on a held-out validation dataset. The dataset consists of $4{,}000$ formulae, split evenly into subsets of $1{,}000$ formulae for each of the depths $2$ through $5$, with no two formulae having identical satisfaction vectors. Duplicate entries were rejected by hashing each candidate formula's satisfaction vector and comparing the resulting object, rejecting and resampling when the candidate formula's hashed satisfaction vector was already present in the dataset. Additionally, tautological and contradictory formulae were also rejected. At depth $2$ the space of semantically distinct formula is small enough to enumerate exhaustively, and we did so, obtaining a census of every non-trivial depth-$2$ behavior realizable under $\widehat \Sigma$. The depth-$2$ validation items were drawn at random from the equivalence classes of this census, excluding those that were already present in any of the training and evaluation datasets used during the experiments. At depths $3$ through $5$ the space is far too large to enumerate, and the items were instead obtained by rejection sampling with Algorithm~\ref{alg:formula_sampling_algorithm}, discarding any candidate whose satisfaction vector had already been seen in the training data, in the per-stage evaluation data used to select the models, or earlier in the sampling process itself. Our rejection strategy is conservative, it can only reject false equivalencies and can never admit false distinctness. Our notion of identity predicated on the  deterministic hashing of the fixed trace sample, no two formulae that are genuinely logically equivalent could ever be considered distinct after hashing and thus never be selected at the same time. 
     
-    As the training and finetuning dataset descriptions will make clear, our validation dataset only contains formulae of depths on which the models were trained. Thus, any claims about \emph{generalization to unseen formulae} put forward in the analysis of the validation results must be interpreted as \emph{generalization to unseen formulae within the training depth range}. We make no claims about extrapolation beyond these depths. 
+    As the training and finetuning dataset descriptions will make clear, our validation dataset only contains formulae of depths on which the models were trained. Thus, any claims about \emph{generalization to unseen formulae} put forward in the analysis of the validation results must be interpreted as \emph{generalization to unseen formulae within the training depth range}. We make no claims about extrapolation beyond these depths. Moreover, the depth range is narrower than the training distribution at the lower end: formulae of depth $0$ and $1$, the atomic propositions and the singly-nested operators, were deliberately never held out, for the reason given in Section~\ref{sec:curriculum_data}, and so appear nowhere in the validation dataset.
     
     Each model was evaluated on the validation dataset by having it generate responses to the semantic embeddings of the formulae in the dataset. We examined the models under two regimes: one greedy pass where the model generated one sequence per embedding, and one stochastic pass where the model generated five sequences per embedding. See Table~\ref{tab:validation_generation_settings} for an overview of the specific generation arguments used during both passes. The greedy pass probes the model at the mode of its per-step generation policy. Under this strategy it always emits the highest-probability token at every step and so measures the quality of the model's first-choice formula. The stochastic pass instead probes the model's generative distribution. By drawing five independent samples for each embedding it asks whether a correct formula lies anywhere within the set of candidates the model puts forth. The two regimes thus mirror the two ways one might put a specification-mining model to use: one that returns a single specification, and one that returns a list of candidates for a user to inspect. From both passes we recorded the data from which the validation metrics were computed. We specify exactly what what those metrics are in the following section. 
     
@@ -531,7 +531,7 @@
     \NEW{Our primary notion of correctness is \emph{semantic equivalence}: a generation is correct iff its satisfaction vector matches the target's exactly, i.e.\ a normalised Hamming distance of zero over the trace sample. Around this we report the mean semantic distance (the continuous normalised Hamming distance, to which invalid generations contribute the maximum of $1$), the invalid rate as a hygiene measure, the exact-string-match rate, the unbiased pass@$k$ curve for $k = 1,\dots,5$, the syntax--semantics gap (semantic-equivalence minus exact-match rate), and the distinct-correct count (the number of distinct correct syntaxes a model emits per target). To characterise how finetuning reshapes the policy we additionally track the KL divergence from the base policy, the policy entropy, and the Self-BLEU diversity of the sampled generations.}
     
     \subsection{Statistical conventions}\label{sec:stats_framework}
-    Given the size of our dataset, $n = 18{,}455$ samples, statistical significance is easily achieved. Were we only to draw conclusions based on the significance of any given statistic, we would be painting a misleading picture about the true importance of the result. Therefore, throughout this chapter, all of our discussions will be centered around effect sizes and confidence interval bounds rather than p-values. Every confidence interval we report is a $95\%$ interval ($\alpha = 0.05$), produced in one of two ways according to the quantity it bounds. For sample statistics, we use the \emph{percentile bootstrap}: we resample the targets with replacement to the original sample size, recompute the statistic, repeat $10{,}000$ times under a fixed seed, and take the $2.5$th and $97.5$th percentiles of the resampled values as the interval. Such an interval expresses how far the reported number would move under a different draw of the validation dataset. For the coefficients of the logistic regression models used in the later experiments, we instead report a Wald interval from the model's robust standard error.
+    Given the size of our dataset, $n = 4{,}000$ samples, statistical significance is easily achieved. Were we only to draw conclusions based on the significance of any given statistic, we would be painting a misleading picture about the true importance of the result. Therefore, throughout this chapter, all of our discussions will be centered around effect sizes and confidence interval bounds rather than p-values. Every confidence interval we report is a $95\%$ interval ($\alpha = 0.05$), produced in one of two ways according to the quantity it bounds. For sample statistics, we use the \emph{percentile bootstrap}: we resample the targets with replacement to the original sample size, recompute the statistic, repeat $10{,}000$ times under a fixed seed, and take the $2.5$th and $97.5$th percentiles of the resampled values as the interval. Such an interval expresses how far the reported number would move under a different draw of the validation dataset. For the coefficients of the logistic regression models used in the later experiments, we instead report a Wald interval from the model's robust standard error.
 
     Throughout, the target formulae in the dataset act as the unit of analysis. Every quantity consisting of a comparison across models or conditions is matched on them: a contrast is formed within each target and only then aggregated, so that differences in the difficulty of individual targets cannot masquerade as differences between models. The same holds whenever a single target gives rise to multiple observations. This happens when multiple trained models are pooled into one regression to test whether an effect differs across them, or when we are analyzing the five observations from the stochastic pass. For the former, we cluster observations by target formulae. For the latter, we aggregate the five observations into a single per-target value. We assume independence only across these clusters or groups, so that multiple observations on the same target aren't mistaken for independent evidence and the intervals aren't spuriously narrowed.
 
@@ -543,80 +543,79 @@
 
     
     \subsection{Curriculum datasets}\label{sec:curriculum_data}
-    Each of the curriculum datasets used during pretraining data were generated with the formula sampler described in Algorithm~\ref{alg:formula_sampling_algorithm}. The curriculum consisted of four stages of increasing maximum depth. Each new stage extends the previous with formulae of the next depth by approximately the same number of formulae as the previous stage's total, effectively doubling the dataset size at each stage. Table~\ref{tab:curriculum} gives the per-stage sampling algorithm configuration and the dataset sizes.
+    The formulae used during pretraining were generated with the sampler described in Algorithm~\ref{alg:formula_sampling_algorithm}, in four cumulative rounds of increasing maximum depth. Each round extended the set produced by the previous one and sampled under its own leaf probability range $p_{\text{leaf}}$, listed in Table~\ref{tab:curriculum}. The lower ranges at the later rounds counteract the sampler's bias toward shallow trees as the depth bound grows. The result is a single pool of $890{,}493$ formulae of depth at most $5$, distributed over depths $0$ through $5$ as $22{,}612$, $26{,}041$, $50{,}385$, $110{,}119$, $219{,}448$, and $461{,}888$ formulae respectively. The training set of stage $i$ is this pool restricted to depth at most $i+1$, so that the four stages are \emph{nested}: every formula seen at one stage is seen again at all later stages, and each stage adds only the formulae of the next depth. Because each round draws approximately as many formulae as all previous rounds combined, this restriction approximately doubles the training set at every stage. Each item in the training set stores the formula's AST as well as its $M$-dimensional embedding. Items in the evaluation and validation datasets additionally store the formula's canonical string and satisfaction vector.
     
-    For each stage, new formulae were sampled in batches and filtered for the required depth. The unique sampled formulae were split into disjoint training and evaluation sets, stratified by depth. For each depth $\ge 1$ a fraction of $2.5\%$ (capped at half the formulae of that depth) of the unique formulae were held out and placed inside the evaluation set. Depth-$0$ atoms were never placed inside of the evaluation split to make sure the model would be presented with the temporal behavior of each of the atomic formulae during training. The training split retained duplicate samples, whereas the evaluation split was deduplicated. Table~\ref{tab:curriculum} gives an overview of each curriculum stage. Each item in the training set stores the formula's AST as well as its $M$-dimensional embedding. Items in the evaluation dataset additionally store the formula's canonical string and satisfaction vector.
+    The evaluation sets were carved out of the same partition as the validation dataset, under the semantic exclusion described in Section~\ref{sec:model_validation}, and are likewise nested depth prefixes. At depth $2$ the census of Section~\ref{sec:model_validation} contained $12{,}385$ non-trivial semantic classes, of which $3{,}727$ were realized nowhere in the pool. Of these, $1{,}250$ were withheld ($1{,}000$ to the validation dataset and $250$ to the stage evaluation sets) and the remaining $2{,}477$ were added to the training data of every stage, one representative formula per class, so that the model is exposed to as much of the finite depth-$2$ behavior space as the holdout permits. At depths $3$ through $5$ the evaluation formulae were obtained by the same rejection sampling as the validation dataset, at $250$, $500$, and $1{,}000$ formulae per depth respectively. The holdout consisted only from depths $2$ through $5$ and every formula of depth $0$ or $1$ therefore remains in the training data. It is important that the model is presented with the temporal behavior of each atomic formula and of each singly-nested operator during training as these formulae form the basic building blocks needed to compose the more complex formulae.
+    
+    Before we move on, we'd like to linger on some of the choices that were under consideration during the design of our curriculum datasets. The training split retains duplicate samples, whereas the evaluation and validation splits hold at most one formula per semantic class. This is done to acquaint the model with the different syntactical forms that produce a certain singular embedding. The training data also retained trivial formulae, whereas, as previously mentioned, the evaluation dataset as well as the validation dataset do not contain any such formulae. While the objective of inferring trivial formulae is meaningless in the setting of specification mining, their existence and use in the language is considerably meaningful. It is important for a model that we wish to teach the latent meaning of different LTL formulae to be exposed to the different syntactical structures that produce decidedly trivial semantics, as well as teach it how to meaningfully compose such structures.
     
     \begin{table}[ht]
         \centering
         \caption{The four-stage pretraining curriculum.}
         \label{tab:curriculum}
-        \begin{tabular}{ccccc}
+        \begin{tabular}{lccrrl}
             \toprule
-            Stage & Depth coverage & $p_{\text{leaf}}$ & No. training formulae & No. eval formulae \\
+            & & & & \multicolumn{2}{c}{Evaluation formulae} \\
+            \cmidrule(lr){5-6}
+            Stage & Depth coverage & $p_{\text{leaf}}$ & Training formulae & Total & Per depth ($2/3/4/5$) \\
             \midrule
-            1 & $0$--$2$ & $0.2$--$0.5$  & $97{,}577$  & $353$ \\
-            2 & $0$--$3$ & $0.1$--$0.5$  & $194{,}011$ & $2{,}221$ \\
-            3 & $0$--$4$ & $0.01$--$0.5$ & $407{,}459$ & $7{,}334$ \\
-            4 & $0$--$5$ & $0.01$--$0.4$ & $890{,}493$ & $19{,}539$ \\
+            1 & $0$--$2$ & $0.2$--$0.5$   & $101{,}515$ & $250$     & $250$ / -- / -- / -- \\
+            2 & $0$--$3$ & $0.1$--$0.5$   & $211{,}634$ & $500$     & $250$ / $250$ / -- / -- \\
+            3 & $0$--$4$ & $0.01$--$0.5$  & $431{,}082$ & $1{,}000$ & $250$ / $250$ / $500$ / -- \\
+            4 & $0$--$5$ & $0.01$--$0.4$  & $892{,}970$ & $2{,}000$ & $250$ / $250$ / $500$ / $1{,}000$ \\
             \bottomrule
         \end{tabular}
     \end{table}
     
     \subsection{Curriculum Pretraining}\label{sec:curriculum_pretraining}
+    We implemented our \texttt{LTLModel} model class on top of the HuggingFace \textsc{Transformers} (version \href{https://github.com/huggingface/transformers/tree/v4.57.6}{4.57.6}) \texttt{GPT2LMHeadModel} architecture, with cross-attention enabled. The model comprises $12$ transformer blocks, each with $16$ attention heads and a hidden-state dimension of $1024$, and takes the dropout value selected by the hyperparameter search described next.
     
-    We implemented our \texttt{LTLModel} model class on top of the HuggingFace \textsc{Transformers} (version \href{https://github.com/huggingface/transformers/tree/v4.57.6}{4.57.6}) \texttt{GPT2LMHeadModel} architecture, with cross-attention enabled. The model was created with $12$ layers of transformer blocks, each with $16$ attention heads and a hidden states dimension size of $1024$, and the best dropout value found during the following hyperparameter sweep.
+    Prior to training, the \textit{learning rate}, \textit{dropout} and \textit{weight decay} hyperparameters were fixed by a three-phase search conducted on the first stage of the curriculum, judged against which values attained the lowest cross-entropy loss on the evaluation dataset of the first stage of the curriculum. Phase~A sweeps the peak learning rate over the grid $[10^{-5}, 5\times10^{-5}, 10^{-4}, 5\times10^{-4}, 10^{-3}, 5\times10^{-3}]$ while holding dropout and weight decay at the defaults of $0.1$ and $0.01$. Phase~B carries the winning learning rate into a $20$-trial Bayesian search over dropout $\in [0, 0.2]$ and weight decay $\in [0.005, 0.02]$, conducted with the \textsc{Optuna} (version \href{https://github.com/optuna/optuna/tree/v4.8.0}{4.8.0}) integration for the \textsc{Transformers} library, with the Phase-A defaults enqueued as its first trial to serve as a baseline. Phase~C re-sweeps the learning rate at the Phase-B optimum, and runs only when that optimum both improves on and differs from the baseline trial, finally returning the best found configuration across all phases. Every run in the search used the same one-epoch linear warmup.
     
-    Prior to training, the \textit{dropout}, \textit{weight decay} and \textit{learning rate} hyperparameters for the pretraining phase were set with two consecutive sweeps over the first stage of the curriculum, selected by the values that achieved the lowest average \textit{semantic distance}, i.e. the normalized Hamming distance between target formulae and generated formulae in the stage 1 evaluation dataset. The first sweep consisted of varying the learning rate over the values $\{5\times10^{-6}, 10^{-5}, 5\times10^{-5}, 10^{-4}, 5\times10^{-4}\}$ while keeping the dropout and weight decay parameters fixed at $0.1$ and $0.01$ respectively. The best found learning rate $10^{-4}$ was then carried into a joint Bayesian hyperparameter sweep of 20 trials over dropout $\in [0, 0.2]$ and weight decay $\in [0.005, 0.02]$ using the \textsc{Optuna} (version \href{https://github.com/optuna/optuna/tree/v4.8.0}{4.8.0}) hyperparameter optimization integration with the \textsc{Transformers} library. These trials did not report any improvement over the initial learning rate sweep, and thus the base values \textit{learning rate} $=10^{-4}$, \textit{dropout} $=0.1$ and \textit{weight decay} $=0.01$ were kept as the initial hyperparameters for the first stage of training. For each subsequent stage the weight decay and dropout parameters were held constant, while the learning rate was decreased gradually between stages. See Table~\ref{tab:curriculum_hyperparams} for an overview of the hyperparameter and configuration details shared between each stage of training, and see Table~\ref{tab:pretraining} for the respective learning rates.
+    Phase~A selected a peak of $10^{-4}$, winning its sweep by a wide margin. Phase~B then improved on the default regularization under the identical trial protocol, moving the objective from $0.0644$ to $0.0585$ at a dropout of $0.15$ and a weight decay of $0.0154$. because this both improved on and differed from the baseline, it triggered the Phase-C re-sweep, which reconfirmed $10^{-4}$ as the peak learning rate. The search thus fixed the configuration carried into every curriculum stage: peak learning rate $10^{-4}$, dropout $0.15$, weight decay $0.0154$, reaching a final stage 1 evaluation cross-entropy loss of $0.0545$. Table~\ref{tab:hpo_summary} records the selection; the full per-phase sweeps are reported in Appendix~\ref{app:hpo}.
     
-    \begin{table}[h!]
-    \centering
-    \caption{Common training hyperparameters across all four curriculum stages.}
-    \label{tab:curriculum_hyperparams}
-    \begin{tabular}{ll}
-        \toprule
-        \textbf{Hyperparameter} & \textbf{Value} \\
-        \midrule
-        Optimizer & AdamW (fused) \\
-        \quad $(\beta_1, \beta_2, \varepsilon)$ & $(0.9,\ 0.999,\ 10^{-8})$ \\
-        Activation function & GELU (new) \\
-        Weight decay & $0.01$ \\
-        Attention/embedding/residual dropout & $0.1$ \\
-        Gradient clipping (max norm) & $1.0$ \\
-        Learning-rate scheduler & linear decay \\
-        Warmup ratio & $0.05$ \\
-        Per-device batch size & $256$ \\
-        Gradient accumulation steps & $1$ \\
-        Num. parallel processes & $4$ (effective batch $1024$) \\
-        Mixed precision & bfloat16 \\
-        Maximum epochs & $100$ \\
-        Label smoothing & $0.0$ \\
-        Evaluation/save interval & every epoch \\
-        Metric for best model & evaluation cross-entropy loss \\
-        Early stopping patience & $10$ epochs \\
-        Early stopping threshold & $0.0$ \\
-        Random seed & $42$ \\
-        \bottomrule
-    \end{tabular}
+    \begin{table}[ht]
+        \centering
+        \caption{Outcome of the three-phase hyperparameter search on stage~1. Each phase searches one part of the space with the rest held at the previous phase's choice. Full sweeps: Appendix~\ref{app:hpo}.}
+        \label{tab:hpo_summary}
+        \begin{tabular}{llll}
+            \toprule
+            Phase & Searched & Selected & Held fixed \\
+            \midrule
+            A & peak learning rate ($6$ values)   & $10^{-4}$        & dropout $0.1$, wd $0.01$ \\
+            B & dropout, weight decay ($20$ trials) & $0.15$, $0.0154$ & lr $10^{-4}$ \\
+            C & peak learning rate ($6$ values)   & $10^{-4}$        & dropout $0.15$, wd $0.0154$ \\
+            \bottomrule
+        \end{tabular}
     \end{table}
     
-    The model with randomly initialized weights was then trained on the four stages of our curriculum, using a custom subclass \texttt{CETrainer} of the \textsc{Transformers} \texttt{Trainer} class, adjusted to suit our data collection needs. Training was done on four Nvidia \textsc{H100} GPUs. Each successive stage of training resumed with the model weights of the best model of the previous stage, selected according to which of the checkpoints after each epoch of training produced the lowest cross-entropy loss measured on the stage's corresponding evaluation dataset.
+    The model with randomly initialized weights was then trained on the four stages of our curriculum, using a custom subclass \texttt{CETrainer} of the \textsc{Transformers} \texttt{Trainer} class, adjusted to suit our data collection needs. Training was done on four \textsc{Nvidia H100} GPUs. Each stage ran for up to $100$ epochs under early stopping with a patience of $10$ epochs. The successive stages resumed from the checkpoint of the previous stage at which it reached the minimum cross-entropy loss on its respective evaluation dataset. The peak learning rate was reset to $10^{-4}$ at the start of every stage and decayed linearly within it, after the same one-epoch warmup. Table~\ref{tab:curriculum_hyperparams} in the appendix gives the configuration held constant across all four stages, and Table~\ref{tab:pretraining} the resulting per-stage schedule and convergence.
     
-    \begin{table}[ht]S
+    \begin{table}[ht]
     \centering
-    \caption{Per-stage pretraining schedule and convergence (early stopping on the evaluation loss; $100$-epoch cap).}
+    \caption{Per-stage pretraining schedule and convergence. Each stage restores the epoch of lowest evaluation cross-entropy and halts $10$ epochs later, this being the early-stopping patience.}
     \label{tab:pretraining}
-    \begin{tabular}{cccc}
+    \begin{tabular}{ccccc}
         \toprule
-        Stage & Peak learning rate & Stopping epoch & Wall-clock \\
+        Stage & Convergence epoch & Epochs run & Wall-clock \\
         \midrule
-        1 & $10^{-4}$        & $35$ & $7$\,m \\
-        2 & $5\times10^{-5}$ & $23$ & $12$\,m \\
-        3 & $10^{-5}$        & $31$ & $52$\,m \\
-        4 & $5\times10^{-6}$ & $51$ & $5$\,h\,$07$\,m \\
+        1 & $51$ & $61$ & $13$\,m\,$42$\,s \\
+        2 & $15$ & $25$ & $11$\,m\,$50$\,s \\
+        3 & $8$  & $18$ & $21$\,m\,$48$\,s \\
+        4 & $9$  & $19$ & $1$\,h\,$09$\,m\,$04$\,s \\
         \bottomrule
     \end{tabular}
     \end{table}
+
+    \begin{figure}[tbp]
+        \centering
+        \includegraphics[width=\textwidth]{Figures/pretraining_curves.png}
+        \caption{Overview of the convergence patterns of each of the curriculum stages.}
+        \label{fig:pretraining_curves}
+    \end{figure}
+    
+    During this experiment, both here and during the hyperparameter optimization, we opted to do early stopping and model selection based on cross-entropy loss. The main rationale for this is that this way our selection criteria live in the same space as the objective that the training process is optimizing for. There is more at play however and looking at the curves of Figure~\ref{fig:pretraining_curves}, there is one obvious consequence of using cross-entropy loss for early stopping that is worth drawing out, because it is one we regard as desirable rather than detrimental. Generally, the epoch at which the lowest evaluation cross-entropy is obtained precedes the epoch at which the semantic metrics would peak. For every stage beyond the first, there is still measurable room for the model to improve on both semantic metrics after the cross-entropy loss has converged. We could simply train our model longer at each stage, or stop early and restore the best model based on either one of the semantic metrics, in order to close this gap. However, leaving this small gap to semantic convergence can, as we argue more in depth in Experiment~3 (Section~\ref{sec:exp3_reinforcement}), have favorable consequences for the finetuning process. Namely, a base policy that is well-calibrated on the token objective yet not driven to convergence retains the output diversity and plasticity that the policy-gradient finetuning process is totally dependent on. An over-trained, low-entropy policy does not explore new regions of policy space and gives reinforcement learning little to work with. Selecting the cross-entropy-optimal checkpoint ensures that the model selection criterion lives in the same space as the training objective and, at the same time, hands the reinforcement stage a policy with headroom to explore.
+
 
     \subsection{Ablation study on the semantic embeddings}\label{sec:exp1_ablation}
     To test whether the base model's correctness is borne by the conditioning signal rather than by its weights alone, we re-ran the greedy pass on the validation dataset with the semantic embeddings corrupted, leaving every other part of the procedure untouched. The corruption took three forms, each removing a different facet of the information the embedding carries. All three act only on the conditioning input and only at generation time, on a model whose weights are frozen. Together with the deterministic nature of the generation process in the greedy pass, this makes each ablated output a clean function of the corrupted input.
@@ -919,7 +918,7 @@
     The factor of $3$ is exactly the three triangle-inequality contributions accumulated along the way: one from the outer subtraction in \eqref{eq:kcov_outer_triangle}, two from the product expansion in \eqref{eq:product_bound}. \emph{Each kernel coordinate is therefore controlled to within $3\eta$ of its population value; the instantiated tolerance for our adopted $\eta$ is reported in Section~\ref{sec:kernel_instantiation}.}
 
 
-    \section{Gradient Derivations for the Training Objectives}\label{app:objective_gradients}
+\section{Gradient Derivations for the Training Objectives}\label{app:objective_gradients}
 
     \subsection{Notation and Setup}\label{app:obj_setup}
     \begin{itemize}
@@ -1026,6 +1025,81 @@
         \item \textbf{Conclusion (cited by 6.5.4 Move 2):} RL admits the semantically-equivalent
               syntaxes CE penalises — the formal handle on "RL buys semantic flexibility".
     \end{itemize}
+
+
+\section{Experiment 1 Appendix}
+    \subsection{Hyperparameter search sweeps}\label{app:hpo}
+    The base-model hyperparameters were fixed by the three-phase search of Section~\ref{sec:curriculum_pretraining}, conducted on the first curriculum stage and selecting on the evaluation cross-entropy. This appendix reports the sweeps summarized in Table~\ref{tab:hpo_summary}. Every run used four \textsc{H100} GPUs, an effective batch size of $1024$, one epoch of warmup, and early stopping; each reported value is the run's best on the stage-1 evaluation set.
+    
+    Table~\ref{tab:hpo_lr_grid} gives the two learning-rate sweeps, Phase~A at the default regularization and Phase~C at the Phase-B optimum. A peak of $10^{-4}$ minimizes both the cross-entropy and the semantic distance under \emph{either} regularization, so the learning-rate choice is not an artefact of the other two hyperparameters. Phase~B (Table~\ref{tab:hpo_phase_b}) searched dropout and weight decay at this learning rate over $20$ trials, with the default configuration enqueued as the first trial to serve as an in-protocol baseline; its best trial lowered the objective from $0.0644$ to $0.0585$, which triggered the Phase-C re-sweep.
+
+    \begin{table}[ht]
+        \centering
+        \caption{Phase~A and Phase~C learning-rate sweeps over the same six-point grid, at the default regularization (dropout $0.1$, weight decay $0.01$) and at the Phase-B optimum (dropout $0.15$, weight decay $0.0154$) respectively. Best in each block in bold; $10^{-4}$ wins on both metrics under both settings.}
+        \label{tab:hpo_lr_grid}
+        \begin{tabular}{lcccc}
+            \toprule
+            & \multicolumn{2}{c}{Phase~A (default reg.)} & \multicolumn{2}{c}{Phase~C (tuned reg.)} \\
+            \cmidrule(lr){2-3}\cmidrule(lr){4-5}
+            Peak learning rate & eval CE & sem.\ dist. & eval CE & sem.\ dist. \\
+            \midrule
+            $10^{-5}$        & $0.1015$          & $0.0326$          & $0.1099$          & $0.0464$ \\
+            $5\times10^{-5}$ & $0.0624$          & $0.0198$          & $0.0555$          & $0.0168$ \\
+            $10^{-4}$        & $\mathbf{0.0570}$ & $\mathbf{0.0142}$ & $\mathbf{0.0545}$ & $\mathbf{0.0165}$ \\
+            $5\times10^{-4}$ & $0.0694$          & $0.0209$          & $0.0960$          & $0.0351$ \\
+            $10^{-3}$        & $0.1910$          & $0.0785$          & $0.3334$          & $0.1225$ \\
+            $5\times10^{-3}$ & $0.8995$          & $0.2826$          & $0.8397$          & $0.2419$ \\
+            \bottomrule
+        \end{tabular}
+    \end{table}
+
+    \begin{table}[ht]
+        \centering
+        \caption{Phase~B --- Optuna search over dropout and weight decay at peak learning rate $10^{-4}$, $20$ trials. The enqueued default baseline (trial~0) and the selected best (trial~16) are shown; the best both improved on and differed from the baseline, triggering Phase~C.}
+        \label{tab:hpo_phase_b}
+        \begin{tabular}{clcc}
+            \toprule
+            Trial No. & Dropout & Weight decay & Eval.\ cross-entropy \\
+            \midrule
+            $0$ (baseline) & $0.10$ & $0.0100$ & $0.0644$ \\
+            $16$ (best)    & $0.15$ & $0.0154$ & $\mathbf{0.0585}$ \\
+            \bottomrule
+        \end{tabular}
+    \end{table}
+
+    \section{Curriculum Pretraining}
+    
+    \begin{table}[h!]
+    \centering
+    \caption{Common training hyperparameters across all four curriculum stages.}
+    \label{tab:curriculum_hyperparams}
+    \begin{tabular}{ll}
+        \toprule
+        \textbf{Hyperparameter} & \textbf{Value} \\
+        \midrule
+        Optimizer & AdamW (fused) \\
+        \quad $(\beta_1, \beta_2, \varepsilon)$ & $(0.9,\ 0.999,\ 10^{-8})$ \\
+        Activation function & GELU (new) \\
+        Weight decay & $0.0154$ \\
+        Attention/embedding/residual dropout & $0.15$ \\
+        Gradient clipping (max norm) & $1.0$ \\
+        Peak learning rate & $10^{-4}$ (reset each stage) \\
+        Learning-rate scheduler & linear decay within stage \\
+        Warmup & $1$ epoch (ratio $1/100$) \\
+        Per-device batch size & $256$ \\
+        Gradient accumulation steps & $1$ \\
+        Num.\ parallel processes & $4$ (effective batch $1024$) \\
+        Mixed precision & bfloat16 \\
+        Maximum epochs & $100$ \\
+        Label smoothing & $0.0$ \\
+        Evaluation/save interval & every epoch \\
+        Metric for best model & evaluation cross-entropy loss \\
+        Early stopping patience & $10$ epochs \\
+        Early stopping threshold & $0.0$ \\
+        Random seed & $42$ \\
+        \bottomrule
+    \end{tabular}
+    \end{table}
 
 
 \end{document}
