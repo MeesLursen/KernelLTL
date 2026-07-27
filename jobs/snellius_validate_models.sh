@@ -2,12 +2,11 @@
 #SBATCH --job-name=kernelltl_validate
 #SBATCH --output=logs/kernelltl_validate_%j.out
 #SBATCH --error=logs/kernelltl_validate_%j.err
-#SBATCH --time=06:00:00
+#SBATCH --time=01:00:00
 #SBATCH --partition=gpu_h100
-#SBATCH --constraint=scratch-node
-#SBATCH --gpus=2
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=360G
+#SBATCH --gpus=4
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=720G
 
 # ==========================================================================
 # Snellius validation script for KernelLTL
@@ -31,11 +30,8 @@ VENV_DIR="$HOME_DIR/venv"
 KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
 TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 
-# Validation dataset (5k formulas at depths {2,3,4,5})
+# Validation dataset (4k formulas at depths {2,3,4,5}; 1000 per depth)
 VALIDATION_DATASET_DIR="$PROJECT_DIR/artifacts/datasets/validation"
-
-# CE base / reference model used for KL computation
-CE_REFERENCE_MODEL_DIR="$PROJECT_DIR/artifacts/models/CE/run2/stage4/final_model"
 
 # Output roots
 PROJECT_OUTPUT_BASE="$PROJECT_DIR/artifacts/validation"
@@ -50,21 +46,15 @@ MIXED_PRECISION="--bf16"
 
 # ==========================================================================
 # VALIDATION CONFIGURATION
-# Format: "RUN_NAME:MODEL_DIR[:FLAGS]"
+# Format: "RUN_NAME:MODEL_DIR"
 #
-# FLAGS (third field, optional):
-#   no_kl   -- skip KL-from-base computation (use for the base model itself,
-#              where comparing it against itself is uninformative).
-#
-# When FLAGS is omitted, KL is computed against $CE_REFERENCE_MODEL_DIR.
+# Only the CE base (curriculum run 4 -- constant LR, eval_loss stopping --
+# renamed to final_pretrain) is validated here. The finetuned / RL variants do
+# not exist yet and are added back once trained.
 # ==========================================================================
 
 VALIDATE_CONFIGS=(
-    "ce_base:$PROJECT_DIR/artifacts/models/CE/run2/stage4/final_model:no_kl"
-    "ce_finetune:$PROJECT_DIR/artifacts/models/CE/finetune/final_model"
-    "rb_momentum_09_lr_5e-8:$PROJECT_DIR/artifacts/models/RE/rb_momentum_09_lr_5e-8/final_model"
-    "gae_lambda_09_lr_5e-8_crlr_1e-3:$PROJECT_DIR/artifacts/models/RE/gae_lambda_09_lr_5e-8_crlr_1e-3/final_model"
-    "gae_lambda_1_lr_5e-8_crlr_5e-3:$PROJECT_DIR/artifacts/models/RE/gae_lambda_1_lr_5e-8_crlr_5e-3/final_model"
+    "ce_base:$PROJECT_DIR/artifacts/models/CE/final_pretrain"
 )
 
 # ==========================================================================
@@ -120,12 +110,7 @@ rsync -a --delete "$VALIDATION_DATASET_DIR/" "$SCRATCH_VALIDATION_DIR/"
 # ==========================================================================
 
 for i in "${!VALIDATE_CONFIGS[@]}"; do
-    IFS=':' read -r RUN_NAME MODEL_DIR FLAGS <<< "${VALIDATE_CONFIGS[$i]}"
-
-    SKIP_KL=0
-    if [ "$FLAGS" = "no_kl" ]; then
-        SKIP_KL=1
-    fi
+    IFS=':' read -r RUN_NAME MODEL_DIR <<< "${VALIDATE_CONFIGS[$i]}"
 
     SCRATCH_MODEL_DIR="$SCRATCH_BASE/models/$RUN_NAME/final_model"
     SCRATCH_OUTPUT_DIR="$SCRATCH_OUTPUT_BASE/$RUN_NAME"

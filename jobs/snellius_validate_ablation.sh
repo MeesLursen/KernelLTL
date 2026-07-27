@@ -2,11 +2,11 @@
 #SBATCH --job-name=kernelltl_validate_ablation
 #SBATCH --output=logs/kernelltl_validate_ablation_%j.out
 #SBATCH --error=logs/kernelltl_validate_ablation_%j.err
-#SBATCH --time=03:00:00
+#SBATCH --time=01:00:00
 #SBATCH --partition=gpu_h100
-#SBATCH --gpus=2
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=360G
+#SBATCH --gpus=4
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=720G
 
 # ==========================================================================
 # Embedding-ablation FLOOR (G1b).
@@ -38,7 +38,7 @@ VENV_DIR="$HOME_DIR/venv"
 KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
 TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 DATASETS_DIR="$PROJECT_DIR/artifacts/datasets"
-CE_BASE_MODEL_DIR="$PROJECT_DIR/artifacts/models/CE/run2/stage4/final_model"
+CE_BASE_MODEL_DIR="$PROJECT_DIR/artifacts/models/CE/final_pretrain"
 
 PROJECT_OUTPUT_BASE="$PROJECT_DIR/artifacts/validation"
 SCRATCH_BASE="/scratch-local/$USER/KernelLTL"
