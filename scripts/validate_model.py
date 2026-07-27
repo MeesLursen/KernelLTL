@@ -5,9 +5,10 @@ Runs two passes per model on a held-out validation dataset:
   1. Greedy single-sample.
   2. Top-K (K=5 by default, T=1, do_sample=True).
 
-Writes per-sample (and per-token) JSONL records under
-``<output-dir>/per_sample/`` plus aggregated summaries under
-``<output-dir>/`` for downstream post-hoc statistical analysis.
+Writes raw per-generation JSONL records under ``<output-dir>/per_sample/``
+(``greedy.jsonl`` and ``topk_flat.jsonl``) plus a small headline summary. All
+downstream metrics (pass@k, self-BLEU, distinct-correct, by-depth breakdowns,
+bootstrap CIs) are derived post-hoc by the analysis scripts.
 
 Usage (single GPU)::
 
@@ -15,14 +16,13 @@ Usage (single GPU)::
         --kernel-dir <kernel> --tokenizer-dir <tokenizer> \
         --eval-dataset-dir <validation_dataset> \
         --model-load-dir <trained_model> \
-        --ce-reference-model-dir <ce_base_model> \
         --output-dir <out>
 
 Usage (multi-GPU)::
 
     torchrun --nproc_per_node=N scripts/validate_model.py ...
 
-Metric-computation logic lives in ``validation_passes.py``.
+Pass logic lives in ``validation_utils.py``.
 """
 
 from __future__ import annotations
@@ -42,8 +42,6 @@ from tokenizer_pretrained_class import LTLTokenizer
 
 from validation_utils import (
     EMBEDDING_ABLATIONS,
-    aggregate_greedy_by_depth,
-    aggregate_topk_by_depth,
     run_greedy_pass,
     run_topk_pass,
 )
@@ -66,9 +64,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tokenizer-dir", required=True)
     parser.add_argument("--eval-dataset-dir", required=True)
     parser.add_argument("--model-load-dir", required=True)
-    parser.add_argument("--ce-reference-model-dir", default=None,
-                        help="Reference (CE base) model directory for KL computation. "
-                             "If omitted, KL columns are filled with zeros.")
     parser.add_argument("--output-dir", required=True)
 
     parser.add_argument("--per-device-eval-batch-size", type=_positive_int, default=96)
@@ -190,10 +185,6 @@ def main() -> None:
     )
     dataloader = accelerator.prepare(dataloader)
 
-    ref_path = args.ce_reference_model_dir
-    if ref_path is not None and not os.path.isdir(ref_path):
-        raise FileNotFoundError(f"CE reference model directory not found: {ref_path}")
-
     # Embedding-ablation floor (G1b): the 'mean' mode needs the dataset-mean embedding.
     mean_embedding = None
     if args.embedding_ablation == "mean":
@@ -206,12 +197,10 @@ def main() -> None:
 
     greedy_jsonl = os.path.join(args.output_dir, "per_sample", "greedy.jsonl")
     topk_flat_jsonl = os.path.join(args.output_dir, "per_sample", "topk_flat.jsonl")
-    topk_grouped_jsonl = os.path.join(args.output_dir, "per_sample", "topk_grouped.jsonl")
 
     summary: dict = {
         "model_load_dir": args.model_load_dir,
         "eval_dataset_dir": args.eval_dataset_dir,
-        "ce_reference_model_dir": ref_path,
         "n_dataset_samples": len(dataset),
         "top_k": args.top_k,
         "embedding_ablation": args.embedding_ablation,
@@ -225,7 +214,6 @@ def main() -> None:
             print("=" * 60)
         greedy_summary = run_greedy_pass(
             model=model,
-            ref_model_path=ref_path,
             eval_dataloader=dataloader,
             kernel=kernel,
             tokenizer=tokenizer,
@@ -250,7 +238,6 @@ def main() -> None:
             print("=" * 60)
         topk_summary = run_topk_pass(
             model=model,
-            ref_model_path=ref_path,
             eval_dataloader=dataloader,
             kernel=kernel,
             tokenizer=tokenizer,
@@ -258,7 +245,6 @@ def main() -> None:
             accelerator=accelerator,
             top_k=args.top_k,
             output_flat_path=topk_flat_jsonl,
-            output_grouped_path=topk_grouped_jsonl,
             semantic_eval_batch_size=args.semantic_eval_batch_size,
             embedding_ablation=args.embedding_ablation,
             mean_embedding=mean_embedding,
@@ -270,27 +256,15 @@ def main() -> None:
 
     accelerator.wait_for_everyone()
 
-    # Per-depth aggregates -- main process only, derived from the JSONLs.
+    # Headline summary only -- all breakdowns/aggregation are post-hoc.
     if accelerator.is_main_process:
-        by_depth: dict = {}
-        if not args.no_greedy and os.path.exists(greedy_jsonl):
-            by_depth["greedy"] = aggregate_greedy_by_depth(greedy_jsonl)
-        if not args.no_topk and os.path.exists(topk_grouped_jsonl):
-            by_depth["topk"] = aggregate_topk_by_depth(topk_grouped_jsonl)
-        summary["by_depth"] = by_depth
-
         summary_path = os.path.join(args.output_dir, "validation_summary.json")
         with open(summary_path, "w") as f:
             json.dump(summary, f, indent=2)
 
-        depth_path = os.path.join(args.output_dir, "validation_metrics_by_depth.json")
-        with open(depth_path, "w") as f:
-            json.dump(by_depth, f, indent=2)
-
         print("=" * 60)
         print(f"Wrote: {summary_path}")
-        print(f"Wrote: {depth_path}")
-        print(f"Per-sample JSONLs under: {os.path.join(args.output_dir, 'per_sample')}")
+        print(f"Per-generation JSONLs under: {os.path.join(args.output_dir, 'per_sample')}")
         print("=" * 60)
 
 

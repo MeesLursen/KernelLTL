@@ -102,20 +102,18 @@ export PYTHONPATH="$HOME_DIR:${PYTHONPATH:-}"
 NUM_GPUS=$(nvidia-smi -L | wc -l)
 echo "Number of GPUs: $NUM_GPUS"
 
-# Stage shared artifacts (kernel, tokenizer, validation dataset, CE reference)
-# onto scratch-local once. Per-model directories are staged inside the loop.
+# Stage shared artifacts (kernel, tokenizer, validation dataset) onto
+# scratch-local once. Per-model directories are staged inside the loop.
 SCRATCH_KERNEL_DIR="$SCRATCH_BASE/kernel"
 SCRATCH_TOKENIZER_DIR="$SCRATCH_BASE/tokenizer"
 SCRATCH_VALIDATION_DIR="$SCRATCH_BASE/datasets/validation"
-SCRATCH_CE_REF_DIR="$SCRATCH_BASE/models/ce_reference"
 
-mkdir -p "$SCRATCH_KERNEL_DIR" "$SCRATCH_TOKENIZER_DIR" "$SCRATCH_VALIDATION_DIR" "$SCRATCH_CE_REF_DIR"
+mkdir -p "$SCRATCH_KERNEL_DIR" "$SCRATCH_TOKENIZER_DIR" "$SCRATCH_VALIDATION_DIR"
 
 echo "Staging shared artifacts to scratch-local..."
 rsync -a --delete "$KERNEL_DIR/" "$SCRATCH_KERNEL_DIR/"
 rsync -a --delete "$TOKENIZER_DIR/" "$SCRATCH_TOKENIZER_DIR/"
 rsync -a --delete "$VALIDATION_DATASET_DIR/" "$SCRATCH_VALIDATION_DIR/"
-rsync -a --delete "$CE_REFERENCE_MODEL_DIR/" "$SCRATCH_CE_REF_DIR/"
 
 # ==========================================================================
 # RUN VALIDATIONS
@@ -137,7 +135,6 @@ for i in "${!VALIDATE_CONFIGS[@]}"; do
     echo "=============================================="
     echo "Validating: $RUN_NAME ($((i+1)) of ${#VALIDATE_CONFIGS[@]})"
     echo "  Model dir:   $MODEL_DIR"
-    echo "  KL from base: $([ "$SKIP_KL" = "1" ] && echo "disabled" || echo "enabled (vs $CE_REFERENCE_MODEL_DIR)")"
     echo "  Output (scratch): $SCRATCH_OUTPUT_DIR"
     echo "  Output (project): $PROJECT_OUTPUT_DIR"
     echo "=============================================="
@@ -158,10 +155,6 @@ for i in "${!VALIDATE_CONFIGS[@]}"; do
         "--top-k" "$TOP_K"
         $MIXED_PRECISION
     )
-
-    if [ "$SKIP_KL" != "1" ]; then
-        CMD_ARGS+=("--ce-reference-model-dir" "$SCRATCH_CE_REF_DIR")
-    fi
 
     STAGE_START=$(date +%s)
 

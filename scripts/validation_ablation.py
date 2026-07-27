@@ -37,7 +37,7 @@ from kernel_class import LTLKernel
 from model_class import LTLModel
 from tokenizer_pretrained_class import LTLTokenizer
 
-from validation_utils import aggregate_greedy_by_depth, run_greedy_pass
+from validation_utils import run_greedy_pass
 
 
 def _positive_int(value: str) -> int:
@@ -170,7 +170,6 @@ def main() -> None:
 
     greedy_summary = run_greedy_pass(
         model=model,
-        ref_model_path=None,          # no reference / KL comparison for the floor
         eval_dataloader=dataloader,
         kernel=kernel,
         tokenizer=tokenizer,
@@ -188,24 +187,14 @@ def main() -> None:
     if accelerator.is_main_process:
         summary["greedy"] = greedy_summary
 
-        by_depth: dict = {}
-        if os.path.exists(greedy_jsonl):
-            by_depth["greedy"] = aggregate_greedy_by_depth(greedy_jsonl)
-        summary["by_depth"] = by_depth
-
         summary_path = os.path.join(args.output_dir, "validation_summary.json")
         with open(summary_path, "w") as f:
             json.dump(summary, f, indent=2)
 
-        depth_path = os.path.join(args.output_dir, "validation_metrics_by_depth.json")
-        with open(depth_path, "w") as f:
-            json.dump(by_depth, f, indent=2)
-
         print("[greedy summary]", json.dumps(greedy_summary, indent=2))
         print("=" * 60)
         print(f"Wrote: {summary_path}")
-        print(f"Wrote: {depth_path}")
-        print(f"Per-sample JSONL under: {os.path.join(args.output_dir, 'per_sample')}")
+        print(f"Per-generation JSONL under: {os.path.join(args.output_dir, 'per_sample')}")
         print("=" * 60)
 
 
