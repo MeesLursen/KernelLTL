@@ -18,10 +18,10 @@ Per-generation record schema (both passes share the semantic fields):
 
   greedy.jsonl     : formula_id, target_formula_str, target_depth,
                      generated_formula_str, generated_depth,
-                     is_invalid, is_exact_match, is_semantic_equivalent,
+                     is_invalid, is_semantic_equivalent,
                      semantic_distance, token_ids
   topk_flat.jsonl  : formula_id, target_depth, k_idx, generated_formula_str,
-                     generated_depth, is_invalid, is_exact_match,
+                     generated_depth, is_invalid,
                      is_semantic_equivalent, semantic_distance, token_ids
 
 ``token_ids`` is the exact generated sequence as produced by ``generate``
@@ -123,7 +123,6 @@ def _make_ablation_generator(mode: str, seed: int, process_index: int) -> torch.
 def _score_one_generated(
     *,
     generated_str: str,
-    target_str: str,
     target_sat: torch.Tensor,
     kernel: LTLKernel,
     semantic_eval_batch_size: int,
@@ -136,7 +135,6 @@ def _score_one_generated(
     """
     out: dict[str, float | bool | int] = {
         "is_invalid": False,
-        "is_exact_match": False,
         "is_semantic_equivalent": False,
         "semantic_distance": 1.0,
         "generated_depth": 0,
@@ -144,8 +142,6 @@ def _score_one_generated(
     try:
         gen_formula = str_to_formula(generated_str)
         out["generated_depth"] = int(gen_formula.depth())
-        if generated_str == target_str:
-            out["is_exact_match"] = True
         gen_sat = kernel._evaluate_formula_on_traces(
             formula=gen_formula, batch_size=semantic_eval_batch_size
         )
@@ -166,7 +162,6 @@ def _score_one_generated(
 def _score_batch(
     *,
     generated_strs: list[str],
-    target_strs: list[str],
     target_sats: torch.Tensor,
     idx_to_target: list[int],
     kernel: LTLKernel,
@@ -175,13 +170,12 @@ def _score_batch(
 ) -> dict[str, torch.Tensor]:
     """Score a flat list of generations, returning gather-ready (N,) tensors.
 
-    ``idx_to_target[j]`` maps generation ``j`` to its target row in ``target_sats`` /
-    ``target_strs`` (identity for greedy; ``j // K`` for the K-sample pass).
+    ``idx_to_target[j]`` maps generation ``j`` to its target row in ``target_sats``
+    (identity for greedy; ``j // K`` for the K-sample pass).
     """
     n = len(generated_strs)
     scored = {
         "is_invalid": torch.zeros(n, dtype=torch.bool, device=device),
-        "is_exact_match": torch.zeros(n, dtype=torch.bool, device=device),
         "is_semantic_equivalent": torch.zeros(n, dtype=torch.bool, device=device),
         "semantic_distance": torch.ones(n, dtype=torch.float32, device=device),
         "generated_depth": torch.zeros(n, dtype=torch.long, device=device),
@@ -190,13 +184,11 @@ def _score_batch(
         t = idx_to_target[j]
         oc = _score_one_generated(
             generated_str=generated_strs[j],
-            target_str=target_strs[t],
             target_sat=target_sats[t],
             kernel=kernel,
             semantic_eval_batch_size=semantic_eval_batch_size,
         )
         scored["is_invalid"][j] = oc["is_invalid"]
-        scored["is_exact_match"][j] = oc["is_exact_match"]
         scored["is_semantic_equivalent"][j] = oc["is_semantic_equivalent"]
         scored["semantic_distance"][j] = oc["semantic_distance"]
         scored["generated_depth"][j] = oc["generated_depth"]
@@ -211,14 +203,13 @@ def _strip_trailing_pad(ids: list[int], pad_id: int) -> list[int]:
     return ids[:end]
 
 
-def _headline(total: int, n_invalid: int, n_exact: int, n_equiv: int, sum_distance: float) -> dict[str, Any]:
+def _headline(total: int, n_invalid: int, n_equiv: int, sum_distance: float) -> dict[str, Any]:
     """A small sanity summary printed/persisted per pass (not the analysis output)."""
     summary: dict[str, Any] = {"n_samples": total}
     if total > 0:
         summary["semantic_equivalent_rate"] = n_equiv / total
         summary["semantic_distance"] = sum_distance / total
         summary["invalid_rate"] = n_invalid / total
-        summary["syntactic_equal_rate"] = n_exact / total
     return summary
 
 
@@ -256,7 +247,7 @@ def run_greedy_pass(
         os.makedirs(os.path.dirname(output_jsonl_path), exist_ok=True)
         writer = open(output_jsonl_path, "w")
 
-    total = n_invalid = n_exact = n_equiv = 0
+    total = n_invalid = n_equiv = 0
     sum_distance = 0.0
 
     try:
@@ -266,7 +257,6 @@ def run_greedy_pass(
                 embs = _apply_embedding_ablation(
                     embs, embedding_ablation, mean_embedding=mean_embedding, generator=ablation_gen)
                 target_sats = batch["target_satisfaction"].to(device)
-                target_strs = batch["target_formula_strs"]
                 formula_ids = batch["formula_ids"].to(device)
                 B = embs.size(0)
 
@@ -285,7 +275,6 @@ def run_greedy_pass(
 
                 scored = _score_batch(
                     generated_strs=generated_strs,
-                    target_strs=target_strs,
                     target_sats=target_sats,
                     idx_to_target=list(range(B)),
                     kernel=kernel,
@@ -297,10 +286,10 @@ def run_greedy_pass(
                 # token of a maximum-length generation.
                 seq_pad = _pad_to(sequences.to(torch.long), T_max + 1, pad_id)  # (B, T_max+1)
 
-                (g_fid, g_seq, g_inv, g_exact, g_equiv, g_dist, g_depth) = (
+                (g_fid, g_seq, g_inv, g_equiv, g_dist, g_depth) = (
                     accelerator.gather_for_metrics((
                         formula_ids, seq_pad,
-                        scored["is_invalid"], scored["is_exact_match"],
+                        scored["is_invalid"],
                         scored["is_semantic_equivalent"], scored["semantic_distance"],
                         scored["generated_depth"],
                     ))
@@ -313,7 +302,6 @@ def run_greedy_pass(
                     target_formula = dataset.formulas[fid]
                     is_invalid = bool(g_inv[i].item())
                     is_equiv = bool(g_equiv[i].item())
-                    is_exact = bool(g_exact[i].item())
                     distance = float(g_dist[i].item())
                     token_ids = _strip_trailing_pad(g_seq[i].cpu().tolist(), pad_id)
                     generated_str = tokenizer.decode(token_ids, skip_special_tokens=True)
@@ -325,7 +313,6 @@ def run_greedy_pass(
                         "generated_formula_str": generated_str,
                         "generated_depth": (None if is_invalid else int(g_depth[i].item())),
                         "is_invalid": is_invalid,
-                        "is_exact_match": is_exact,
                         "is_semantic_equivalent": is_equiv,
                         "semantic_distance": distance,
                         "token_ids": token_ids,
@@ -334,7 +321,6 @@ def run_greedy_pass(
                     total += 1
                     sum_distance += distance
                     n_invalid += int(is_invalid)
-                    n_exact += int(is_exact)
                     n_equiv += int(is_equiv)
     finally:
         if writer is not None:
@@ -344,7 +330,7 @@ def run_greedy_pass(
 
     if not _is_main(accelerator):
         return {}
-    return _headline(total, n_invalid, n_exact, n_equiv, sum_distance)
+    return _headline(total, n_invalid, n_equiv, sum_distance)
 
 
 def run_topk_pass(
@@ -379,7 +365,7 @@ def run_topk_pass(
         os.makedirs(os.path.dirname(output_flat_path), exist_ok=True)
         writer = open(output_flat_path, "w")
 
-    total = n_invalid = n_exact = n_equiv = 0
+    total = n_invalid = n_equiv = 0
     sum_distance = 0.0
 
     try:
@@ -389,7 +375,6 @@ def run_topk_pass(
                 embs = _apply_embedding_ablation(
                     embs, embedding_ablation, mean_embedding=mean_embedding, generator=ablation_gen)
                 target_sats = batch["target_satisfaction"].to(device)
-                target_strs = batch["target_formula_strs"]
                 formula_ids = batch["formula_ids"].to(device)
                 B = embs.size(0)
 
@@ -410,7 +395,6 @@ def run_topk_pass(
 
                 scored = _score_batch(
                     generated_strs=generated_strs,
-                    target_strs=target_strs,
                     target_sats=target_sats,
                     idx_to_target=[idx // K for idx in range(B * K)],
                     kernel=kernel,
@@ -421,10 +405,10 @@ def run_topk_pass(
                 seq_pad = _pad_to(sequences.to(torch.long), T_max + 1, pad_id).view(B, K, T_max + 1)
                 scored = {k: v.view(B, K) if v.dim() == 1 else v for k, v in scored.items()}
 
-                (g_fid, g_seq, g_inv, g_exact, g_equiv, g_dist, g_depth) = (
+                (g_fid, g_seq, g_inv, g_equiv, g_dist, g_depth) = (
                     accelerator.gather_for_metrics((
                         formula_ids, seq_pad,
-                        scored["is_invalid"], scored["is_exact_match"],
+                        scored["is_invalid"],
                         scored["is_semantic_equivalent"], scored["semantic_distance"],
                         scored["generated_depth"],
                     ))
@@ -438,7 +422,6 @@ def run_topk_pass(
                     for k in range(K):
                         is_invalid = bool(g_inv[b, k].item())
                         is_equiv = bool(g_equiv[b, k].item())
-                        is_exact = bool(g_exact[b, k].item())
                         distance = float(g_dist[b, k].item())
                         token_ids = _strip_trailing_pad(g_seq[b, k].cpu().tolist(), pad_id)
                         generated_str = tokenizer.decode(token_ids, skip_special_tokens=True)
@@ -450,7 +433,6 @@ def run_topk_pass(
                             "generated_formula_str": generated_str,
                             "generated_depth": (None if is_invalid else int(g_depth[b, k].item())),
                             "is_invalid": is_invalid,
-                            "is_exact_match": is_exact,
                             "is_semantic_equivalent": is_equiv,
                             "semantic_distance": distance,
                             "token_ids": token_ids,
@@ -459,7 +441,6 @@ def run_topk_pass(
                         total += 1
                         sum_distance += distance
                         n_invalid += int(is_invalid)
-                        n_exact += int(is_exact)
                         n_equiv += int(is_equiv)
     finally:
         if writer is not None:
@@ -469,7 +450,7 @@ def run_topk_pass(
 
     if not _is_main(accelerator):
         return {}
-    summary = _headline(total, n_invalid, n_exact, n_equiv, sum_distance)
+    summary = _headline(total, n_invalid, n_equiv, sum_distance)
     summary["top_k"] = K
     summary["n_targets"] = total // K if K else 0
     return summary

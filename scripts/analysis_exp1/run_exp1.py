@@ -140,7 +140,7 @@ def main() -> None:
     ablation_rows = []
     floor_specs = [(m, c) for m, c in GREEDY_METRICS
                    if m in ("semantic_equivalent_rate", "invalid_rate",
-                            "semantic_distance", "exact_match_rate")]
+                            "semantic_distance")]
     for r in overall:
         if r["pass"] == "greedy" and r["metric"] in dict(floor_specs):
             ablation_rows.append({"condition": "conditioned", **{k: r[k] for k in

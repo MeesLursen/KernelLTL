@@ -18,13 +18,13 @@ import pandas as pd
 GREEDY_REQUIRED = {
     "formula_id", "target_formula_str", "target_depth",
     "generated_formula_str", "generated_depth",
-    "is_invalid", "is_exact_match", "is_semantic_equivalent",
+    "is_invalid", "is_semantic_equivalent",
     "semantic_distance", "token_ids",
 }
 
 TOPK_REQUIRED = {
     "formula_id", "target_depth", "k_idx", "generated_formula_str",
-    "generated_depth", "is_invalid", "is_exact_match",
+    "generated_depth", "is_invalid",
     "is_semantic_equivalent", "semantic_distance", "token_ids",
 }
 
@@ -62,8 +62,6 @@ def consistency_checks(df: pd.DataFrame, *, name: str) -> list[dict]:
           df["is_invalid"] & (df["semantic_distance"] != 1.0))
     check("equivalent_iff_distance_0",
           df["is_semantic_equivalent"] != (df["semantic_distance"] == 0.0))
-    check("exact_match_implies_equivalent",
-          df["is_exact_match"] & ~df["is_semantic_equivalent"])
     check("invalid_has_null_depth",
           df["is_invalid"] & df["generated_depth"].notna())
     check("valid_has_depth",

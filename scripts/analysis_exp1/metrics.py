@@ -104,7 +104,6 @@ def per_target_greedy(df: pd.DataFrame) -> pd.DataFrame:
         "formula_id": df["formula_id"].to_numpy(),
         "target_depth": df["target_depth"].to_numpy(),
         "equiv": df["is_semantic_equivalent"].astype(float).to_numpy(),
-        "exact": df["is_exact_match"].astype(float).to_numpy(),
         "invalid": df["is_invalid"].astype(float).to_numpy(),
         "distance": df["semantic_distance"].astype(float).to_numpy(),
         "gen_depth": df["generated_depth"].astype(float).to_numpy(),  # NaN when invalid
@@ -112,7 +111,6 @@ def per_target_greedy(df: pd.DataFrame) -> pd.DataFrame:
     wrong_valid = (~df["is_invalid"]) & (~df["is_semantic_equivalent"])
     out["wrong_valid_distance"] = np.where(
         wrong_valid, df["semantic_distance"].astype(float), np.nan)
-    out["gap"] = out["equiv"] - out["exact"]  # syntax-semantics gap
     return out.set_index("formula_id").sort_index()
 
 
@@ -129,7 +127,6 @@ def per_target_topk(df: pd.DataFrame, *, k_max: int, bos: int, eos: int) -> pd.D
             "formula_id": fid,
             "target_depth": int(g["target_depth"].iloc[0]),
             "equiv": float(g["is_semantic_equivalent"].mean()),   # per-sample rate = pass@1
-            "exact": float(g["is_exact_match"].mean()),
             "invalid": float(g["is_invalid"].mean()),
             "distance": float(g["semantic_distance"].mean()),
             "gen_depth": float(gen_depths.mean()) if len(gen_depths) else np.nan,
@@ -154,8 +151,6 @@ GREEDY_METRICS = [
     ("semantic_equivalent_rate", "equiv"),
     ("semantic_distance", "distance"),
     ("invalid_rate", "invalid"),
-    ("exact_match_rate", "exact"),
-    ("syntax_semantics_gap", "gap"),
     ("generated_depth_valid", "gen_depth"),
     ("wrong_valid_distance", "wrong_valid_distance"),
 ]
@@ -164,7 +159,6 @@ TOPK_METRICS = [
     ("semantic_equivalent_rate", "equiv"),
     ("semantic_distance", "distance"),
     ("invalid_rate", "invalid"),
-    ("exact_match_rate", "exact"),
     ("generated_depth_valid", "gen_depth"),
     ("distinct_correct_all", "distinct_correct"),
     ("distinct_correct_solved", "distinct_correct_solved"),
