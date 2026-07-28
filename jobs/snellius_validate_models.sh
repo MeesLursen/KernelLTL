@@ -54,7 +54,7 @@ MIXED_PRECISION="--bf16"
 # ==========================================================================
 
 VALIDATE_CONFIGS=(
-    "ce_base:$PROJECT_DIR/artifacts/models/CE/final_pretrain"
+    "ce_base:$PROJECT_DIR/artifacts/models/CE/final_pretrain/stage4/final_model/"
 )
 
 # ==========================================================================

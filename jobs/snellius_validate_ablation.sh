@@ -38,7 +38,7 @@ VENV_DIR="$HOME_DIR/venv"
 KERNEL_DIR="$PROJECT_DIR/artifacts/kernel"
 TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 DATASETS_DIR="$PROJECT_DIR/artifacts/datasets"
-CE_BASE_MODEL_DIR="$PROJECT_DIR/artifacts/models/CE/final_pretrain"
+CE_BASE_MODEL_DIR="$PROJECT_DIR/artifacts/models/CE/final_pretrain/stage4/final_model/"
 
 PROJECT_OUTPUT_BASE="$PROJECT_DIR/artifacts/validation"
 SCRATCH_BASE="/scratch-local/$USER/KernelLTL"
