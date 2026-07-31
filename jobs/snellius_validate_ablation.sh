@@ -24,8 +24,8 @@
 # Each dataset's satisfactions.pt is a relative symlink to ../validation, so we
 # stage the original validation dir alongside the ablation dirs and rsync WITHOUT
 # -L (symlinks preserved, satvecs not triplicated). Output folders
-# ce_base_ablation_<mode> sit next to the real runs and are loadable by
-# visualize_validation_geometry.py as extra "runs" for the feasibility floor.
+# ce_base_ablation_<mode> sit next to the real runs and are consumed by
+# scripts/analysis_exp1/ (--ablation-dir) as the feasibility floor.
 # Greedy-only by construction (validation_ablation.py): no top-K, no KL ref.
 # ==========================================================================
 

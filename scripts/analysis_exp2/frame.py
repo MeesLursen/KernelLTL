@@ -4,8 +4,8 @@ Builds the per-target frame the Part II analyses run on, and derives the
 model covariates. The derivation (``derive_covariates``) is a pure function
 of the frame it is handed: the bootstrap re-runs it on every resample, so the
 percentile intervals absorb the estimation uncertainty of the binned
-conditional means and SDs (the generated-regressor fix) and of the
-low-faithfulness quantile cut.
+conditional means and SDs (the generated-regressor fix) and of the Fisher-z
+faithfulness standardisation.
 
 Covariates:
   log_norm    log ||emb(phi)||
@@ -13,13 +13,21 @@ Covariates:
   u           norm_resid / within-bin SD                 (studentized; the
               model covariate: "how many local SDs below variance-matched
               peers is this target registered")
+  u_sq        u**2                                       (post-hoc curvature
+              term; tests the inverted-U in the u-decile curve)
   z_variance  globally z-scored variance
-  low_faith   1[relational_faithfulness < sample q_{faith_tail}]
+  z_faith     z-scored Fisher-z (atanh) of relational_faithfulness; the
+              continuous faithfulness covariate for the F-branch and M3.
+              Fisher-z is the standard variance stabiliser for correlations
+              and decompresses the near-1 bulk so the coefficient is not
+              driven purely by the low tail; |rho| is clipped at FAITH_CLIP
+              to guard the atanh pole (affects only exact-|1| values).
 
 Hard gates (raise ValueError):
   * feature/greedy row counts match the dataset metadata size
   * identical formula_id sets across features and greedy
   * variance > 0 everywhere
+  * relational_faithfulness finite and inside [-1, 1] everywhere
   * depth parsed from the formula string == target_depth recorded at scoring
     time (cross-checks the parser against the generation pipeline)
 """
@@ -36,7 +44,7 @@ UNARY = {"~", "X", "F", "G"}
 BINARY = {"AND", "OR", "->", "U"}
 
 DEFAULT_N_BINS = 50
-DEFAULT_FAITH_TAIL = 0.05
+FAITH_CLIP = 1.0 - 1e-6
 
 
 # --------------------------- formula parsing ------------------------------- #
@@ -100,6 +108,11 @@ def build_frame(features: pd.DataFrame, greedy: pd.DataFrame,
         raise ValueError("formula_id sets differ between features and greedy")
     if (features["variance"] <= 0).any():
         raise ValueError("features: non-positive variance rows present")
+    faith = features["relational_faithfulness"]
+    if not np.isfinite(faith).all():
+        raise ValueError("features: non-finite relational_faithfulness present")
+    if (faith.abs() > 1.0).any():
+        raise ValueError("features: relational_faithfulness outside [-1, 1]")
 
     df = features.merge(
         greedy[["formula_id", "target_depth", "is_semantic_equivalent",
@@ -126,9 +139,9 @@ def build_frame(features: pd.DataFrame, greedy: pd.DataFrame,
 
 # --------------------------- covariate derivation --------------------------- #
 
-def derive_covariates(df: pd.DataFrame, *, n_bins: int = DEFAULT_N_BINS,
-                      faith_tail: float = DEFAULT_FAITH_TAIL) -> pd.DataFrame:
-    """Derive u, z_variance, low_faith. Pure function; re-run per resample."""
+def derive_covariates(df: pd.DataFrame, *,
+                      n_bins: int = DEFAULT_N_BINS) -> pd.DataFrame:
+    """Derive u, z_variance, z_faith. Pure function; re-run per resample."""
     out = df.copy()
     out["log_norm"] = np.log(out["emb_norm"])
     out["vbin"] = pd.qcut(out["variance"], n_bins, labels=False, duplicates="drop")
@@ -137,8 +150,9 @@ def derive_covariates(df: pd.DataFrame, *, n_bins: int = DEFAULT_N_BINS,
     sd = out.groupby("vbin")["norm_resid"].transform("std")
     # A degenerate bin (zero spread) contributes no within-bin contrast: u = 0.
     out["u"] = np.where(sd > 0, out["norm_resid"] / sd, 0.0)
+    out["u_sq"] = out["u"] ** 2  # post-hoc curvature term (rung M3q)
     out["z_variance"] = ((out["variance"] - out["variance"].mean())
                          / out["variance"].std())
-    faith_cut = out["relational_faithfulness"].quantile(faith_tail)
-    out["low_faith"] = (out["relational_faithfulness"] < faith_cut).astype(float)
+    fz = np.arctanh(out["relational_faithfulness"].clip(-FAITH_CLIP, FAITH_CLIP))
+    out["z_faith"] = (fz - fz.mean()) / fz.std()
     return out
