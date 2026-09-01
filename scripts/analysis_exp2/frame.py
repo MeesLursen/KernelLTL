@@ -8,14 +8,33 @@ conditional means and SDs (the generated-regressor fix) and of the Fisher-z
 faithfulness standardisation.
 
 Covariates:
-  log_norm    log ||emb(phi)||
-  norm_resid  log_norm - binned E[log_norm | variance]   (FWL residual)
+  log10_norm  log10 ||emb(phi)||                         (BASE 10 throughout:
+              u is a ratio of logs and so is exactly base-invariant, as are
+              all coefficients; the base is visible only in the logged columns
+              reported by descriptives and plotted on the transform figures.
+              Base 10 makes those read in DECADES -- the same unit as the
+              log-scaled variance axis they sit beside -- so a span in norm
+              and a span in variance can be compared without arithmetic.)
+  norm_resid  log10_norm - binned E[log10_norm | variance]   (FWL residual)
   u           norm_resid / within-bin SD                 (studentized; the
-              model covariate: "how many local SDs below variance-matched
-              peers is this target registered")
-  u_sq        u**2                                       (post-hoc curvature
-              term; tests the inverted-U in the u-decile curve)
+              "how many local SDs below variance-matched peers is this target
+              registered" quantity. NOT a model term: linearity in the logit is
+              rejected for u and a quadratic does not repair it, so u enters
+              the models as decile indicators -- see u_d1..u_d9.)
+  u_d1..u_d9  indicators for u's 2nd..10th decile, 1st decile as reference.
+              This is how u ENTERS EVERY MODEL. Nine indicators rather than
+              ten because the depth block is cell-mean coded (no shared
+              intercept) and so already spans the constant. Derived here, not
+              in models.py, so the bootstrap re-cuts them on every resample
+              along with u itself (S4).
+  u_sq        u**2                    NOT a model term. Kept solely so the
+              specification search can fit the rejected quadratic-in-u form
+              and report why it was rejected.
   z_variance  globally z-scored variance
+  z_variance_sq
+              z_variance**2           A PRIMARY model term. Linearity in the
+              logit is rejected for V and the quadratic repairs it at decile
+              resolution, so V enters every model as z_variance + z_variance_sq.
   z_faith     z-scored Fisher-z (atanh) of relational_faithfulness; the
               continuous faithfulness covariate for the F-branch and M3.
               Fisher-z is the standard variance stabiliser for correlations
@@ -45,6 +64,13 @@ BINARY = {"AND", "OR", "->", "U"}
 
 DEFAULT_N_BINS = 50
 FAITH_CLIP = 1.0 - 1e-6
+
+# u enters the models as decile indicators; 10 cuts -> 9 columns (see
+# derive_covariates). Chosen by the specification search, not by convention:
+# linear and quadratic forms are both rejected, deciles are not, and a 20-bin
+# cut finds no further structure (p = 0.44).
+U_DECILES = 10
+U_DEC_COLS = [f"u_d{k}" for k in range(1, U_DECILES)]
 
 
 # --------------------------- formula parsing ------------------------------- #
@@ -143,16 +169,26 @@ def derive_covariates(df: pd.DataFrame, *,
                       n_bins: int = DEFAULT_N_BINS) -> pd.DataFrame:
     """Derive u, z_variance, z_faith. Pure function; re-run per resample."""
     out = df.copy()
-    out["log_norm"] = np.log(out["emb_norm"])
+    # Base 10: u, its deciles and every coefficient are invariant (u is a ratio
+    # of logs), so this is a reporting choice only -- it buys decades as the
+    # unit of the logged columns and figure axes. See the module docstring.
+    out["log10_norm"] = np.log10(out["emb_norm"])
     out["vbin"] = pd.qcut(out["variance"], n_bins, labels=False, duplicates="drop")
-    grp = out.groupby("vbin")["log_norm"]
-    out["norm_resid"] = out["log_norm"] - grp.transform("mean")
+    grp = out.groupby("vbin")["log10_norm"]
+    out["norm_resid"] = out["log10_norm"] - grp.transform("mean")
     sd = out.groupby("vbin")["norm_resid"].transform("std")
     # A degenerate bin (zero spread) contributes no within-bin contrast: u = 0.
     out["u"] = np.where(sd > 0, out["norm_resid"] / sd, 0.0)
-    out["u_sq"] = out["u"] ** 2  # post-hoc curvature term (rung M3q)
+    out["u_sq"] = out["u"] ** 2            # specification search only, not a term
+    # u's model representation. Re-cut here rather than in models.py so the
+    # bootstrap re-derives the cut points on every resample, exactly as it
+    # re-derives u (S4). Decile 0 is the reference and gets no column.
+    udec = pd.qcut(out["u"], U_DECILES, labels=False, duplicates="drop")
+    for k in range(1, U_DECILES):
+        out[f"u_d{k}"] = (udec == k).astype(np.float64)
     out["z_variance"] = ((out["variance"] - out["variance"].mean())
                          / out["variance"].std())
+    out["z_variance_sq"] = out["z_variance"] ** 2   # PRIMARY term (see docstring)
     fz = np.arctanh(out["relational_faithfulness"].clip(-FAITH_CLIP, FAITH_CLIP))
     out["z_faith"] = (fz - fz.mean()) / fz.std()
     return out

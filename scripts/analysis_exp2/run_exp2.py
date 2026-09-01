@@ -7,38 +7,50 @@ Emits tidy CSV tables -- everything the local data-viz layer and the thesis
 need, and nothing else. No plotting here.
 
 Outputs (under --output-dir):
-    occupancy.csv         variance x norm tercile counts        (motivation)
-    norm_variance.csv     binned E[log_norm | variance] curve   (Stage A)
-    faithfulness.csv      distribution + leverage stats         (Stage A)
-    faith_grid.csv        mean faithfulness per var x u cell    (Stage A)
-    diagnostic.csv        R2 of u on operator features          (methods text)
-    op_signature.csv      mean u by operator presence           (Stage A bridge)
-    shuffle_null.csv      chance-level equivalence rates        (check; optional)
-    m_ladder.csv          the rung lattice M0/M1/M2/F1/F2/M3/   (Stage B/C)
-                          M3q + attenuation trajectories
-    marginal_effects.csv  +1 SD probability-scale effects per   (Stage B/C;
-                          rung + AME-scale trajectories          cross-rung
-                                                                 comparisons)
-    curve.csv             u-decile depth-adjusted correctness   (descriptive;
-                                                                 Q3 companion)
-    var_curve.csv         variance-decile depth-adjusted        (descriptive;
-                          correctness                            Q1 companion)
-    faith_curve.csv       faithfulness-decile correctness,      (descriptive;
-                          depth-adjusted (adj_rate) and          Q2 companion)
-                          depth+variance-adjusted (adj_rate_vd)
-    operators.csv         S rung: per-operator joint (adjusted) (Stage C;
-                          and single (confounded companion)      Q4)
-    depth_curve.csv       raw + operator-standardised           (descriptive)
+    spec_search.csv       the linearity ladder that CHOSE the    (Stage B; read
+                          specification: every candidate form     BEFORE any
+                          against decile and 20-bin references    estimand)
+    spec_curves.csv       fitted linear and quadratic response   (Stage B; the
+                          curves at the D + S base, for overlay   lines on the
+                          on the decile points                    spec figure)
+    adequacy.csv          AUC by nested block (both orders),     (Stage B)
+                          Pregibon link test, dfbeta influence
+    occupancy.csv         decile cross-tabs: variance x norm,    (motivation +
+                          z_variance x z_faith                    positivity)
+    norm_variance.csv     binned E[log10_norm | variance] curve  (Stage A)
+    norm_variance_stats.csv   ridge fit, VIF pair, C1 edge case  (Stage A)
+    covariates.csv        shape + leverage for every covariate,  (Stage A)
+                          before and after its transform
+    faith_by_variance.csv C4's reliability channel by stratum    (Stage A)
+    diagnostic.csv        R2 of V, u, F on operator features     (Stage A)
+    op_signature.csv      joint per-operator shift in V, u, F    (Stage A bridge)
+    depth_op_mix.csv      operator prevalence per depth cell     (Stage A)
+    shuffle_null.csv      chance-level equivalence rates         (check; optional)
+    m_ladder.csv          the rung lattice M0/M1/M2/M3u/M3F/M4   (Stage B/C)
+    marginal_effects.csv  +1 SD probability-scale effect of F    (Stage B/C)
+                          per rung + its attenuation step
+    curve_z_variance.csv  variance-decile correctness at each    (Q1's ESTIMAND,
+    curve_u.csv           step of the covariate's curve           Q3's ESTIMAND,
+    curve_z_faith.csv     sequence: raw, D+S, then the other      Q2 companion)
+                          geometry blocks one at a time
+    operators.csv         M1: per-operator joint contrasts       (Stage C; Q4)
+    depth_curve.csv       raw + operator-standardised            (descriptive)
                           correctness per depth
     checks.csv            gate outcomes
     manifest.json         inputs, frozen constants, tier map, estimand family
 
-Confirmatory family (reported in full, 95% percentile-bootstrap CIs, NO
-multiplicity adjustment -- declared exploratory): beta_z_variance @ M2,
-beta_u @ M3, beta_z_faith @ M3, plus the comparative joint operator
-contrasts @ the S rung. The estimand each rung identifies, and the
-assumptions identification rests on, are documented in ASSUMPTIONS.md next
-to this script; the manifest carries a pointer and the design-revision note.
+THE SPECIFICATION IS A RESULT. Linearity in the logit is rejected for V and u
+and holds for F, so V enters as a quadratic and u as decile indicators
+everywhere. ``spec_search.csv`` reports every candidate form against two
+flexible references and is what selected them; the rejected linear fits are
+tabulated beside it so the search is auditable rather than asserted. See the
+``models`` module docstring for the ladder and ASSUMPTIONS.md for the rest.
+
+Because V and u are non-monotone in correctness, NEITHER GETS A SCALAR: an
+average marginal effect of a shift measures where the population sits relative
+to the optimum rather than the strength of the relationship, and for u under
+decile coding it is undefined. Their curves are the estimands. Only F, which
+is linear, carries an AME.
 
 Usage::
 
@@ -72,25 +84,37 @@ import models                                                            # noqa:
 from frame import (DEFAULT_N_BINS, FAITH_CLIP, OPERATORS,                # noqa: E402
                    build_frame, derive_covariates, load_formulas)
 
+# Stated WITHOUT interventional vocabulary. The dependency structure is here to
+# justify which adjustment set each quantity is read at, and the adjustment
+# sets follow from constructional facts (C1-C5) rather than from assumptions
+# about unmeasured causes: S and D are computed from the formula string before
+# any trace is drawn (C5), F is computed downstream of V (C4), u is orthogonal
+# to V by construction (C1), and F and u have no directed relation but are
+# dependent (C2), so they enter together. Nothing here is an effect claim.
 ESTIMANDS = {
     "variance_total": (
-        "beta_z_variance in M2: total effect of satisfaction variance on the "
-        "greedy semantic-equivalence rate among validation targets, at matched "
-        "depth and operator presence; faithfulness deliberately excluded "
-        "(mediator of variance). Causal reading under A2 + A3 (ASSUMPTIONS.md)."),
+        "the variance curve at M2 (curve_z_variance.csv, step DS): adjusted "
+        "greedy semantic-equivalence rate by variance decile at matched depth "
+        "and operator presence, conditioning on nothing computed downstream of "
+        "variance. No scalar: the relationship is non-monotone, so an average "
+        "shift effect would report the population's position relative to the "
+        "optimum rather than the strength of the relationship."),
     "residual_norm": (
-        "beta_u in M3: effect of the studentised variance-binned log-norm "
-        "residual, at matched depth, variance, operator presence, and "
-        "faithfulness. Causal reading under A1 + A3."),
+        "the u curve at M4 (curve_u.csv, step DSVF): adjusted rate by u decile "
+        "at matched depth, operator presence, variance and faithfulness. No "
+        "scalar, for the same reason and because u enters as indicators."),
     "faithfulness": (
-        "beta_z_faith in M3: effect of relational faithfulness (Fisher-z), at "
-        "matched depth, variance, operator presence, and u. Causal reading "
-        "under A1 + A3."),
+        "beta_z_faith at M4 with its +1 SD marginal effect: relational "
+        "faithfulness (Fisher-z, z-scored) at matched depth, operator "
+        "presence, variance and u. The one geometry covariate whose linearity "
+        "survives testing, and so the only one carrying a scalar."),
     "operators": (
-        "joint has_op contrasts at the S rung (operators.csv): per-operator "
-        "presence contrast at matched depth and matched co-occurring "
-        "operators; comparative-associational, geometry covariates excluded "
-        "so the embedding-geometry path stays open (total contrasts)."),
+        "joint has_op contrasts at M1 (operators.csv): per-operator presence "
+        "contrast at matched depth and matched co-occurring operators, with no "
+        "geometry term. The geometry covariates are computed downstream of the "
+        "operator set and are 12-16% operator-determined, so these contrasts "
+        "already contain whatever an operator does by shifting V, u and F: "
+        "they are TOTAL, and not additive with the geometry readings."),
 }
 
 INFERENCE_NOTE = (
@@ -105,29 +129,62 @@ DESIGN_REVISION = (
     "(see ASSUMPTIONS.md), before the present pipeline produced numbers; "
     "supersedes the single-primary declaration (beta_u in M1) and the "
     "low-faithfulness tail contrast. Old-suite results were known at "
-    "revision time.")
+    "revision time. "
+    "Amendment (2026-07-31): both curvature rungs, M2q (V^2) and M3q (u^2), "
+    "were specified AFTER inspecting the variance- and u-decile curves "
+    "respectively, and were tiered exploratory on that basis. Also at this "
+    "revision, log_norm moved from natural log to log10 (decades); u and every "
+    "coefficient are exactly base-invariant, so only the logged columns of "
+    "norm_variance.csv change. "
+    "Amendment v3 (2026-08-06), TWO CHANGES, both after the data were seen and "
+    "both disclosed rather than absorbed. "
+    "(1) SPECIFICATION. Linearity in the logit is rejected for z_variance "
+    "(p = 2.9e-3) and u (p = 8.3e-6) and holds for z_faith (p = 0.41), so the "
+    "linear specification is not reported as a result at all: V enters as a "
+    "quadratic and u as decile indicators in every rung. The forms were chosen "
+    "by spec_search.csv over a D + S base, on shape adequacy and not on any "
+    "estimand's value -- and the change made the headline result WEAKER, which "
+    "is the evidence that it was not outcome-driven. M2q and M3q are retired "
+    "as rungs: they are now rows of the search. The rejected linear fits stay "
+    "tabulated so the search can be audited. Intervals are conditional on the "
+    "selected specification and do not account for the search (post-selection "
+    "inference). "
+    "(2) LATTICE ORDER. Syntax now sits at the base (M1 = D + S) rather than "
+    "entering as an adjustment step, because C5 makes it computationally prior "
+    "and a rung that reads a geometry quantity with the operator set open is "
+    "not an estimand anyone would report. The lattice then forks symmetrically "
+    "at M2, which also yields something the old chain could not: what u ALONE "
+    "does to V (M2 -> M3u, C1 predicts ~nothing) against what F alone does "
+    "(M2 -> M3F). The syntax-absorption comparison survives in the CURVE "
+    "sequences, which start at raw and pass through D + S -- curves are "
+    "descriptive, so their sequence may include steps the lattice does not. "
+    "Consequence of (1): V and u lose their scalar readings entirely; their "
+    "curves are the estimands. Q4's rung is renamed S -> M1; it is unchanged.")
 
 TIERS = {
-    "m_ladder.csv:M2:z_variance": "confirmatory (Q1: total effect of variance; causal under A2+A3)",
-    "m_ladder.csv:M3:u": "confirmatory (Q3: residual-norm effect; causal under A1+A3)",
-    "m_ladder.csv:M3:z_faith": "confirmatory (Q2: faithfulness effect; causal under A1+A3)",
-    "operators.csv": "confirmatory-comparative (Q4: S-rung joint operator contrasts, geometry path open; single = confounded companion; not eight hypotheses)",
-    "m_ladder.csv:M1": "secondary (u-branch start: minimal-adjustment association)",
-    "m_ladder.csv:F1": "secondary (F-branch start: minimal-adjustment association)",
-    "m_ladder.csv:F2": "secondary (F-branch syntax-absorption step)",
-    "m_ladder.csv:attenuation": "secondary (attribution trajectories along the lattice; AME scale in marginal_effects.csv)",
-    "m_ladder.csv:M3q": "exploratory (curvature at the Q3 rung; motivated by the u-decile curve)",
-    "marginal_effects.csv": "secondary (probability-scale effects; the scale for cross-rung comparisons)",
-    "curve.csv": "descriptive (Q3 companion: u-decile shape exhibit)",
-    "var_curve.csv": "descriptive (Q1 companion: variance-decile shape exhibit)",
-    "faith_curve.csv": "descriptive (Q2 companion: faithfulness-decile curves, depth- and depth+variance-adjusted)",
+    "curve_z_variance.csv:DS": "confirmatory (Q1: the variance curve at M2 IS the estimand -- no scalar, the relationship is non-monotone)",
+    "curve_u.csv:DSVF": "confirmatory (Q3: the u curve at M4 IS the estimand -- no scalar)",
+    "m_ladder.csv:M4:z_faith": "confirmatory (Q2: the one geometry covariate whose linearity survives, so the only one with a scalar)",
+    "marginal_effects.csv:M4:z_faith": "confirmatory (Q2 on the probability scale)",
+    "operators.csv": "confirmatory-comparative (Q4: M1 joint operator contrasts, geometry path open; TOTAL contrasts, not additive with the geometry readings; not eight hypotheses)",
+    "spec_search.csv": "primary methodological (chose the specification; read before any estimand -- see design_revision)",
+    "curve_z_variance.csv:DSu": "secondary (what u alone does to the V curve; C1 predicts ~nothing)",
+    "curve_z_variance.csv:DSF": "secondary, A STEP TOO FAR (F is computed downstream of V, so conditioning on it changes what the curve refers to; computed only to price the choice not to read there)",
+    "curve_u.csv:DS,DSV": "secondary (u's attenuation sequence)",
+    "curve_z_faith.csv": "secondary (F's attenuation sequence; DSVu is the step matching Q2's rung)",
+    "m_ladder.csv:M0,M1,M2,M3u,M3F": "secondary (lattice scaffolding; the rungs the estimands are NOT read at)",
+    "m_ladder.csv:attenuation": "secondary (F's single attenuation step; probability scale in marginal_effects.csv)",
+    "m_ladder.csv:L-M2,L-M4": "rejected (the linear specification, tabulated so spec_search can be audited; NOT a result)",
+    "adequacy.csv": "diagnostic (discrimination, link, influence -- the checks the score equations do not already enforce; calibration is omitted because they do)",
     "depth_curve.csv": "descriptive (raw + operator-standardised depth profile)",
-    "occupancy.csv": "motivation exhibit",
+    "occupancy.csv": "motivation exhibit (variance x norm) + positivity limit (z_variance x z_faith)",
     "norm_variance.csv": "Stage A descriptive",
-    "faithfulness.csv": "Stage A descriptive",
-    "faith_grid.csv": "Stage A descriptive",
-    "diagnostic.csv": "design diagnostic (methods text)",
+    "norm_variance_stats.csv": "Stage A descriptive (why the raw norm cannot enter beside variance)",
+    "covariates.csv": "Stage A descriptive (shape + leverage, before and after each transform)",
+    "faith_by_variance.csv": "Stage A descriptive (C4's reliability channel)",
+    "diagnostic.csv": "design diagnostic (identification + syntax/geometry entanglement)",
     "op_signature.csv": "Stage A descriptive (bridge)",
+    "depth_op_mix.csv": "Stage A descriptive",
     "shuffle_null.csv": "falsification check",
 }
 
@@ -148,9 +205,6 @@ def parse_args() -> argparse.Namespace:
                    help="Variance-quantile bins for the residualisation.")
     p.add_argument("--curve-bins", type=int, default=10,
                    help="Quantile bins for the descriptive curves.")
-    p.add_argument("--var-adjust-bins", type=int,
-                   default=models.DEFAULT_VAR_ADJUST_BINS,
-                   help="Variance-quantile bins adjusting the vd faith curve.")
     p.add_argument("--bootstrap-samples", type=int, default=DEFAULT_B)
     p.add_argument("--seed", type=int, default=DEFAULT_SEED)
     return p.parse_args()
@@ -175,12 +229,21 @@ def main() -> None:
     depth_levels = sorted(int(d) for d in frame_raw["depth"].unique())
 
     # ---- Stage A: model-free audit ---------------------------------------- #
-    desc.occupancy(dfc).to_csv(out / "occupancy.csv", index=False)
+    # Two occupancy grids doing two different jobs: variance x norm motivates
+    # building u (the design supplies no norm contrast at fixed variance),
+    # z_variance x z_faith records a positivity limit on the F readings (high F
+    # never co-occurs with low V, and by C4 more data cannot fill that in).
+    pd.concat([desc.occupancy(dfc, rows="variance", cols="emb_norm"),
+               desc.occupancy(dfc, rows="z_variance", cols="z_faith")],
+              ignore_index=True).to_csv(out / "occupancy.csv", index=False)
     desc.norm_variance_curve(dfc).to_csv(out / "norm_variance.csv", index=False)
-    desc.faithfulness_stats(dfc).to_csv(out / "faithfulness.csv", index=False)
-    desc.faith_grid(dfc).to_csv(out / "faith_grid.csv", index=False)
+    desc.norm_variance_stats(dfc).to_csv(out / "norm_variance_stats.csv",
+                                         index=False)
+    desc.covariate_stats(dfc).to_csv(out / "covariates.csv", index=False)
+    desc.faith_by_variance(dfc).to_csv(out / "faith_by_variance.csv", index=False)
     desc.design_diagnostic(dfc).to_csv(out / "diagnostic.csv", index=False)
     desc.operator_signature(dfc).to_csv(out / "op_signature.csv", index=False)
+    desc.depth_operator_mix(dfc).to_csv(out / "depth_op_mix.csv", index=False)
 
     if args.shuffle_run_dir is not None:
         shuffle_greedy, shuffle_checks = load_greedy(args.shuffle_run_dir,
@@ -189,29 +252,48 @@ def main() -> None:
         desc.shuffle_null(dfc, shuffle_greedy).to_csv(out / "shuffle_null.csv",
                                                       index=False)
 
+    # ---- specification search: run FIRST, it chose the models -------------- #
+    models.spec_search(dfc).to_csv(out / "spec_search.csv", index=False)
+    models.spec_curves(dfc).to_csv(out / "spec_curves.csv", index=False)
+    models.model_adequacy(dfc).to_csv(out / "adequacy.csv", index=False)
+
     # ---- Stage B/C: point fits -------------------------------------------- #
     ladder = models.point_ladder(dfc)
     marginals = models.point_marginals(dfc)
     operators = models.point_operators(dfc)
     depth_curve = models.point_depth_curve(dfc)
 
-    def _curve_frame(col: str, label: str, **kw) -> pd.DataFrame:
-        frame = models.curve_descriptives(dfc, args.curve_bins, col=col,
-                                          label=label)
-        frame["adj_rate"] = models.curve_rates(
-            dfc, args.curve_bins, col=col, **kw)[frame["bin"].to_numpy()]
-        return frame
+    # The rejected linear specification, tabulated beside the search that
+    # rejected it. Without this the search cannot be checked; it is never read
+    # as a result and is tiered accordingly.
+    y_pt = dfc["correct"].to_numpy(dtype=np.float64)
+    rejected = []
+    for name, terms in models.REJECTED_LINEAR.items():
+        res = models._fit(y_pt, models._design(dfc, terms), cov_type="HC1")
+        rejected += [{"model": name, "term": t, "estimate": float(res.params[t]),
+                      "hc1_se": float(res.bse[t]), "ci_lo": np.nan,
+                      "ci_hi": np.nan} for t in res.params.index]
 
-    curve = _curve_frame("u", "u")
-    var_curve = _curve_frame("variance", "variance")
-    faith_curve = _curve_frame("relational_faithfulness", "faith")
+    # Extra per-bin means so a figure can label an axis in interpretable units
+    # while the bin positions stay on the scale the models actually use.
+    CURVE_EXTRA = {"z_variance": ("variance",), "u": (),
+                   "z_faith": ("relational_faithfulness",)}
+    curves = {}
+    for col, seq in models.CURVE_SEQ.items():
+        frame = models.curve_descriptives(dfc, args.curve_bins, col=col,
+                                          extra_means=CURVE_EXTRA[col])
+        bins_np = frame["bin"].to_numpy()
+        for step, adjust in seq:
+            frame[f"adj_{step}"] = models.curve_rates(
+                dfc, args.curve_bins, col=col, adjust=adjust)[bins_np]
+        frame["primary_step"] = models.CURVE_PRIMARY[col]
+        curves[col] = frame
 
     # ---- bootstrap (whole pipeline inside every resample) ------------------ #
     idx = index_matrix(len(frame_raw), b=args.bootstrap_samples, seed=args.seed)
     boot = models.bootstrap(frame_raw, idx, n_bins=args.n_bins,
                             curve_bins=args.curve_bins,
-                            depth_levels=depth_levels,
-                            var_adjust_bins=args.var_adjust_bins)
+                            depth_levels=depth_levels)
 
     def _ci_cols(key: str) -> tuple[float, float]:
         lo, hi = models.ci(boot[key])
@@ -240,7 +322,8 @@ def main() -> None:
                                  "term": f"{stat}_{term}",
                                  "estimate": est, "hc1_se": np.nan,
                                  "ci_lo": lo, "ci_hi": hi})
-    ladder = pd.concat([ladder, pd.DataFrame(att_rows)], ignore_index=True)
+    ladder = pd.concat([ladder, pd.DataFrame(att_rows), pd.DataFrame(rejected)],
+                       ignore_index=True)
     ladder.to_csv(out / "m_ladder.csv", index=False)
 
     # ---- marginal effects: per-rung AMEs + AME-scale trajectories ---------- #
@@ -271,39 +354,34 @@ def main() -> None:
     marginals.to_csv(out / "marginal_effects.csv", index=False)
 
     # ---- curves ------------------------------------------------------------ #
-    for frame, key, path in ((curve, "curve", "curve.csv"),
-                             (var_curve, "var_curve", "var_curve.csv"),
-                             (faith_curve, "faith_curve", "faith_curve.csv")):
-        lo, hi = models.ci(boot[key])
+    # Every step of every sequence carries its own interval, and each step's
+    # PAIRED difference from the primary is stored too. That difference is a
+    # contrast on the same targets, so its interval is far tighter than either
+    # step's marginal one -- quoting the marginals against an across-step
+    # movement would understate the evidence, not overstate it.
+    for col, frame in curves.items():
         bins_np = frame["bin"].to_numpy()
-        frame["ci_lo"] = lo[bins_np]
-        frame["ci_hi"] = hi[bins_np]
-        if key != "faith_curve":
-            frame.to_csv(out / path, index=False)
+        primary = models.CURVE_PRIMARY[col]
+        for step, _ in models.CURVE_SEQ[col]:
+            lo, hi = models.ci(boot[f"curve_{col}_{step}"])
+            frame[f"ci_lo_{step}"] = lo[bins_np]
+            frame[f"ci_hi_{step}"] = hi[bins_np]
+            if step != primary:
+                d = boot[f"curve_{col}_{step}"] - boot[f"curve_{col}_{primary}"]
+                lo, hi = models.ci(d)
+                frame[f"vs_primary_{step}"] = (frame[f"adj_{step}"]
+                                               - frame[f"adj_{primary}"])
+                frame[f"vs_primary_ci_lo_{step}"] = lo[bins_np]
+                frame[f"vs_primary_ci_hi_{step}"] = hi[bins_np]
+        frame.to_csv(out / f"curve_{col}.csv", index=False)
 
-    # Faithfulness vd variant: depth+variance-adjusted -- the exhibit matched
-    # to the u curve's implicit adjustment (u is variance-residualised by
-    # construction). Neither geometry curve is adjusted for the other,
-    # deliberately (shared-latent selection distortion).
-    bins_np = faith_curve["bin"].to_numpy()
-    faith_curve["adj_rate_vd"] = models.curve_rates(
-        dfc, args.curve_bins, col="relational_faithfulness",
-        var_bins=args.var_adjust_bins)[bins_np]
-    lo, hi = models.ci(boot["faith_curve_vd"])
-    faith_curve["vd_ci_lo"] = lo[bins_np]
-    faith_curve["vd_ci_hi"] = hi[bins_np]
-    faith_curve.to_csv(out / "faith_curve.csv", index=False)
-
-    # ---- operators (S rung) + depth profile -------------------------------- #
+    # ---- operators (M1) + depth profile ------------------------------------ #
     lo, hi = models.ci(boot["op_joint"])
-    operators["joint_ci_lo"] = lo
-    operators["joint_ci_hi"] = hi
+    operators["log_odds_ci_lo"] = lo
+    operators["log_odds_ci_hi"] = hi
     lo, hi = models.ci(boot["op_gap"])
     operators["gap_ci_lo"] = lo
     operators["gap_ci_hi"] = hi
-    lo, hi = models.ci(boot["op_single"])
-    operators["single_ci_lo"] = lo
-    operators["single_ci_hi"] = hi
     operators.to_csv(out / "operators.csv", index=False)
 
     pos = {d: k for k, d in enumerate(depth_levels)}
@@ -332,7 +410,6 @@ def main() -> None:
         "n_targets": len(frame_raw),
         "depth_levels": depth_levels,
         "frozen": {"n_bins": args.n_bins, "curve_bins": args.curve_bins,
-                   "var_adjust_bins": args.var_adjust_bins,
                    "faith_clip": FAITH_CLIP,
                    "bootstrap_samples": args.bootstrap_samples,
                    "seed": args.seed},
