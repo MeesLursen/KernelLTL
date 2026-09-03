@@ -191,7 +191,6 @@ class LTLKernel:
             raise ValueError('Traces tensor is empty, cannot evaluate similarity.')
 
         sqrt_N = float(N) ** 0.5
-        # Preallocated matrix of accepted +/-1 vectors scaled by 1/sqrt(N); one accepted anchor per row.
         accepted_norm = torch.empty((m, N), dtype=torch.float32, device=self.device)
         selected_formulas: list[Formula] = []
         n_accepted = 0
