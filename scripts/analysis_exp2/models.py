@@ -442,75 +442,155 @@ SPEC_BASE = [*HAS_COLS]        # D + S: everything computationally prior, and
                                # nothing else, so the search is not circular.
 
 
-def _spec_forms(df: pd.DataFrame, col: str, fine_bins: int) -> dict:
-    """Design columns for each candidate form of ``col``."""
-    q10 = pd.qcut(df[col], 10, labels=False, duplicates="drop")
-    qf = pd.qcut(df[col], fine_bins, labels=False, duplicates="drop")
+def primary_adjust(col: str) -> list[str]:
+    """The adjusters at the rung ``col`` is READ at.
+
+    Derived from CURVE_SEQ/CURVE_PRIMARY rather than restated, so the
+    specification figure, the reported curve and the fitted overlay cannot
+    drift apart.
+    """
+    return list(dict(CURVE_SEQ[col])[CURVE_PRIMARY[col]])
+
+
+def _form_cols(df: pd.DataFrame, col: str, form: str,
+               fine_bins: int = 20) -> dict:
+    """Design columns for one candidate form of ``col``."""
     v = df[col].to_numpy(dtype=np.float64)
-    forms = {
-        "linear": {col: v},
-        "quadratic": {col: v, f"{col}^2": v ** 2},
-        "cubic": {col: v, f"{col}^2": v ** 2, f"{col}^3": v ** 3},
-        "deciles": {f"d{k}": (q10 == k).to_numpy(np.float64)
-                    for k in range(1, int(q10.max()) + 1)},
-        f"bins{fine_bins}": {f"f{k}": (qf == k).to_numpy(np.float64)
-                             for k in range(1, int(qf.max()) + 1)},
-    }
-    return forms
+    if form == "linear":
+        return {col: v}
+    if form == "quadratic":
+        return {col: v, f"{col}_sq": v ** 2}
+    if form == "cubic":
+        return {col: v, f"{col}_sq": v ** 2, f"{col}_cu": v ** 3}
+    nb = 10 if form == "deciles" else fine_bins
+    q = pd.qcut(df[col], nb, labels=False, duplicates="drop")
+    return {f"{col}_b{k}": (q == k).to_numpy(np.float64)
+            for k in range(1, int(q.max()) + 1)}
+
+
+_NPARAM = {"linear": 1, "quadratic": 2, "cubic": 3, "deciles": 9}
+
+
+def _fit_with(df: pd.DataFrame, y: np.ndarray, base: list[str],
+              extra: dict) -> tuple[float, int]:
+    X = _design(df, base)
+    for k, v in extra.items():
+        X[k] = v
+    return float(_fit(y, X).llf), int(X.shape[1])
 
 
 def spec_search(dfc: pd.DataFrame, *, fine_bins: int = 20) -> pd.DataFrame:
-    """The ladder that chose the specification. Reported in full, not summarised.
+    """The search that chose the specification. Two stages, reported in full.
 
-    Every candidate form of every geometry covariate is tested against two
-    flexible references -- deciles and a ``fine_bins`` cut -- over a common
-    D + S base. Reporting both references is what exposes that the quadratic is
-    adequate for V at decile resolution and inadequate at 20 bins, which a
-    single reference would have hidden.
+    STAGE 1 -- V, alone. V is read at M2, whose adjustment set is D + S and
+    contains no geometry, so V's form depends on no other covariate's and can
+    be settled first. Candidate forms are tested against decile indicators by
+    likelihood ratio, and against a ``fine_bins`` reference as well, because
+    reporting only one flexible reference would hide that the quadratic is
+    adequate at decile resolution and not below it.
+
+    STAGE 2 -- u and F, JOINTLY. These two cannot be settled separately: C2
+    makes them dependent through the shared latent, so each sits in the other's
+    reporting rung and each one's test would need the other's form. Rather than
+    iterate to a fixed point -- which needs a starting value and an argument
+    that the fixed point is unique -- the full 3x3 grid of forms is fitted with
+    V held at its Stage 1 form. Every cell is ONE model, so every cell has one
+    log-likelihood and one AIC and the PAIR is scored as a unit, which a
+    coordinate search cannot do. Selection is the most parsimonious cell not
+    rejected against the most flexible one; AIC is reported beside it as an
+    independent criterion rather than a restatement of the same test.
+
+    Rows flagged ``at_reporting_base`` are the per-covariate ladders as they
+    stand at the rung each covariate is actually read at -- V's Stage 1 rows,
+    and the Stage 2 slices holding the other covariate at its selected form.
+    Those are the numbers the specification figure quotes.
     """
     y = dfc["correct"].to_numpy(dtype=np.float64)
-    rows = []
-    for col in ("z_variance", "u", "z_faith"):
-        forms = _spec_forms(dfc, col, fine_bins)
-        fits = {}
-        for name, extra in forms.items():
-            X = _design(dfc, SPEC_BASE)
-            for k, vec in extra.items():
-                X[k] = vec
-            fits[name] = (_fit(y, X), X.shape[1])
-        for ref in ("deciles", f"bins{fine_bins}"):
-            ref_fit, ref_k = fits[ref]
-            for name, (fit, k) in fits.items():
-                if k >= ref_k:
-                    continue
-                lr = 2.0 * (ref_fit.llf - fit.llf)
-                dfree = ref_k - k
-                rows.append({"term": col, "form": name, "reference": ref,
-                             "lr": float(lr), "df": int(dfree),
-                             "p": float(stats.chi2.sf(lr, dfree))})
+    rows: list[dict] = []
+
+    # ---- Stage 1: V, at its own rung (D + S, no geometry) ------------------ #
+    base1 = [*HAS_COLS]
+    fits1 = {f: _fit_with(dfc, y, base1, _form_cols(dfc, "z_variance", f, fine_bins))
+             for f in ("linear", "quadratic", "cubic", "deciles", "fine")}
+    for ref in ("deciles", "fine"):
+        ref_llf, ref_k = fits1[ref]
+        for form, (llf, k) in fits1.items():
+            if k >= ref_k:
+                continue
+            lr, d = 2.0 * (ref_llf - llf), ref_k - k
+            rows.append({"stage": "1_variance", "term": "z_variance",
+                         "form": form, "form_u": None, "form_z_faith": None,
+                         "base": "D+S", "reference": ref, "params": k,
+                         "lr": float(lr), "df": int(d),
+                         "p": float(stats.chi2.sf(lr, d)),
+                         "aic": -2.0 * llf + 2 * k,
+                         "at_reporting_base": ref == "deciles"})
+
+    # ---- Stage 2: u and F jointly, V fixed at its Stage 1 form ------------- #
+    base2 = [*HAS_COLS, *V_TERMS]
+    FORMS = ("linear", "quadratic", "deciles")
+    grid = {}
+    for fu in FORMS:
+        for ff in FORMS:
+            grid[(fu, ff)] = _fit_with(
+                dfc, y, base2, {**_form_cols(dfc, "u", fu),
+                                **_form_cols(dfc, "z_faith", ff)})
+    ref_llf, ref_k = grid[("deciles", "deciles")]
+    for (fu, ff), (llf, k) in grid.items():
+        d = ref_k - k
+        lr = 2.0 * (ref_llf - llf)
+        rows.append({"stage": "2_grid", "term": "u+z_faith", "form": None,
+                     "form_u": fu, "form_z_faith": ff, "base": "D+S+V",
+                     "reference": "deciles+deciles",
+                     "params": _NPARAM[fu] + _NPARAM[ff],
+                     "lr": float(lr), "df": int(d),
+                     "p": float(stats.chi2.sf(lr, d)) if d > 0 else np.nan,
+                     "aic": -2.0 * llf + 2 * k, "at_reporting_base": False})
+
+    # ---- Stage 2 slices: each covariate at the rung it is READ at ---------- #
+    # Holding the other at its selected form, which is what "the form u needs,
+    # given the model u is reported in" actually means.
+    for target, other, other_form in (("u", "z_faith", "linear"),
+                                      ("z_faith", "u", "deciles")):
+        ref_llf, ref_k = grid[(("deciles", other_form) if target == "u"
+                               else (other_form, "deciles"))]
+        for form in ("linear", "quadratic"):
+            llf, k = grid[((form, other_form) if target == "u"
+                           else (other_form, form))]
+            lr, d = 2.0 * (ref_llf - llf), ref_k - k
+            rows.append({"stage": "3_reporting", "term": target, "form": form,
+                         "form_u": None, "form_z_faith": None,
+                         "base": f"D+S+V+{other}({other_form})",
+                         "reference": "deciles", "params": k,
+                         "lr": float(lr), "df": int(d),
+                         "p": float(stats.chi2.sf(lr, d)),
+                         "aic": -2.0 * llf + 2 * k, "at_reporting_base": True})
     return pd.DataFrame(rows)
 
 
 def spec_curves(dfc: pd.DataFrame, *, n_grid: int = 60,
                 span: tuple[float, float] = (0.5, 99.5)) -> pd.DataFrame:
-    """Fitted response curves for the linear and quadratic forms, D + S base.
+    """Fitted response curves for the linear and quadratic forms.
 
-    The specification figure overlays these on the decile points from
-    ``curve_*.csv``'s DS step -- which is the SAME base, so the points and the
-    lines are comparable rather than merely adjacent. Marginally standardised,
-    like everything else on the probability scale.
+    Each covariate is fitted over the adjusters of the rung it is READ at
+    (``primary_adjust``), not over a common base. That is the model the form is
+    used in, so it is the model whose fit the figure should show -- and it
+    makes the specification figure's decile points identical to the curve
+    figure's reported curve, rather than differing by up to 2 pp with nothing
+    on either figure explaining why.
 
-    Emitted for every covariate under both forms even where only one is used:
-    for u the selected form is the decile indicators, so the "fit" to draw is
-    the decile curve itself and only the rejected linear line is overlaid.
+    Emitted for both forms everywhere even where only one is used: for u the
+    selected form is the decile indicators, so the "fit" to draw is the decile
+    curve itself and only the rejected linear line is overlaid.
     """
     y = dfc["correct"].to_numpy(dtype=np.float64)
     rows = []
     for col in ("z_variance", "u", "z_faith"):
+        base = primary_adjust(col)
         lo, hi = np.percentile(dfc[col].to_numpy(), span)
         grid = np.linspace(lo, hi, n_grid)
         for form in ("linear", "quadratic"):
-            X = _design(dfc, SPEC_BASE)
+            X = _design(dfc, base)
             X[col] = dfc[col].to_numpy(dtype=np.float64)
             if form == "quadratic":
                 X[f"{col}_sq"] = X[col] ** 2
@@ -520,7 +600,8 @@ def spec_curves(dfc: pd.DataFrame, *, n_grid: int = 60,
                 Xg[col] = g
                 if form == "quadratic":
                     Xg[f"{col}_sq"] = g ** 2
-                rows.append({"term": col, "form": form, "x": float(g),
+                rows.append({"term": col, "form": form, "base": "+".join(base),
+                             "x": float(g),
                              "rate": float(_sigmoid(Xg.to_numpy() @ params).mean())})
     return pd.DataFrame(rows)
 

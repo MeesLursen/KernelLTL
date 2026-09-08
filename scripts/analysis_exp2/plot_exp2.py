@@ -46,6 +46,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 sys.path.insert(0, str(_HERE.parent / "analysis_exp1"))
 from load import load_greedy                                          # noqa: E402
+import models                                                         # noqa: E402
 from frame import (OPERATORS, build_frame, derive_covariates,          # noqa: E402
                    load_formulas)
 
@@ -85,6 +86,10 @@ RAW_AXIS = {"variance": "satisfaction variance $p(1-p)$"}
 # because a truncated one inflates the apparent slope of effects that are
 # small against the 0.374 base rate.
 PCORRECT_YLIM = (0.0, 0.55)
+
+# The threshold the specification search selects on. Named once so the verdict
+# in a panel's title and the "rejected" labels in its legend cannot disagree.
+ALPHA_SPEC = 0.05
 
 
 def style(ax, *, grid_axis: str = "both") -> None:
@@ -142,10 +147,23 @@ class Tables:
         t = self["covariates"]
         return float(t.loc[t["covariate"] == covariate, field].iloc[0])
 
-    def spec(self, term: str, form: str, reference: str = "deciles") -> pd.Series:
+    def spec(self, term: str, form: str) -> pd.Series:
+        """A candidate form's test AT THE RUNG THE COVARIATE IS READ AT.
+
+        `at_reporting_base` marks those rows: V's Stage 1 ladder (its rung has
+        no geometry) and the Stage 2 slices holding the other geometry term at
+        its selected form. Quoting a test run at some other base would be
+        quoting a different model than the panel draws.
+        """
         t = self["spec_search"]
         sel = t[(t["term"] == term) & (t["form"] == form)
-                & (t["reference"] == reference)]
+                & t["at_reporting_base"].astype(bool)]
+        return sel.iloc[0]
+
+    def grid_cell(self, form_u: str, form_f: str) -> pd.Series:
+        t = self["spec_search"]
+        sel = t[(t["stage"] == "2_grid") & (t["form_u"] == form_u)
+                & (t["form_z_faith"] == form_f)]
         return sel.iloc[0]
 
     def grid(self, rows: str, cols: str) -> np.ndarray:
@@ -158,6 +176,21 @@ class Tables:
 def pfmt(p: float) -> str:
     """p-values: three decimals, or scientific below 0.001."""
     return f"{p:.3f}" if p >= 1e-3 else f"{p:.0e}".replace("e-0", "e-")
+
+
+def adjust_label(col: str) -> str:
+    """What the reported curve is adjusted for, in publication terms.
+
+    Derived from CURVE_SEQ so it cannot drift from the adjusters actually used.
+    Deliberately names the COVARIATES rather than the internal rung (M2, M4):
+    those labels are bookkeeping for the analysis and mean nothing to a reader
+    of the figure.
+    """
+    adj = dict(models.CURVE_SEQ[col])[models.CURVE_PRIMARY[col]]
+    geo = [n for n, present in (("V", "z_variance" in adj),
+                                ("u", any(a.startswith("u_d") for a in adj)),
+                                ("F", "z_faith" in adj)) if present]
+    return "$D + S" + "".join(" + " + g for g in geo) + "$"
 
 
 def xlim_for(T: Tables, col: str) -> tuple[float, float]:
@@ -393,12 +426,14 @@ def fig05_specification(T: Tables, out: Path) -> None:
         style(ax)
         cv = T[f"curve_{col}"]
         x = cv[f"mean_{col}"].to_numpy()
-        # The decile points and the fitted lines share the D + S base, so this
-        # is a like-for-like comparison rather than two adjacent displays.
-        ax.fill_between(x, cv["ci_lo_DS"], cv["ci_hi_DS"], color=C1, alpha=0.13,
-                        linewidth=0)
-        ax.plot(x, cv["adj_DS"], color=C1, lw=0, marker="o", ms=5.5, mfc=C1,
-                mec=SURFACE, mew=1.3, zorder=5, label="decile points (D+S)")
+        # Points and fitted lines both sit at the rung the covariate is READ
+        # at, so the comparison is like-for-like AND these are the same points
+        # fig06 reports -- the two figures stack rather than merely adjoin.
+        prim = cv["primary_step"].iloc[0]
+        ax.fill_between(x, cv[f"ci_lo_{prim}"], cv[f"ci_hi_{prim}"], color=C1,
+                        alpha=0.13, linewidth=0)
+        ax.plot(x, cv[f"adj_{prim}"], color=C1, lw=0, marker="o", ms=5.5, mfc=C1,
+                mec=SURFACE, mew=1.3, zorder=5, label="decile points")
         # The linear line's verdict is per-panel: it is the SELECTED form for
         # F and the rejected one for V and u. Labelling it "rejected"
         # everywhere contradicted F's own title.
@@ -407,12 +442,21 @@ def fig05_specification(T: Tables, out: Path) -> None:
         ax.plot(lin["x"], lin["rate"], color=C1 if lin_selected else C2, lw=1.8,
                 ls="-" if lin_selected else "--", zorder=4,
                 label="linear (selected)" if lin_selected else "linear (rejected)")
+        # Draw the quadratic when it is the selected form OR when it was
+        # actually rejected. Not otherwise: for F it survives (p = 0.45) and is
+        # merely less parsimonious than the line, so labelling it "rejected"
+        # would misstate its own test.
+        quad_p = float(T.spec(col, "quadratic")["p"])
         if SEL[col] == "quadratic":
             q = sc[(sc["term"] == col) & (sc["form"] == "quadratic")]
             ax.plot(q["x"], q["rate"], color=C1, lw=1.8, zorder=4,
                     label="quadratic (selected)")
-        elif SEL[col] == "deciles":
-            ax.plot(x, cv["adj_DS"], color=C1, lw=1.6, zorder=3,
+        elif quad_p < ALPHA_SPEC:
+            q = sc[(sc["term"] == col) & (sc["form"] == "quadratic")]
+            ax.plot(q["x"], q["rate"], color=C2, lw=1.8, ls=":", zorder=4,
+                    label="quadratic (rejected)")
+        if SEL[col] == "deciles":
+            ax.plot(x, cv[f"adj_{prim}"], color=C1, lw=1.6, zorder=3,
                     label="deciles (selected)")
         row = T.spec(col, "linear")
         # Both rejected covariates report the SAME second test -- the quadratic
@@ -422,7 +466,8 @@ def fig05_specification(T: Tables, out: Path) -> None:
         # (V is adequate only at decile resolution), not a panel subtitle.
         extra = ("" if SEL[col] == "linear" else
                  f"; quadratic residual $p = {pfmt(T.spec(col, 'quadratic')['p'])}$")
-        verdict = "linearity holds" if row["p"] > 0.05 else "linearity REJECTED"
+        verdict = ("linearity holds" if row["p"] > ALPHA_SPEC
+                   else "linearity REJECTED")
         title(ax, f"{'abc'[list(SEL).index(col)]}  {LABEL[col]}: {verdict}",
               f"linear vs deciles: LR {row['lr']:.2f} on {int(row['df'])} df, "
               f"$p = {pfmt(row['p'])}${extra}")
@@ -444,7 +489,7 @@ def fig06_readings(T: Tables, out: Path) -> None:
     seq = {"z_variance": ("DS", "DSu", "DSF"),
            "u": ("DS", "DSV", "DSVF"),
            "z_faith": ("DS", "DSV", "DSVu")}
-    legend_txt = {"DS": "D+S", "DSu": "+u", "DSF": "+F  (a step too far)",
+    legend_txt = {"DS": "D+S", "DSu": "+u", "DSF": "+F",
                   "DSV": "+V", "DSVF": "+V, +F", "DSVu": "+V, +u"}
     me = T["marginal_effects"].set_index(["model", "term"])
     ml = T["m_ladder"].set_index(["model", "term"])
@@ -474,15 +519,19 @@ def fig06_readings(T: Tables, out: Path) -> None:
                                 color=colour, alpha=0.13, linewidth=0)
         ax.set_xlabel(AXIS[col], fontsize=8.5, color=INK)
         ax.set_xlim(*xlim_for(T, col))
+        # Subtitles carry only what this panel REPORTS: the rung its heavy
+        # curve is read at, and -- for F alone -- the scalar that goes with it.
+        # "95 % percentile bootstrap" is identical on all three and belongs in
+        # the caption; why V and u carry no scalar is an S1 argument for the
+        # text, not a statistic.
+        lines = [f"adjusted for {adjust_label(col)}"]
         if col == "z_faith":
-            b = ml.loc[("M4", "z_faith")]
             a = me.loc[("M4", "z_faith")]
-            sub = (rf"$\beta_F = {b['estimate']:.3f}$ "
-                   rf"$[{b['ci_lo']:+.3f}, {b['ci_hi']:+.3f}]$; "
-                   rf"AME ${100 * a['estimate']:+.2f}$ pp "
-                   rf"$[{100 * a['ci_lo']:+.2f}, {100 * a['ci_hi']:+.2f}]$")
+            lines.append(f"AME ${100 * a['estimate']:+.2f}$ pp "
+                         f"$[{100 * a['ci_lo']:+.2f}, {100 * a['ci_hi']:+.2f}]$")
         else:
-            sub = "no scalar: the relationship is non-monotone, so an average\nshift effect would not measure its strength (S1)"
+            lines.append("no scalar summary")
+        sub = "\n".join(lines)
         title(ax, f"{'abc'[k]}  {LABEL[col]}", sub)
         ax.legend(frameon=False, fontsize=7, labelcolor=INK_2, loc="lower right")
     axes[0].set_ylabel("P(correct)", fontsize=8.5, color=INK)
