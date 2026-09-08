@@ -27,7 +27,7 @@
 
 \end{abstract}
 
-% If you want to, add acknowledgements *after* your defense.
+% If you want to, add acknowledgemensatts *after* your defense.
 % Do not add acknowledgements when you upload to DataNose.
 % \begin{acknowledgements}
 % \end{acknowledgements}
@@ -102,49 +102,6 @@
             \end{tabular}
         \end{table}
     
-    
-    \section{Policy-Gradient Reinforcement Learning}\label{sec:prelim_rl}
-    
-        \begin{itemize}
-            \item Sequence generation as an MDP: state $=$ prefix $+$ conditioning,
-                  action $=$ next token, episode $=$ generated sequence, terminal
-                  (sequence-level) reward $R(\hat{\bm y})$.
-                  % Keep the reward ABSTRACT here; concrete Hamming reward is Ch.6.
-            \item The RL objective:
-            \begin{equation}\label{eq:prelim_rl_objective}
-                J(\bm\theta) = \mathbb{E}_{\hat{\bm y}\sim\pi_{\bm\theta}}\!\left[R(\hat{\bm y})\right].
-            \end{equation}
-            \item REINFORCE / score-function estimator and its unbiasedness:
-            \begin{equation}\label{eq:prelim_reinforce}
-                \nabla_{\bm\theta} J(\bm\theta)
-                = \mathbb{E}_{\hat{\bm y}\sim\pi_{\bm\theta}}\!\left[R(\hat{\bm y})\,\nabla_{\bm\theta}\log\pi_{\bm\theta}(\hat{\bm y})\right].
-            \end{equation}
-            \cite{williams_simple_1992}
-                  % The unbiased-estimator fact the whole RL argument rests on.
-                  % Consumed by: 6.5.4 Moves 1-2; appendix RE-gradient.
-            \item Variance reduction via baselines: advantage $A = R - b$; any
-                  state-independent (or value-function) baseline leaves
-                  \eqref{eq:prelim_reinforce} unbiased; EMA/running-mean baseline as the
-                  canonical instance.
-                  % Consumed by: RB variant (6.5.3).
-            \item Value functions and actor--critic: state-value $V(s)$, bootstrapping,
-                  the actor/critic split. % Consumed by: GAE critic.
-            \item Generalised Advantage Estimation: the $(\gamma,\lambda)$ estimator and
-                  the bias--variance interpretation of $\lambda$. \cite{schulman_high-dimensional_2016}
-                  % Consumed by: 6.5.3 lambda in {1.0, 0.9} contrast.
-            \item The \emph{credit-assignment problem}: a single terminal reward over a
-                  token sequence cannot, on its own, localise which actions earned it.
-                  \cite{minsky_steps_1961, sutton_temporal_1984}
-                  % Consumed by: 6.5.4 Move 4 (near-miss) and the RB->GAE motivation.
-        \end{itemize}
-    
-    % --- Deliberately EXCLUDED from preliminaries (lives in Ch.6 / appendix) ---
-    %   * concrete reward (1 - normalised Hamming) and the hybrid valid/invalid loss
-    %   * the alpha-mixing / multi-objective framing (dropped: stale)
-    %   * Delta z_{t,.} weight-update derivations; subset-optimality proof (appendix)
-    %   * RB / GAE variants by name (6.5.3)
-    
-
 
 \chapter{Related Work}
     \section{Symbolic Regression and Formula Mining for LTL}
@@ -152,8 +109,6 @@
     \section{Transformer Based Methods}
     
     \section{Kernel Embeddings and Inversion Using Transformers}\label{sec:Kernel_Embeddings_and_Inversion}
-    
-    \section{Reinforcement Learning Based Finetuning}
     
     \section{Our Contributions}
 
@@ -428,21 +383,28 @@
 
     
     \section{Anchor Set Selection}\label{sec:anchor_selection}
-    Having established the embedding kernel, we now turn to the selection of the anchor set $\Psi = \{\psi_1, \dots, \psi_M\}$. To make the semantic embedding as expressive as possible, the anchors must cover a diverse and representative array of LTL behaviors, effectively spanning the space of possible trace evaluations. 
+    Having established the embedding kernel, we now turn to the selection of the anchor set $\Psi = \{\psi_1, \dots, \psi_M\}$. To make the semantic embedding as expressive as possible, the anchors must cover a diverse and representative array of LTL behaviors, effectively spanning the space of possible trace evaluations.
     
     While it might seem natural to select anchors that are mutually uncorrelated using the covariance kernel $k^{\cov}$, doing so discards crucial structural information. Because $k^{\cov}$ explicitly centers satisfaction vectors and strips away base rates, it is blind to absolute location in the trace space. For the purpose of providing a robust coordinate system, we want our selection metric to be sensitive to absolute truth values and spatial dispersion.
     
-    If we want our anchors to be maximally dispersed across the Boolean hypercube $\{0,1\}^N$, the native measure by which to measure (dis)similarity is the Hamming distance, which counts the number of traces on which two formulae disagree. Returning to our signed dot product kernel $k^\pm$, we find it maps perfectly onto this objective. By accumulating the sum of agreements minus the sum of disagreements, $k^\pm$ acts as an exact inverse measure of Hamming distance:
+    If we want our anchors to be maximally dispersed across the Boolean hypercube $\{0,1\}^N$, the native measure by which to measure (dis)similarity is the Hamming distance, which counts the number of traces on which two formulae disagree. Formally, over two satisfaction vectors $\satvec_\phi, \satvec_\psi \in \{0,1\}^N$, this is
+    \begin{equation}
+        D_H(\satvec_\phi, \satvec_\psi) \;=\; \big|\{\, i \in \{1,\dots,N\} : \satvec_\phi^{\,i} \neq \satvec_\psi^{\,i} \,\}\big| \;=\; \big\lVert \satvec_\phi - \satvec_\psi \big\rVert_1,
+        \label{eq:hamming_distance}
+    \end{equation}
+    the number of trace positions at which the two vectors take different truth values. Since the vectors are binary, this coincides with their $\ell_1$ distance.
+    
+    Returning to our signed dot product kernel $k^\pm$, we find it maps perfectly onto this objective. By accumulating the sum of agreements minus the sum of disagreements, $k^\pm$ acts as an exact inverse measure of Hamming distance:
     \begin{equation}
         k^\pm(\phi, \psi) = N - 2 D_H(\satvec_\phi, \satvec_\psi)
     \end{equation}
     By minimizing their pairwise $k^\pm$ similarity, we directly maximize the Hamming distance between our anchors, pushing their satisfaction vectors apart and providing broad structural coverage of the trace space.
 
-    To make this precise, let us outline the technical details of the sampling algorithm used to construct $\Psi$. We employ a rejection-sampling scheme that enforces a strict upper bound on allowable similarity. Using the same formula sampling algorithm from~\ref{alg:formula_sampling_algorithm}, the construction proceeds as follows. We set a strictly positive similarity threshold $\tau \in (0, 1)$ and initialize an empty anchor set $\Psi$. The algorithm iteratively evaluates a randomly generated candidate formula $\psi$ and computes its signed satisfaction vector $\satvec_\psi^\pm = 2\satvec_\psi - \mathbf{1}$. Because $\satvec_\psi^\pm \in \{-1, 1\}^N$, its Euclidean norm is strictly $\sqrt{N}$. We then measure the candidate's proximity to the existing ensemble by computing the normalized signed dot product against every accepted anchor $\psi_i \in \Psi$:
+    To make this precise, let us outline the technical details of the sampling algorithm used to construct $\Psi$. We employ a rejection-sampling scheme that enforces a strict upper bound on allowable similarity. Using the same formula sampling algorithm from~\ref{alg:formula_sampling_algorithm}, the construction proceeds as follows. We set a similarity threshold $\tau \in (0, 1)$ and initialize an empty anchor set $\Psi$. The algorithm iteratively evaluates a randomly generated candidate formula $\psi$ and computes its signed satisfaction vector $\satvec_\psi^\pm = 2\satvec_\psi - \mathbf{1}$. Because $\satvec_\psi^\pm \in \{-1, 1\}^N$, its Euclidean norm is strictly $\sqrt{N}$. We then measure the candidate's proximity to the existing ensemble by computing the normalized signed dot product against every accepted anchor $\psi_i \in \Psi$:
     \begin{equation}
         \text{sim}^\pm(\psi, \psi_i) = \frac{1}{N} k^\pm(\psi, \psi_i) = \frac{\satvec_\psi^\pm \cdot \satvec_{\psi_i}^\pm}{\Vert \satvec_\psi^\pm \Vert \; \Vert \satvec_{\psi_i}^\pm \Vert}
     \end{equation}
-    If the maximum similarity score to any previously selected anchor exceeds $\tau$, the candidate formula gets rejected. If the score falls below our threshold, the candidate is appended to $\Psi$. This process iterates, resampling and rejecting as necessary, until exactly $M$ anchors have been acquired. 
+    If the absolute similarity score to any previously selected anchor exceeds $\tau$, i.e. if $|\text{sim}^\pm(\psi, \psi_i)| > \tau$, then the candidate formula gets rejected. If the absolute similarity score falls below our threshold, the candidate is appended to $\Psi$. This process iterates, resampling and rejecting as necessary, until exactly $M$ anchors have been chosen. 
 
     We note, however, a structural limitation in this greedy formulation. By strictly thresholding on the upper bound ($\text{sim}^\pm > \tau$), the algorithm explicitly rejects candidate formulae that are too closely aligned with existing anchors, but fails to filter on the negative extreme. Consequently, a candidate that exhibits highly \emph{negative} similarity to an existing anchor may still be accepted. While this does not violate the goal of maximizing metric dispersion directly, accepting a formula and its negation essentially commits two anchor dimensions to representing the exact same axis of the trace space. We will revisit the implications of this redundancy in Section~\ref{sec:limitations}.
 
@@ -497,7 +459,7 @@
     
     \subsection{Kernel instantiation}\label{sec:kernel_instantiation}
     
-    All the data used in our experiments was produced by our implementation \texttt{KernelLTL} of the covariance kernel detailed in chapter~\ref{chap:kernel}. It was built once and persisted so that every part of the training process could make use of the same anchor set $\Psi$, trace sample $\widehat \Sigma$, feature matrix $F$, and random number generator $RNG$. The kernel was created with a sample of traces of length $T = 20$ with $\mathit{AP} = 5$ atomic propositions, with formulae evaluation fixed at the time index $t_0 = 0$, under a master $RNG$ seed of $1$. The anchor set comprised $M = 1024$ formulae selected by the $k^{\pm}$ rejection scheme detailed in Section~\ref{sec:anchor_selection}, at similarity threshold $\tau = 0.6$, with candidates drawn from the sampler of Algorithm~\ref{alg:formula_sampling_algorithm} at maximum depth $6$.
+    All the data used in our experiments was produced by our implementation \texttt{KernelLTL} of the covariance kernel detailed in chapter~\ref{chap:kernel}. It was built once and persisted so that every part of the training process could make use of the same anchor set $\Psi$, trace sample $\widehat \Sigma$, feature matrix $F$, and random number generator $RNG$. The kernel was created with a sample of traces of length $T = 20$ with $\mathit{AP} = 5$ atomic propositions, with formulae evaluation fixed at the time index $t_0 = 0$, under a master $RNG$ seed of $1$. The anchor set comprised $M = 1024$ formulae selected by the $k^{\pm}$ rejection scheme detailed in Section~\ref{sec:anchor_selection}, at similarity threshold $\tau = 0.5$, with candidates drawn from the sampler of Algorithm~\ref{alg:formula_sampling_algorithm} at maximum depth $6$.
     
     The trace sample was fixed at $N = 500{,}000$, drawn from the mixture distribution of Section~\ref{sec:trace_sampling_details}. The mixture consisted of $70\%$ high-variance, i.i.d.\ Bernoulli$(0.5)$ traces and the remaining $30\%$ were the low-variance, temporally-correlated Markov traces with flip probability $p_{\text{flip}}=0.1$. The size of the trace sample $N$ was taken above the lower bound of Equation~\eqref{eq:n_min}. Instantiated at $M = 1024$, tolerance $\eta = 0.005$, and confidence $\delta = 0.01$, the bound requires a strict minimum of $N \ge 258{,}469$ traces. We set $N = 500{,}000$, approximately twice this minimum. At this sample size, with probability at least $99\%$, each of the empirical base- and joint-rate values involved in calculating the embedding vector $\emb(\phi)$ is within $\approx 0.0036$ and each kernel coordinate $k^{\cov}(\phi, \psi_j)$ within $\approx 0.011$ of their respective true values (Appendix~\ref{app:tolerance_derivation}). With the range of $k^{\cov}$ being $[-\tfrac14, \tfrac14]$, this amounts to a deviation of (at most) approximately $2\%$.
     
@@ -525,10 +487,38 @@
     \end{table}
     
     \subsection{Data collection}\label{sec:data_collection}
-    [IN THIS SECTION WE NEED TO GIVE AN OVERVIEW OF ALL OF THE COLLECTED METRICS THAT HAVE ACTUALLY BEEN USED TO PERFORM THE ANALYSES LATER IN THIS CHAPTER $>>>$ WE HAVE TO REVISIT THIS AT A LATER TIME] 
-    
-    (NOTES: - metrics that rely on raw data collected per generated token was first averaged over the generated sequence. Averaged reported of these metrics are thus the average \textit{per-sequence} metric.
-    \NEW{Our primary notion of correctness is \emph{semantic equivalence}: a generation is correct iff its satisfaction vector matches the target's exactly, i.e.\ a normalised Hamming distance of zero over the trace sample. Around this we report the mean semantic distance (the continuous normalised Hamming distance, to which invalid generations contribute the maximum of $1$), the invalid rate as a hygiene measure, the exact-string-match rate, the unbiased pass@$k$ curve for $k = 1,\dots,5$, the syntax--semantics gap (semantic-equivalence minus exact-match rate), and the distinct-correct count (the number of distinct correct syntaxes a model emits per target). To characterise how finetuning reshapes the policy we additionally track the KL divergence from the base policy, the policy entropy, and the Self-BLEU diversity of the sampled generations.}
+    The two validation passes of Section~\ref{sec:model_validation} write the raw, per-generation records detailed in Table~\ref{tab:validation_record_schema}. Each pass emits one flat stream of records. The greedy pass generates a single sequence per target and therefore writes one record per target, giving $4{,}000$ records in total. The sampling pass draws $K = 5$ sequences per target and writes one record per draw, flattened across targets, giving $4{,}000 \times 5 = 20{,}000$ records.
+
+    \begin{table}[ht]
+        \centering
+        \caption{Fields recorded for each generation.}
+        \label{tab:validation_record_schema}
+        \begin{tabular}{l l p{7.4cm}}
+            \toprule
+            Field & Pass & Description \\
+            \midrule
+            \texttt{formula\_id}                & both    & index of the target in the validation dataset and the key to which every record is tied \\
+            \texttt{k\_idx}                     & top-$K$ & index $0,\dots,K{-}1$ of the draw among a target's $K$ samples \\
+            \texttt{target\_depth}              & both    & AST depth of the target formula \\
+            \texttt{target\_formula\_str}       & greedy  & canonical string of the target formula \\
+            \texttt{generated\_formula\_str}    & both    & string decoded from the generated sequence \\
+            \texttt{generated\_depth}           & both    & depth of the generated AST if valid; \texttt{null} when it fails to parse \\
+            \texttt{token\_ids}                 & both    & exact token sequence emitted by the decoder (boundary markers kept, trailing padding removed) \\
+            \texttt{is\_invalid}                & both    & indicates the generated string does not parse to a well-formed formula \\
+            \texttt{is\_semantic\_equivalent}   & both    & indicates that generation and target agree on every trace in $\widehat\Sigma$ \\
+            \texttt{semantic\_distance}         & both    & normalized Hamming distance between the two satisfaction vectors over $\widehat\Sigma$ \\
+            \bottomrule
+        \end{tabular}
+    \end{table}
+
+    Both the \texttt{target\_depth} and the \texttt{generated\_depth} metrics are computed in accordance with the definition given in Section~\ref{sec:formula_representation}. The \texttt{is\_invalid} indicator shows whether the generated sequence successfully parses to a well-formed LTL formula, while the \texttt{is\_semantic\_equivalent} indicator shows whether any such well-formed formula agrees with respect to the satisfaction value on every trace in $\widehat{\Sigma}$ with the target formula. Finally, for a valid generation $\hat\phi$ against target $\phi$, the \texttt{semantic\_distance} records the normalized Hamming distance from the generated formula's satisfaction vector to that of the target's:
+    \begin{equation}
+        \texttt{semantic\_distance}(\phi, \hat\phi) \;=\; \frac{1}{N}\sum_{i=1}^{N} \mathbf{1}\!\left[\,\satvec_{\phi}^{\,i} \neq \satvec_{\hat\phi}^{\,i}\,\right],
+        \label{eq:semantic_distance}
+    \end{equation}
+
+    Every metric we report later in this chapter is a deterministic function of these records, computed post-hoc and defined at the point where they first appear in the analyses.
+
     
     \subsection{Statistical conventions}\label{sec:stats_framework}
     Given the size of our dataset, $n = 4{,}000$ samples, statistical significance is easily achieved. Were we only to draw conclusions based on the significance of any given statistic, we would be painting a misleading picture about the true importance of the result. Therefore, throughout this chapter, all of our discussions will be centered around effect sizes and confidence interval bounds rather than p-values. Every confidence interval we report is a $95\%$ interval ($\alpha = 0.05$), produced in one of two ways according to the quantity it bounds. For sample statistics, we use the \emph{percentile bootstrap}: we resample the targets with replacement to the original sample size, recompute the statistic, repeat $10{,}000$ times under a fixed seed, and take the $2.5$th and $97.5$th percentiles of the resampled values as the interval. Such an interval expresses how far the reported number would move under a different draw of the validation dataset. For the coefficients of the logistic regression models used in the later experiments, we instead report a Wald interval from the model's robust standard error.
@@ -804,81 +794,28 @@
     
     \section{Part II --- Diagnosis: where does the baseline fail?}\label{sec:geometry_analysis}
     
-    \NEW{Chapter~\ref{chap:kernel} showed that the conditioning signal enters the decoder with a strength bounded by the embedding's magnitude, $\Vert\bm V_{sem}\Vert \le \Vert\bm W^V\Vert\,\Vert\emb(\phi)\Vert$, and that a small magnitude has two distinct causes: a genuinely low-variance target, for which a faint signal is appropriate, and a high-variance target poorly covered by the anchor set, for which the faint signal is a failure of the representation. Part~II tests this claim chain empirically on the cross-entropy base, through two complementary lenses---a geometric one, in the continuous embedding geometry, and a symbolic one, in the logical operators a target contains.}
     
     \subsection{Representation faithfulness}\label{sec:rep_faithfulness}
     
-    \NEW{The embedding realises the covariance kernel through a finite anchor set, so its inner product $\langle\emb(\phi),\emb(\psi)\rangle$ is a landmark approximation of the true kernel $k^{\cov}(\phi,\psi)$. Factoring both term-by-term separates two faithfulness questions: a \emph{magnitude} question---does $\Vert\emb(\phi)\Vert^2$ track the target's variance, i.e.\ is $\phi$ registered at all---and a \emph{direction} question---does the embedding preserve $\phi$'s web of correlations to other targets. We measure the latter with a per-target relational-faithfulness score (the rank correlation between the embedding inner products and the true covariances over a fixed set of landmark partners) and predict (\textbf{H2a}) that directional faithfulness collapses in the high-variance, anchor-orthogonal cell, more sharply than magnitude, and that the embedding only ever under-reads the true kernel, never manufacturing covariance it has lost.}
     
     \subsection{Decoder reliance on the embedding}\label{sec:decoder_reliance}
     
-    \NEW{We then ask whether greedy correctness tracks this geometry. Regressing correctness on the embedding norm tests whether the decoder conditions on magnitude at all; stratifying that norm slope by target variance separates the two causes of a small embedding. The orthogonality claim (\textbf{H2b}) is that a positive norm slope \emph{persists at high variance}: among informative targets, those whose embedding is small relative to what their variance permits---the anchor-orthogonal cell---are systematically less likely to be recovered. Because the embedding norm, variance, and an orthogonality residual are near-collinear, we decorrelate them with a binned residual before fitting, and read magnitude rather than significance as the verdict.}
     
     \subsection{Operator difficulty and the geometry--operator bridge}\label{sec:operator_difficulty}
     
-    \NEW{The symbolic lens asks which logical operators drive errors. Per operator we report the log-odds of correctness given the operator's presence in the target, adjusted for depth, identifying the constructs the base model finds hard (\textbf{H2c}). We then bridge the two lenses by asking whether the geometrically under-served cell over-represents specific operators---whether, for instance, the targets that are anchor-orthogonal are disproportionately those built from a particular temporal operator---so that the geometric and symbolic accounts of failure point at the same targets rather than at independent ones.}
     
-    
-    \section{Part III --- Intervention: finetuning the baseline}\label{sec:rfinetuning}
-    
-    \NEW{Part~I establishes that the base model works, and Part~II that it fails on a geometrically and symbolically identifiable cell---a usable but weak conditioning signal it under-exploits. Two levers are available to address this: the additional, mutation-augmented data on which the base is finetuned, and the training objective itself. We pull both and separate them with a control. All four finetunes start from the same base and see the same data; the cross-entropy-finetuned model changes nothing but its exposure to that data, while the three reinforcement-learning models additionally replace teacher-forced cross-entropy---which supervises only on ground-truth prefixes and rewards only exact reproduction of a single reference string, inheriting the exposure bias of Section~\ref{sec:prelim_ce}---with a reward computed from the model's own samples (Section~\ref{sec:rl_mechanics}). Comparing each finetune against the cross-entropy base measures a finetuning's full effect; comparing the reinforcement models against the cross-entropy control isolates the contribution of the objective from that of the data.}
-    
-    \subsection{Finetuning dataset}\label{sec:finetune_data}
-    
-    The finetuning of the base model is done on a separate, mutation-augmented dataset. To construct this dataset we drew $20{,}000$ base formulae from the curriculum datasets, split evenly across the four stages, sampled without replacement. From each of these base formulae we generated three new formulae: two semantically equivalent rewrites of the base formula and one near-miss variant in which we insert a negation at a random spot in the formulae. Each of these augmented formulae were checked against the formulae in the evaluation dataset used during pretraining, resampled if already present, and subsequently added the finetuning dataset for a total of $60{,}000$ formulae.
-    
-    Because the pretraining dataset generally provides only one syntactical form per semantic equivalence class, we constructed the finetuning dataset with the intent of providing the examples needed to decouple the semantic embedding from the single syntactical representation learned during the pretraining phase. Our construction draws on established practices in the field of \textit{representation learning}. The two kinds of mutations supply the model with two extremes of the syntax-semantics space. On the one hand we mutated one base formula into two semantically equivalent forms, equal in semantics while being far from each other in syntax. This follows the practice of training language models on semantically equivalent forms \citep{jain_contrastive_2021, bui_self-supervised_2021}. The near-miss variants on the other hand are syntactically close, differing only in the added negation operator, while being semantically far removed from the base formula. These serve as so-called \textit{hard negative} cases used to sharpen a model's sensitivity to small meaning-changing deviations in syntax \cite{gao_simcse_2022, robinson_contrastive_2021}.
-    
-    \subsection{Shared mechanics}\label{sec:rl_mechanics}
-    
-    \NEW{All four finetuned models start from the same pretrained base and train for a single, non-staged pass over the $60{,}000$-formula mutation set, with best-model selection and early stopping on the evaluation semantic distance and the same effective batch size of $1024$. For each item the reinforcement-learning trainers sample one formula from the policy conditioned on the target embedding, then recover differentiable token log-probabilities from a teacher-forced forward pass. The reward is the agreement between the satisfaction vectors of the generated formula $\hat\phi$ and the target $\phi$ over the trace sample, $R(\hat\phi,\phi) = 1 - \tfrac{1}{N}\sum_i \mathbb{1}[\widehat\chi^{\,i}_{\hat\phi}\neq\widehat\chi^{\,i}_{\phi}]$, i.e.\ one minus the normalised Hamming distance. A generation that fails to parse receives no reward and is excluded from the policy-gradient term; such items are instead handled by a corrective cross-entropy term on their ground-truth labels, so the per-batch objective is the convex combination $\mathcal{L} = r_{\text{valid}}\,\mathcal{L}_{\text{RL}} + r_{\text{invalid}}\,\mathcal{L}_{\text{CE}}$, weighted by the proportion of valid and invalid generations. The per-trainer gradient derivations are deferred to Appendix~\ref{app:objective_gradients}.}
-    
-    \subsection{Variants}\label{sec:rl_variants}
-    
-    \NEW{The three reinforcement-learning models share this objective and differ only in how the advantage is estimated; all use an actor learning rate of $5\times10^{-8}$. The \textbf{RB} model uses a running baseline, with advantage $(R-b)/\sigma_R$ where $b$ and $\sigma_R$ are exponential moving averages (momentum $0.9$) of the batch reward mean and standard deviation. The two \textbf{GAE} models add a learned critic---a small multilayer perceptron reading the decoder's last-layer hidden states---and form generalised-advantage-estimation advantages with discount $\gamma = 1$ and smoothing $\lambda \in \{1.0, 0.9\}$, the sole axis of contrast between them; the critic trains at its own learning rate after a roughly five-epoch actor-frozen warmup. The \textbf{cross-entropy-finetuned} control is trained on the same data and schedule under the pretraining objective. Table~\ref{tab:finetune} summarises the four runs.}
-    
-    \begin{table}[ht]
-        \centering
-        \caption{\NEW{The four finetuning runs (all from the same pretrained base, on the $60{,}000$-formula mutation set, with early stopping and best-model selection on the evaluation semantic distance).}}
-        \label{tab:finetune}
-        \begin{tabular}{lcccc}
-            \toprule
-            Model & Objective & Actor LR & Critic LR & Epochs (cap / stop) \\
-            \midrule
-            Cross-entropy--finetuned & cross-entropy      & $5\times10^{-6}$ & ---              & $50 / 50$ \\
-            RB                       & \textsc{reinforce} & $5\times10^{-8}$ & ---              & $50 / 18$ \\
-            GAE ($\lambda{=}1.0$)    & GAE ($\gamma{=}1$) & $5\times10^{-8}$ & $5\times10^{-3}$ & $30 / 18$ \\
-            GAE ($\lambda{=}0.9$)    & GAE ($\gamma{=}1$) & $5\times10^{-8}$ & $10^{-3}$        & $30 / 25$ \\
-            \bottomrule
-        \end{tabular}
-    \end{table}
-    
-    \subsection{What each objective can and cannot correct}\label{sec:objective_contrast}
-    
-    \NEW{The control and the reinforcement models are trained on the same data, from the same base, under the same conditioning; they differ only in the signal that drives the per-token update. Under cross-entropy the gradient at every position raises the logit of the ground-truth token and lowers the rest, steered only by how wrong the model was about the reference token. The policy gradient reuses exactly this per-token machinery but scales it by the advantage, so the \emph{sign} of the advantage rather than agreement with a reference decides whether a sampled token is reinforced or suppressed. We trace the consequence of this difference along the two axes on which Part~III evaluates the finetuning---semantic flexibility and correctness---taking each in turn.}
-    
-    \NEW{The first axis is \emph{semantic flexibility}, and here the consequence of the objective is the opposite of what it first appears. Any cross-entropy-optimal policy is reinforcement-optimal---a string-perfect policy matches the reference's satisfaction vector and so attains maximal reward---but the converse fails: a policy that, conditioned on the embedding of $p_1 \land p_2$, emits the commuted $p_2 \land p_1$ is reward-optimal yet cannot be cross-entropy-optimal, since maximum likelihood must have assigned the canonical token order strictly higher probability (Appendix~\ref{app:obj_nesting}). The cross-entropy optima are therefore a \emph{proper} subset of the reinforcement optima, the surplus being the space of semantically-equivalent syntaxes. It is tempting to read this surplus as the objective \emph{buying} flexibility, but the nesting is a statement about which policies are optimal, not about which optimum a policy gradient reaches: it says only that the reward does not \emph{penalize} syntactic variation, not that it \emph{rewards} it. Because the reward grades the satisfaction vector alone, on a target the base policy already solves---which, after pretraining on the base formulae, is most of the easy ones---it cannot see which equivalent form was emitted, the reward sits at its ceiling, the advantage vanishes, and there is no gradient to spread probability across the equivalence class. Nor can the equivalent rewrites of the mutation dataset supply that pressure through the objective: equivalent forms share a satisfaction vector and hence an embedding, so to the reinforcement trainer the two rewrites are indistinguishable from re-presenting the base target, and their distinct syntax---the one thing that could teach an alternative form---is never imitated, entering only through the corrective cross-entropy term on the invalid samples. The cross-entropy control, by contrast, receives those rewrites as \emph{labels} and is trained directly to emit both surface forms. We therefore expect any flexibility gain to be a property of the \emph{data}, surfacing in the control, and expect the reinforcement objective to add nothing to it---and, given the mode-seeking tendency of on-policy gradients without an entropy bonus, possibly to erode it.}
-    
-    
-    \NEW{The second is \emph{correctness on the under-served cell of Part~II}. The reward is computed from the target's full satisfaction vector rather than its lossy embedding, so it carries semantic information the embedding has discarded; it cannot widen the conditioning bottleneck, but it can recalibrate how heavily the decoder relies on a weak-but-usable signal, precisely on the high-variance, low-norm targets cross-entropy under-serves. The near-miss variants expose the limit of this. For a target $\phi = (p_1\land p_2)\to(\neg p_0\land p_0)$, equivalent to $\neg(p_1\land p_2)$, a policy that emits $\hat\phi = p_1\land p_2$ earns near-minimal reward, and the running-baseline model suppresses \emph{every} token of $\hat\phi$ uniformly---yet the fault is localised to the omitted negation-inducing suffix. A single scalar advantage has no vocabulary for which action deserved the blame; this is the credit-assignment problem the generalised-advantage estimator is introduced to narrow, by reading a per-token value from the decoder's hidden states. We therefore expect the reinforcement benefit to \emph{concentrate} on the under-conditioned cell rather than spread uniformly, and the credit-localising variants to be best positioned to deliver it there.}
-    
-    \subsection{Comparison analyses and hypotheses}\label{sec:exp3_comparison}
-    
-    \NEW{The first axis is \emph{semantic flexibility}, and here the consequence of the objective is the opposite of what it first appears. Any cross-entropy-optimal policy is reinforcement-optimal---a string-perfect policy matches the reference's satisfaction vector and so attains maximal reward---but the converse fails: a policy that, conditioned on the embedding of $p_1 \land p_2$, emits the commuted $p_2 \land p_1$ is reward-optimal yet cannot be cross-entropy-optimal, since maximum likelihood must have assigned the canonical token order strictly higher probability (Appendix~\ref{app:obj_nesting}). The cross-entropy optima are therefore a \emph{proper} subset of the reinforcement optima, the surplus being the space of semantically-equivalent syntaxes. It is tempting to read this surplus as the objective \emph{buying} flexibility, but the nesting is a statement about which policies are optimal, not about which optimum a policy gradient reaches: it says only that the reward does not \emph{penalize} syntactic variation, not that it \emph{rewards} it. Because the reward grades the satisfaction vector alone, on a target the base policy already solves---which, after pretraining on the base formulae, is most of the easy ones---it cannot see which equivalent form was emitted, the reward sits at its ceiling, the advantage vanishes, and there is no gradient to spread probability across the equivalence class. Nor can the equivalent rewrites of the mutation dataset supply that pressure through the objective: equivalent forms share a satisfaction vector and hence an embedding, so to the reinforcement trainer the two rewrites are indistinguishable from re-presenting the base target, and their distinct syntax---the one thing that could teach an alternative form---is never imitated, entering only through the corrective cross-entropy term on the invalid samples. The cross-entropy control, by contrast, receives those rewrites as \emph{labels} and is trained directly to emit both surface forms. We therefore expect any flexibility gain to be a property of the \emph{data}, surfacing in the control, and expect the reinforcement objective to add nothing to it---and, given the mode-seeking tendency of on-policy gradients without an entropy bonus, possibly to erode it.}
-
-
 
 \chapter{Conclusion, Limitations, and Future Work}
 
     \section{Conclusion}
     
     \section{Limitations} \label{sec:limitations}
-    
-    Anchor cosine similarity threshold was only set to exclude large \emph{positive} similarity, while large negative similarity was permitted. A better choice would have been to perform the rejection based sampling on the absolute value of the dot product similarity. [Insert small analysis of how much coverage we lost with this.]
 
-    The number of trivial formulae in the datasets.
 
     \section{Future work} \label{sec:future_work}
+    REINFORCE
+
+    Scatter operator $\operatorname{G}$'s Rayleigh quotient analysis and theory (Optimal experimental design, Finite frame theory, Dictionary coherence in sparse recovery, Nyström landmark selection).
 
 \clearpage
 \printbibliography[heading=bibintoc,title=Bibliography]
@@ -950,81 +887,6 @@
               \cite{elhage_toy_2022, olah_zoom_2020}
     \end{itemize}
 
-    \subsection{Policy-Gradient (REINFORCE) Loss Gradient}\label{app:obj_re}
-    % Reusable from passage.tex §208-255, BUT:
-    %   STALE-FIX 1: advantage A is the CURRENT RB form (see §\ref{app:obj_rb}); do NOT
-    %               reintroduce the NMSE reward here. Keep R abstract until §\ref{app:obj_rb}.
-    \begin{itemize}
-        \item Per-token surrogate $\hat\ell_t^{\bm\theta} = -\log p_{\bm\theta}(\hat y_{t+1}\mid\hat{\bm y}_{\le t},\bm e)$
-              on the model's OWN sample $\hat{\bm y}$ (teacher-forced recomputation).
-        \item The advantage $A$ enters as a scalar multiplier; same chain rule as CE gives
-        \begin{equation}
-            \Delta z_{t,\hat y_{t+1}} = \eta\,A\,\bigl(1 - P_{\bm\theta}(\hat y_{t+1}\mid\cdot)\bigr)\,\|\bm h_t\|^2,
-        \end{equation}
-              and analogously for $u\neq\hat y_{t+1}$.
-        \item \textbf{Conclusion (cited by 6.5.4 Move 1):} the \emph{sign of $A$} decides the
-              update direction — RL raises the sampled-token logit when $A>0$, lowers it when $A<0$.
-              Contrast directly with §\ref{app:obj_ce}'s unconditional push.
-        \item State unbiasedness via \eqref{eq:prelim_reinforce} \cite{williams_simple_1992}.
-    \end{itemize}
-
-    \subsection{The Hybrid Valid/Invalid Objective}\label{app:obj_hybrid}
-    % NEW — must be written from scratch. REPLACES passage.tex §257-264 (alpha-mixing /
-    %   "Multi-Objective Learning" — DROPPED, stale). This is the CURRENT per-batch loss.
-    \begin{itemize}
-        \item Per batch: $\mathcal{L} = r_{\text{valid}}\,\mathcal{L}_{\text{RL}}
-              + r_{\text{invalid}}\,\mathcal{L}_{\text{CE}}$, weights $=$ batch proportions
-              of parseable / unparseable generations.
-        \item $\mathcal{L}_{\text{CE}}$ here is teacher-forced CE on the ground-truth labels
-              of the \emph{invalid} items only (a corrective anchor); valid items contribute
-              only through $\mathcal{L}_{\text{RL}}$.
-        \item Gradient by linearity; note the two terms touch disjoint subsets of the batch.
-        \item % STALE-FIX 2: there is NO R=-1 branch for invalid generations and NO global alpha.
-              Explicitly state this supersedes the earlier single-alpha mixed objective.
-    \end{itemize}
-
-    \subsection{Variant-Specific Advantage Estimators}\label{app:obj_variants}
-
-        \subsubsection{Running-Baseline REINFORCE (RB)}\label{app:obj_rb}
-        \begin{itemize}
-            \item Length-normalised sequence log-prob:
-                  $\overline{\log p} = \frac{1}{|\hat{\bm y}|}\sum_t \log p_{\bm\theta}(\hat y_{t+1}\mid\cdot)$.
-            \item Advantage $A = (R-b)/\sigma_R$, \emph{detached}; $b$ and $\mathbb{E}[R^2]$ are
-                  EMA-tracked (momentum), $\sigma_R = \sqrt{\mathbb{E}[R^2]-b^2}$.
-            \item $\mathcal{L}_{\text{RL}} = -\,\mathbb{E}_{\text{valid}}\!\left[A\,\overline{\log p}\right]$.
-        \end{itemize}
-
-        \subsubsection{Generalised Advantage Estimation (GAE)}\label{app:obj_gae}
-        \begin{itemize}
-            \item Per-token values $v_t = V_{\bm\psi}(\bm h_t)$; terminal reward placed at the
-                  last real token only.
-            \item TD residual $\delta_t = r_t + \gamma v_{t+1} - v_t$; backward recursion
-                  $A_t = \delta_t + \gamma\lambda\,A_{t+1}$; returns $G_t = A_t + v_t$. Use $\gamma=1$.
-            \item Actor loss $-\frac{1}{\sum m}\sum_t A_t\,\log p_t\,m_t$ (advantages detached);
-                  critic loss $\frac{1}{\sum m}\sum_t (v_t - G_t)^2 m_t$.
-            \item Critic warmup: critic pretrained with the actor frozen before joint training.
-            \item \textbf{Conclusion (cited by 6.5.4 Move 4):} per-token $A_t$ distributes credit
-                  the single RB scalar cannot — the principled (partial) response to the
-                  credit-assignment problem of §\ref{sec:prelim_rl}.
-        \end{itemize}
-
-    \subsection{The CE/RL Optimality Nesting}\label{app:obj_nesting}
-    % Reusable from passage.tex §268-283 with ONE substitution:
-    %   STALE-FIX 3: NMSE-based reward -> R = 1 - normalised Hamming. Argument is identical:
-    %               equivalent formula -> same satvec -> Hamming 0 -> maximal reward.
-    \begin{itemize}
-        \item Assumption + caveat: a CE-optimum assigns the ground-truth token top probability
-              at every position; note the mild violation for logically equivalent formulae
-              co-present in the data (the tie-break does not weaken the argument).
-        \item $\arg\min\mathcal{L}_{\text{CE}} \subseteq \arg\min\mathcal{L}_{\text{RL}}$:
-              a CE-optimal policy reproduces $\mathrm{str}(\phi)$ exactly $\Rightarrow$ same
-              satvec $\Rightarrow$ Hamming $0$ $\Rightarrow$ maximal reward.
-        \item Strict: $\arg\min\mathcal{L}_{\text{CE}} \subsetneq \arg\min\mathcal{L}_{\text{RL}}$
-              via the commutativity witness $p_1\land p_2$ vs.\ $p_2\land p_1$ — RL-optimal,
-              CE-suboptimal.
-        \item \textbf{Conclusion (cited by 6.5.4 Move 2):} RL admits the semantically-equivalent
-              syntaxes CE penalises — the formal handle on "RL buys semantic flexibility".
-    \end{itemize}
 
 
 \section{Experiment 1 Appendix}
