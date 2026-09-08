@@ -406,8 +406,6 @@
     \end{equation}
     If the absolute similarity score to any previously selected anchor exceeds $\tau$, i.e. if $|\text{sim}^\pm(\psi, \psi_i)| > \tau$, then the candidate formula gets rejected. If the absolute similarity score falls below our threshold, the candidate is appended to $\Psi$. This process iterates, resampling and rejecting as necessary, until exactly $M$ anchors have been chosen. 
 
-    We note, however, a structural limitation in this greedy formulation. By strictly thresholding on the upper bound ($\text{sim}^\pm > \tau$), the algorithm explicitly rejects candidate formulae that are too closely aligned with existing anchors, but fails to filter on the negative extreme. Consequently, a candidate that exhibits highly \emph{negative} similarity to an existing anchor may still be accepted. While this does not violate the goal of maximizing metric dispersion directly, accepting a formula and its negation essentially commits two anchor dimensions to representing the exact same axis of the trace space. We will revisit the implications of this redundancy in Section~\ref{sec:limitations}.
-
 
     \section{Trace Sampling Details} \label{sec:trace_sampling_details}
     In this section we will be discussing our sampling method for the $N$ traces that make up the trace space $\widehat \Sigma$. As discussed in section~\ref{sec:the_embedding_kernel}, our measure of formula similarity is not an absolute property of the logic, but is strictly parameterized by the trace distribution $\mathcal{T}$. The formulae similarities and the resulting geometry of the semantic embeddings exist entirely with respect to $\mathcal{T}$. We will now make explicit how the target sample of $N$ traces, $\widehat\Sigma \sim \mathcal{T}$, is actually generated.
