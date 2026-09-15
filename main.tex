@@ -40,19 +40,13 @@
 
 
 \chapter{Background and Preliminaries}
-    \section{Symbollic Regression}
+    \section{Symbolic Regression}
 
     \section{Linear Temporal Logic with Finite Trace Semantics}
     
     \section{Many Syntaxes, One Semantics}
 
     \section{Kernel Methods}\label{sec:kernel_methods}
-    
-    % =====================================================================
-    %  PRELIMINARIES SCAFFOLD — CE & RL machinery (general, citable only)
-    %  Method-specific content (Hamming reward, hybrid loss, RB/GAE variants,
-    %  Delta-z derivations, subset proof) is deferred to Ch.6 / appendix.
-    % =====================================================================
 
     \section{Language Models, Self-Attention, and Cross-Attention}
     % Architecture already covered here; the items below add HOW such a model
@@ -65,7 +59,6 @@
                   % Fix $\bm e$ as the generic conditioning context (= semantic embedding).
             \item \emph{Teacher forcing}: feeding ground-truth prefixes during training
                   rather than model samples. \cite{williams_learning_1989}
-                  % Consumed by: RL teacher-forced recomputation (6.5.2) + appendix.
             \item Per-token negative log-likelihood / cross-entropy objective, general form:
             \begin{equation}\label{eq:prelim_ce}
                 \mathcal{L}_{\text{CE}}^{\bm\theta} = \frac{1}{n+1}\sum_{t=0}^{n}\ell_t^{\bm\theta},
@@ -77,9 +70,6 @@
                   % Consumed by: 6.5.4 Move 1; full gradient in appendix.
             \item Maximum-likelihood reading: minimising \eqref{eq:prelim_ce} is MLE of the
                   data distribution. % one line.
-            \item \emph{Exposure bias}: the train/inference mismatch induced by teacher
-                  forcing. \cite{ranzato_sequence_2016, bengio_scheduled_2015}
-                  % Consumed by: 6.5.1, which invokes exposure bias as RL motivation.
         \end{itemize}
     
         % --- Shared notation block (state here, reuse everywhere) ---
@@ -227,17 +217,17 @@
     In section~\ref{sec:kernel_methods} we introduced the concept of a kernelized representation of logical formulae, directly based in the semantics of the logic. In order to condition a  generator of LTL formulae on the desired temporal behavior that we want the generated formula to display, we have to be able to provide the machine with a \emph{fixed}, \emph{finite}, and \emph{syntax-invariant} representation of that formula's semantics. In this chapter we will be formalizing the \textit{Linear Temporal Logic Kernel} and the respective semantic embedding of a formula $\phi$ that we produce with it.
 
     \section{Constructing the Semantic Embeddings}
-    Semantically, a formula $\phi$ can be characterized, up to semantic equivalence, by a satisfaction vector $\chi_\phi \in \{0,1\}^\Sigma$, where the $i$'th element of the vector indicates the formula's satisfaction on the associated trace $\sigma^i \in \Sigma$:
+    Semantically, a formula $\phi$ can be characterized (up to semantic equivalence) by a satisfaction vector $\bm\chi_\phi \in \{0,1\}^\Sigma$, where, for some fixed order on the traces in $\Sigma$, the $i$'th element of the vector indicates the formula's satisfaction on the associated trace $\sigma^i \in \Sigma$:
     \begin{equation}
         \chi_\phi^i = 1 \iff \sigma^i \vDash \phi
     \end{equation}
-    A representation of this kind would serve as the ideal candidate considering our requirement of being syntax-invariant. However, it is also infeasible to compute. Even after making the move from infinite trace semantics to a finite trace semantics, the size of a vector of this kind would be enormous --- $2^{100}$ for interpretations over $T=20$ timesteps with $5$ atomic propositions. Thus, the two other requirements on our representation of being \emph{fixed} and (feasibly) \emph{finite} lead us to construct two further reductions that will finally allow us to use the formula's semantics as a conditioning signal for sequence generation.
+    A representation of this kind would serve as the ideal candidate considering our requirement of being \emph{syntax-invariant}. However, with satisfaction vector having one element for every possible trace, it would also be infeasible to compute, store, and do large computations with at the rate required for transformer model training. Even after making the move from infinite trace semantics to a finite trace semantics, the length of these satisfaction vectors would be enormous, namely $2^{100}$ for traces over $T=20$ timesteps with $5$ atomic propositions. Thus, two more requirements impose themselves on our representation: being \emph{fixed} and (feasibly) \emph{finite}. This leads us to construct two further reductions that will finally allow us to use the formula's semantics as a conditioning signal for sequence generation.
 
-    The first of the two reductions deals with the computationally infeasible size of the trace space directly. In order to make the representation of the satisfaction vector feasible, we sample a subset of size $N$ of the total trace space and restrict $\chi_\phi$ to it to obtain its approximation $\satvec_\phi$. With $N$ now being a hyperparameter that is under our control, we must pick it carefully such that it is large enough to obtain an approximation $\satvec_\phi$ that is useful and not too prone to errors, while being small enough to work with in practice.
+    The first of the two reductions deals with the computationally infeasible size of the trace space $\Sigma$ directly. In order to make the representation of the satisfaction vector feasible, we sample a subset of size $N$ of the total trace space and restrict $\bm\chi_\phi$ to it to obtain an approximation $\satvec_\phi$. With $N$ now being a hyperparameter that is under our control, we must pick it carefully such that it is large enough to obtain an approximation $\satvec_\phi$ that is useful and not too prone to errors, while being small enough to work with in practice.
 
-    The second reduction brings this sampled satisfaction vector $\satvec_\phi$ down from $\mathbb{R}^N$ to a lower-dimensional summary in $\mathbb{R}^M$, with $M \ll N$. The natural way to construct such a reduction is to compare $\satvec_\phi$, in some fashion, against a fixed set of $M$ reference vectors $\{r_1, \dots, r_M\} \subset \mathbb{R}^N$, with each coordinate of the embedding recording how $\satvec_\phi$ relates to one of these references. The embedding as a whole is then a \emph{profile of relationships}, and its construction is determined by two important design choices: $1)$ what the reference vectors should be, and $2)$ how the comparison between $\satvec_\phi$ and each reference is computed. We address the first in the remainder of this section and the second is the subject of Section~\ref{sec:the_embedding_kernel}.
+    The second reduction brings this sampled satisfaction vector $\satvec_\phi$ down from $\mathbb{R}^N$ to a lower-dimensional summary in $\mathbb{R}^M$, with $M \ll N$. Any linear reduction of this kind is done by projecting $\satvec_\phi$ through some linear map $\bm R \in \mathbb{R}^{M\times N}$, so that each coordinate of the resulting embedding vector consists of the inner product $\langle \satvec_\phi , \bm r_i\rangle$ between the satisfaction vector and one of the rows $\{\bm r_1, \dots, \bm r_M\} \subset \mathbb{R}^N$ of the linear map $\bm R$. The embedding as a whole is then a \emph{profile of relationships} between the satisfaction vector and the rows of $\bm R$ and its construction is determined by two important design choices: $1)$ what the rows of $\bm R$ should be, and $2)$ which transformation of the satisfaction vectors the inner product is taken over. We address the first in the remainder of this section and the second is the subject of Section~\ref{sec:the_embedding_kernel}.
 
-    Two natural candidates suggest themselves from the dimensionality reduction literature. The first and simplest is a random projection, with entries drawn i.i.d.\ from a normal distribution. By the Johnson--Lindenstrauss lemma ~\cite{johnson_extensions_1984,dasgupta_elementary_2003} such a projection preserves pairwise distances in $\satvec$-space, up to a factor of $1\pm \epsilon$ for $\epsilon \in (0,1)$. Irrespective of whether such a projection would be able to preserve enough of the metric geometry of the $\satvec$ space for the amount of training data that we need, the main reason to reject this approach is because it loses the domain-based interpretation that makes traditional symbolic regression so desirable. With this solution every coordinate in the embedding vector is is a random linear combination of $\satvec_\phi$'s satisfaction entries, which seizes to carry any LTL-specific interpretation. A second solution is a \textit{Principal Component Analysis} (PCA) based reduction ~\citep{van_der_maaten_dimensionality_2007, hasan_review_2021}, in which the reference vectors $\{r_i\}$ are taken to be the top-$M$ variance-explaining directions of a satisfaction matrix built from a set of reference formulae (i.e.\ PCA on $\satvec$-vectors). Each coordinate of the embedding is then $\satvec_\phi$'s projection onto a direction of maximal explained variance in the reference set. Again, the resulting embedding coordinates do not lend themselves to any interpretation that is directly available from the context of LTL. For our application we will want to use a reduction that maintains this natural semantic interpretation.
+    The standard candidate from the dimensionality reduction literature is \textit{Principal Component Analysis} (PCA) ~\citep{van_der_maaten_dimensionality_2007, hasan_review_2021}, where $\{\bm r_1, \dots \bm r_M \}$ are taken to be the top-$M$ eigenvectors of the covariance matrix built from the satisfaction vectors of some set of reference formulae. Each coordinate of the resulting embedding is then $\satvec_\phi$'s projection onto a direction of maximal explained variance in the reference set. However, irrespective of the fact that such a reduction is, by construction, optimal for retaining the variance of the reference set, the main reason we reject this approach is that it loses the domain-based interpretation that makes traditional symbolic regression so desirable. With this method every coordinate of the embedding is $\satvec_\phi$'s projection onto a direction $\bm r_m$ that is itself a dense, real-weighted combination of the reference formulae's satisfaction vectors, which ceases to carry any LTL-based interpretation.
 
     Instead, we opt for a more directly interpretable reduction and choose our reference vectors to be the satisfaction vectors of a set of \emph{anchor formulae} $\Psi = {\psi_1, \dots, \psi_M}$, with the $i$-th row equal to $\satvec_{\psi_i}$. The embedding then takes the form 
     \begin{equation}
@@ -245,9 +235,9 @@
     \end{equation}
     i.e.\ a vector of similarities between $\phi$'s satisfaction vector and each anchor's. This choice has some desirable properties that the alternatives lack. 
     
-    First, every coordinate is \emph{named}: $\emb(\phi)_i$ records the relationship between $\phi$ and a specific LTL formula $\psi_i$, which can be written down, inspected, and reasoned about by an human reader. 
+    First, every coordinate is \emph{named}: $\emb(\phi)_i$ records the relationship between $\phi$ and a specific LTL formula $\psi_i$, which can be written down, inspected, and reasoned about by any human reader. 
     
-    Second, this named structure is also meaningful to the model. Aligning the representation of the conditioning signal with the structure of the generator's output language is a form of relational inductive bias \citep{battaglia_relational_2018}: each conditioning dimension corresponds to the similarity of the target formula to an entity in the model's output language. Therefore, the decoder's prior knowledge of LTL should, in principle, transfer to its interpretation of the conditioning signal. This aligns with a broader argument in compositional-generalization research that neural sequence models benefit from being equipped with explicit, named structural components that the network can reference compositionally, rather than being expected to discover compositional structure implicitly from training data alone \citep{lake_building_2017, lake_generalization_2018}. Lake and Baroni \citep{lake_generalization_2018} specifically argue for "manually-encoded or (ideally) learned functions" for interpreting the individual building blocks of the input language. Our anchor-based conditioning is related to this idea but adopts it in a static and comparative (rather than operational) way, supplying the model with a fixed library of LTL probes, accessible via cross-attention, against which the target formula is evaluated. 
+    Second, this named structure is also meaningful to the model. Aligning the representation of the conditioning signal with the structure of the generator's output language is a form of relational inductive bias \citep{battaglia_relational_2018}: each conditioning dimension corresponds to the similarity of the target formula to an entity in the model's output language. Therefore, the decoder's prior knowledge of LTL could, in principle, transfer to its interpretation of the conditioning signal. This aligns with a broader argument in compositional-generalization research that neural sequence models benefit from being equipped with explicit, named structural components that the network can reference compositionally, rather than being expected to discover compositional structure implicitly from training data alone \citep{lake_building_2017, lake_generalization_2018}. Lake and Baroni \citep{lake_generalization_2018} specifically argue for "manually-encoded or (ideally) learned functions" for interpreting the individual building blocks of the input language. Our anchor-based conditioning is related to this idea but adopts it in a static and comparative (rather than operational) way, supplying the model with a fixed library of LTL probes, accessible via cross-attention, against which the target formula is evaluated. 
     
     The rest of this chapter will be devoted to making this embedding precise. Firstly, we will make concrete our choice for the similarity measure that sets up the semantic embedding and discuss the properties that make it desirable for use in training our transformer model. Then, we will lay out the procedure used to select the specific anchor set $\Psi$. Lastly, we will consider our method for sampling the set of traces against which the satisfaction vectors $\satvec$ are produced, reviewing the statistical power that comes with a sample size of $N$.
 
@@ -334,12 +324,14 @@
     \end{equation}
     which ranges over the entire kernel scale $[-N, N]$ as the base rates vary. Explicitly, two semantically independent formulae $\phi$ and $\psi$ each satisfied on $90\%$ of traces yield $k^\pm(\phi,\psi) \approx 0.64\,N$, heavily positive, despite the formulae being independent by construction. The same holds for two low-base-rate formulae, whose signed vectors are jointly dominated by $-1$ entries and therefore also produce a large positive value. For the asymmetric case, in which we have a high- and low-base-rate independent pair, the kernel value is strongly negative. The signed dot product kernel only maps two independent formulae to $0$ in case either $p_\phi$ or $p_\psi$ equals exactly $\tfrac{1}{2}$. Additionally, by equation~\eqref{eq:kpm_general}, the zero region of $k^\pm$ is also populated by \emph{non-independent} pairs whose covariance happens to cancel the product of their marginals. The zero region of $k^\pm$ is therefore neither necessary nor sufficient for semantic independence: it is the locus of an algebraic coincidence, not the locus of any semantic property.
 
+    \NEW{It is this lack of semantic interpretability that disqualifies the $k^\pm$ kernel as a good candidate for constructing the semantic embeddings. That does not mean however that it is completely useless as a metric. We'll follow up on this in section~\ref{sec:anchor_selection}.}
+
     \subsection{Covariance Kernel}
     This brings us finally to the last of the kernel functions $k^{\cov}$, the covariance kernel. The decomposition of equation \eqref{eq:kpm_general} makes the natural remedy immediately apparent: to construct a similarity measure that isolates semantic independence and correctly maps it to zero, we must strip away the marginal product. We accomplish this by centering the satisfaction vectors around their respective base rates before taking their dot product. Let $\bar{\chi}_\phi = \frac{1}{N}\sum_{i=1}^N \widehat{\chi}^i_\phi$ be the empirical base rate (mean satisfaction) of $\phi$ over our sampled traces. The covariance kernel is defined as:
     \begin{equation}
         k^{\cov}(\phi, \psi) := \frac{1}{N} \sum_{i=1}^N (\widehat{\chi}^i_\phi - \bar{\chi}_\phi) (\widehat{\chi}^i_\psi - \bar{\chi}_\psi)
     \end{equation}
-    By construction, this sum is exactly the empirical covariance of the two satisfaction vectors over the trace sample. As a direct consequence, the expected kernel value for any two semantically independent formulae evaluates to $0$. Crucially, for binary variables, the converse holds as well: a true covariance of $0$ strictly implies independence. While our finite sample size $N$ subjects the kernel to empirical sampling noise, the Law of Large Numbers guarantees that as $N \to \infty$, the empirical covariance asymptotically approaches this true population covariance. In the limit, therefore, orthogonality in our kernel space is both a necessary and sufficient condition for genuine semantic independence. We want to make special mention of the the subclass of \textit{tautologies} and \textit{contradictions} for which this mapping holds with respect to any formula. For tautologies and contradictions, their satisfaction vectors are the constants $\mathbf{1}$ and $\mathbf{0}$, respectively, on any sample $\widehat\Sigma$. A constant is trivially independent of any random variable, and the kernel therefore assigns them value $0$ against every formula $\psi$. We return to the role of this property in the semantic embedding $\emb(\phi)$ at the end of this section.
+    By construction, this sum is exactly the empirical covariance of the two satisfaction vectors over the trace sample. As a direct consequence, the expected kernel value for any two semantically independent formulae evaluates to $0$. Crucially, for binary variables, the converse holds as well: a true covariance of $0$ strictly implies independence. While our finite sample size $N$ subjects the kernel to empirical sampling noise, the Law of Large Numbers guarantees that as $N \to \infty$, the empirical covariance asymptotically approaches this true population covariance. In the limit, therefore, orthogonality in our kernel space is both a necessary and sufficient condition for genuine semantic independence. We want to make special mention of the subclass of \textit{tautologies} and \textit{contradictions} for which this mapping holds with respect to any formula. For tautologies and contradictions, their satisfaction vectors are the constants $\mathbf{1}$ and $\mathbf{0}$, respectively, on any sample $\widehat\Sigma$. A constant is trivially independent of any random variable, and the kernel therefore assigns them value $0$ against every formula $\psi$. We return to the role of this property in the semantic embedding $\emb(\phi)$ at the end of this section.
     
     Before continuing, we should deliver on our earlier promise to formally guarantee that the four similarity measures $k^\cdot$, $k^{\cos}$, $k^\pm$, and $k^{\cov}$ actually constitute proper kernel functions. As we alluded to at the start of this section, a symmetric bivariate function $k$ is a valid positive semi-definite (PSD) kernel if it can be expressed in the form of equation~\eqref{eq:kernel_general_form}, that is, as an inner product between elements in a Hilbert space $\mathcal{H}$ produced by a feature map $f$. Each of our four proposed functions can be formulated exactly in this way by taking $\mathcal{H}$ to be $\mathbb{R}^N$ equipped with the standard dot product, and instantiating $f$ as a specific transformation of the satisfaction vector. Specifically: for $k^\cdot$, $f(\phi) = \satvec_\phi$; for $k^{\cos}$, $f(\phi) = \frac{\satvec_\phi}{\Vert \satvec_\phi \Vert}$; for $k^\pm$, $f(\phi) = 2\satvec_\phi - \mathbf{1}$; and for $k^{\cov}$, $f(\phi) = \frac{1}{\sqrt{N}} (\satvec_\phi - \bar{\chi}_\phi \mathbf{1})$. Because they can all be written strictly as real dot products on these transformed feature vectors, their associated kernel matrices on any finite set are guaranteed to be Gram matrices.
     
@@ -381,11 +373,20 @@
     
     The orthogonality problem is therefore not one that any choice of kernel metric can resolve, since its origin does not lie in the metric at all. A high-variance formula is invisible to $\emb(\phi)$ exactly when the anchor set fails to span the directions along which that formula varies. The only genuine remedy is to ensure that our anchors cover the satisfaction space well enough so that no meaningful target formula is left orthogonal to all of $\Psi$. The problem of selecting $\Psi$ effectively is the subject of the following section.
 
+    (i) Invisibility. $\emb(\phi) = \mathbf 0 \iff \langle f(\phi), f(\psi_a)\rangle = 0$ for all $a$ $\iff f(\phi) \perp \operatorname{span}{f(\psi_a)}$. Pure definition — no matrix at all. This alone substantiates line 382's "orthogonal to all of $\Psi$" as literally the anchor span.
+    (ii) Coverage, graded. Write $P$ for orthogonal projection onto the anchor span. Then
+    $$\lVert P f(\phi)\rVert^2 = \emb(\phi)^{!\top} K_{\Psi\Psi}^{-1}\emb(\phi), \qquad \mathcal{R}^2_\Psi(\phi) = \frac{\emb(\phi)^{!\top}K_{\Psi\Psi}^{-1}\emb(\phi)}{V_\phi}.$$
+    The fraction of $\phi$'s semantic variation the anchors see.
+
     
     \section{Anchor Set Selection}\label{sec:anchor_selection}
     Having established the embedding kernel, we now turn to the selection of the anchor set $\Psi = \{\psi_1, \dots, \psi_M\}$. To make the semantic embedding as expressive as possible, the anchors must cover a diverse and representative array of LTL behaviors, effectively spanning the space of possible trace evaluations.
     
     While it might seem natural to select anchors that are mutually uncorrelated using the covariance kernel $k^{\cov}$, doing so discards crucial structural information. Because $k^{\cov}$ explicitly centers satisfaction vectors and strips away base rates, it is blind to absolute location in the trace space. For the purpose of providing a robust coordinate system, we want our selection metric to be sensitive to absolute truth values and spatial dispersion.
+    
+    $\mathrm{sim}^\pm = 4k^{\cov} + m_im_j$
+
+    interpolation form $\lvert\rho\sqrt{(1-m_i^2)(1-m_j^2)} + m_im_j\rvert \le \tau$
     
     If we want our anchors to be maximally dispersed across the Boolean hypercube $\{0,1\}^N$, the native measure by which to measure (dis)similarity is the Hamming distance, which counts the number of traces on which two formulae disagree. Formally, over two satisfaction vectors $\satvec_\phi, \satvec_\psi \in \{0,1\}^N$, this is
     \begin{equation}
@@ -393,6 +394,14 @@
         \label{eq:hamming_distance}
     \end{equation}
     the number of trace positions at which the two vectors take different truth values. Since the vectors are binary, this coincides with their $\ell_1$ distance.
+
+    $\ell^1$ exclusion $\lvert m_i\rvert + \lvert m_j\rvert \le 1+\tau$
+
+    $\kappa(D)$ bounded by this
+
+     $\mu_{\max}(\tau) = \frac{1+\tau}{3-\tau}$
+
+    The three-beat verdict
     
     Returning to our signed dot product kernel $k^\pm$, we find it maps perfectly onto this objective. By accumulating the sum of agreements minus the sum of disagreements, $k^\pm$ acts as an exact inverse measure of Hamming distance:
     \begin{equation}
@@ -406,6 +415,7 @@
     \end{equation}
     If the absolute similarity score to any previously selected anchor exceeds $\tau$, i.e. if $|\text{sim}^\pm(\psi, \psi_i)| > \tau$, then the candidate formula gets rejected. If the absolute similarity score falls below our threshold, the candidate is appended to $\Psi$. This process iterates, resampling and rejecting as necessary, until exactly $M$ anchors have been chosen. 
 
+    
 
     \section{Trace Sampling Details} \label{sec:trace_sampling_details}
     In this section we will be discussing our sampling method for the $N$ traces that make up the trace space $\widehat \Sigma$. As discussed in section~\ref{sec:the_embedding_kernel}, our measure of formula similarity is not an absolute property of the logic, but is strictly parameterized by the trace distribution $\mathcal{T}$. The formulae similarities and the resulting geometry of the semantic embeddings exist entirely with respect to $\mathcal{T}$. We will now make explicit how the target sample of $N$ traces, $\widehat\Sigma \sim \mathcal{T}$, is actually generated.
@@ -441,7 +451,16 @@
     \end{equation}
     Once the desired tolerance $\eta$, confidence $\delta$, and anchor count $M$ are chosen, this equation sets a lower bound on the number of traces required to realize them. The specific values we adopt are reported with the kernel instantiation in Section~\ref{sec:kernel_instantiation}.
 
+    \section{Induced Embedding Geometry}
 
+    $$\emb(\phi)_a = \langle f(\phi), f(\psi_a)\rangle \;\;\Longrightarrow\;\;
+    \begin{cases}
+    \lVert \emb(\phi)\rVert^2 = f(\phi)^{!\top} S\Psi, f(\phi) = V_\phi \cdot R\bigl(\hat f(\phi)\bigr) 
+    \langle \emb(\phi), \emb(\chi)\rangle = \langle f(\phi),, S_\Psi f(\chi)\rangle
+    \end{cases}$$
+
+    Why not make anchor set selection be \emph{correlation} $+$ \emph{variance} controlled? Our solution is this in one go, but only takes over in with extreme base-rates. 
+    
 \chapter{Experiments}\label{chap:experiments}
 
     \section{Model training overview}\label{sec:model_training_overview}
