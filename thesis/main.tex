@@ -380,7 +380,15 @@
 
     We have established that the embedding's magnitude encodes information about the target formula's satisfaction variance, but that doesn't establish whether the model's architecture allows it to capture this information. So, to get an answer to the normalization question, we must look at precisely how the transformer model actually incorporates this conditioning signal into the generation process. To understand this we follow the semantic embedding through the model, from first contact with the decoder to the final sequence generation. 
         
-    We start at the beginning. As described in section~\ref{sec:model_architecture}, the $M$-dimensional semantic embedding vector is injected into the cross-attention block depicted in figure~\ref{fig:ltl_model_architecture} as a \emph{single} conditioning token. The downstream result of this is that at every position $t$ in the model's hidden states are updated by the same value vector $\bm V_{sem}$ through the residual connection, where the magnitude of this update is  bounded by the magnitude of the input: $\Vert \bm V_{sem} \Vert \leq \Vert \bm W^{cross}_v \Vert \, \Vert \emb(\phi) \Vert$. For a trained model, the $\bm{W}^{cross}_v$ is fixed between different rounds of generation. So the difference in the magnitude of the update between any two formulae is strictly down to the differences in magnitudes of the embeddings of these formulae. 
+    We start at the beginning. As described in section~\ref{sec:model_architecture}, the $M$-dimensional semantic embedding vector is injected into the cross-attention block depicted in figure~\ref{fig:ltl_model_architecture} as a \emph{single} conditioning token. The downstream result of this is that at every position $t$ in the model's hidden states are updated by the same value vector $\bm V_{sem}$ through the residual connection, where the magnitude of this update is  bounded by the magnitude of the input: $\Vert \bm V_{sem} \Vert \leq \Vert \bm W^{cross}_v \Vert \, \Vert \emb(\phi) \Vert$. For a trained model, the $\bm{W}^{cross}_v$ is fixed between different rounds of generation. So the difference in the magnitude of the update between any two formulae is strictly down to the differences in magnitudes of the embeddings of these formulae. In essence then, the cross-attention part of the transformer block simply adds an update to the 
+
+    $$
+    \begin{aligned}
+    \bm{x} &\leftarrow \bm{x} + \mathrm{SelfAttn}(\mathrm{LN}1(\bm{x})) \\
+    \bm{x} &\leftarrow \bm{x} + \mathrm{CrossAttn}(\mathrm{LN}{c}(\bm{x}),d \emb(\phi)) \;=\; \bm{x} + \bm{u}_\ell(\phi) \\
+    \bm{x} &\leftarrow \bm{x} + \mathrm{MLP}(\mathrm{LN}_2(\bm{x}))
+    \end{aligned}
+    $$
     
     
     
