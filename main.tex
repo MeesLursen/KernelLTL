@@ -200,7 +200,7 @@
     
     The single departure from the standard GPT-2 architecture is the insertion of a Cross Attention block within each Transformer Block. In the vanilla configuration, each Transformer Block applies a Layer Normalization followed by Masked Self Attention and a Residual Connection, then a second Layer Normalization followed by a Multi-Layer Perceptron and a final Residual Connection. Enabling cross-attention inserts a third sublayer between the first Residual Connection and the MLP: a Layer Normalization, Cross Attention, and Residual Connection. This Cross Attention block allows the decoder's hidden states to use the \emph{Semantic Embedding Hidden States}, which we call $\emb(\phi) \in \mathbb{R}^M$ (a fixed vector summarizing the target formula's satisfaction behavior over a sample of traces, see Chapter~\ref{chap:kernel}), as an external conditioning signal. Rather than supplying the conditioning signal once at the input as a prefix, this mechanism makes it available to the decoder at every layer and at every decoding step.
     
-    The Cross Attention block operates as follows. Let $\bm{h}_t \in \mathbb{R}^d$ denote the decoder hidden state at position $t$ after the Layer Normalization following the first Residual Connection, and let the conditioning signal be presented as a sequence of $S$ token vectors $\bm{e}_1, \dots, \bm{e}_S$. We describe a single attention head of dimension $d_k = d/H$, where each of the $H$ heads are computed in parallel and their outputs concatenated. The \emph{Query}, \emph{Key}, and \emph{Value} vectors are produced by three separate learned projections:
+    The Cross Attention block operates as follows. Let $\bm{h}_t \in \mathbb{R}^d$ denote the decoder hidden state at position $t$ after the Layer Normalization following the first Residual Connection, and let the conditioning signal be presented as a sequence of $S$ token vectors $\bm{e}_1, \dots, \bm{e}_S$. We describe a single attention head of dimension $d_k = \frac{d}{H}$, where each of the $H$ heads are computed in parallel and their outputs concatenated. The \emph{Query}, \emph{Key}, and \emph{Value} vectors are produced by three separate learned projections:
     \begin{align}
         \bm{Q}_t &= \bm{W}^{cross}_q \bm{h}_t & \in \mathbb{R}^{d_k}\\
         \bm{K}_j &= \bm{W}^{cross}_k \bm{e}_j & \in \mathbb{R}^{d_k}\\
@@ -214,7 +214,7 @@
     \end{equation}
     so that the attention weights form a vector with one non-negative entry per conditioning token, summing to one. For any value of $S$, the block returns a single $d_k$-vector per position and per head, after which the $H$ head outputs are concatenated into a vector in $\mathbb{R}^{d}$, mixed by a further learned projection $\bm{W}^{cross}_o \in \mathbb{R}^{d \times d}$, and added to $\bm{h}_t$ through the Residual Connection. The role of the attention weights is to select, separately at each position $t$, what mixture of the conditioning tokens that position will draw on.
 
-    In our model the conditioning signal is presented as a \emph{single} token, $\emb(\phi)$, representing the semantic embedding of an LTL formula $\phi$. This collapses the mechanism described above in two ways: first, there is only one Key for the Query to score against, so the weight vector $\bm{a}_t$ has a single entry and reduces to a scalar $a_t \in \mathbb{R}$, and second, a softmax over one score evaluates to $a_t = 1$ irrespective of what that Query and Key contain. The cross-attention output is therefore $\bm{V}_{sem} = \bm{W}^{cross}_v \emb(\phi)$ at every position $t$, and within each Transformer Block every decoder position receives the same additive update. For our model, the selection mechanism is present in the architecture but inert.
+    In our model the conditioning signal is presented as a \emph{single} token, $\emb(\phi)$, representing the semantic embedding of an LTL formula $\phi$. This collapses the mechanism described above in two ways: first, there is only one Key for the Query to score against, so the weight vector $\bm{a}_t$ has a single entry and reduces to a scalar $a_t \in \mathbb{R}$, and second, a softmax over one score evaluates to $a_t = 1$ irrespective of what that Query and Key contain. The cross-attention output is therefore $\bm{V}_{sem} = \bm{W}^{cross}_v \emb(\phi)$ at every position $t$, and within each Transformer Block every decoder position receives the same additive update. This means that, for our model, the \textit{attention} part of the cross-attention mechanism is present in the architecture, but completely inert. The cross-attention of each of the transformer blocks thus only acts as means to inject a learned transformation of the semantic embedding.
     
 
 \chapter{The Linear Temporal Logic Kernel and Formula Embedding} \label{chap:kernel}
@@ -356,7 +356,7 @@
         V_\phi :=\; \tfrac{1}{N}\sum_{i=1}^{N}(\widehat\chi^i_\phi - \bar\chi_\phi)^2 = \bar\chi_\phi(1-\bar\chi_\phi)
     \end{equation}
     for $\satvec_\phi$'s empirical variance, the second equality holding because its entries are binary, and write $\sigma_\phi := \sqrt{V_\phi}$ for $\satvec_\phi$'s standard deviation. The feature map as given above then has $\Vert f(\phi)\Vert^2 = V_\phi$ by construction: 
-    \begin{equation}
+    \begin{equation}\label{eq:feature_map_norm}
     \begin{split}
     \Vert f(\phi)\Vert^2    & =\; \Bigl\Vert \tfrac{1}{\sqrt N}\bigl(\satvec_\phi - \bar\chi_\phi\mathbf{1}\bigr)\Bigr\Vert^2 \\
                             & =\; \frac{1}{N}\sum_{i=1}^{N}\bigl(\widehat\chi^i_\phi - \bar\chi_\phi\bigr)^2 \\
@@ -373,26 +373,57 @@
     \begin{split}
     \Vert \emb(\phi) \Vert^2    & =\; \sum_{i=1}^{M} V_\phi \, V_{\psi_i} \, \rho^2_{\phi\psi_i} \\
                                 & =\; V_\phi \sum_{i=1}^{M} V_{\psi_i}\, \rho^2_{\phi\psi_i} \\
-    \Vert \emb(\phi) \Vert      & =\; \sigma_\phi \sqrt{\sum_{i=1}^{M} V_{\psi_i}\, \rho^2_{\phi\psi_i}} \\
+    \Vert \emb(\phi) \Vert \    & =\; \sigma_\phi \sqrt{\sum_{i=1}^{M} V_{\psi_i}\, \rho^2_{\phi\psi_i}} \\
     \end{split}
     \end{equation}
     The embedding's magnitude factors into two parts and the norm therefore relays two things to the decoder at once. The first factor, $\sigma_\phi$, is a property of the target alone: how variable its satisfaction is under $\mathcal{T}$, which by $V_\phi = \bar\chi_\phi(1-\bar\chi_\phi)$ is the same as how far its base rate sits from $\tfrac{1}{2}$. The second factor is a property of the target's relation to the anchor set: how much of that variation the anchors register, each anchor weighted by its own variance and by the square of its correlation with the target. The embedding's norm reaches the decoder as a product, and only a product. It sees the overall size of the embedding, but not whether a small embedding signal denotes a target with low variance or a target whose variation happens to not be captured by the anchor set. We could remove this ambiguity by normalizing by the kernel function by the two satisfaction vectors's respective norms, exactly as we did for $k^{\cos}$ in \ref{eq:cosine_kernel}, transforming our covariance into an empirical Pearson correlation and forcing all formula embeddings onto a unit scale. The norm would then encode correlation to the anchors alone, but is that something we should want? Would we be depriving the decoder of useful information by normalizing away the variance factor? This is what we'll be investigating in the remainder of this section.  
 
     We have established that the embedding's magnitude encodes information about the target formula's satisfaction variance, but that doesn't establish whether the model's architecture allows it to capture this information. So, to get an answer to the normalization question, we must look at precisely how the transformer model actually incorporates this conditioning signal into the generation process. To understand this we follow the semantic embedding through the model, from first contact with the decoder to the final sequence generation. 
         
-    We start at the beginning. As described in section~\ref{sec:model_architecture}, the $M$-dimensional semantic embedding vector is injected into the cross-attention block depicted in figure~\ref{fig:ltl_model_architecture} as a \emph{single} conditioning token. The downstream result of this is that at every position $t$ in the model's hidden states are updated by the same value vector $\bm V_{sem}$ through the residual connection, where the magnitude of this update is  bounded by the magnitude of the input: $\Vert \bm V_{sem} \Vert \leq \Vert \bm W^{cross}_v \Vert \, \Vert \emb(\phi) \Vert$. For a trained model, the $\bm{W}^{cross}_v$ is fixed between different rounds of generation. So the difference in the magnitude of the update between any two formulae is strictly down to the differences in magnitudes of the embeddings of these formulae. In essence then, the cross-attention part of the transformer block simply adds an update to the 
+    We start at the beginning. As described in section~\ref{sec:model_architecture}, the $M$-dimensional semantic embedding vector is injected into the cross-attention block depicted in figure~\ref{fig:ltl_model_architecture} as a \emph{single} conditioning token. The downstream result of this is that at every position $t$ in the model's hidden states are updated by the same value vector $\bm V_{sem}$ through the residual connection, where the magnitude of this update is  bounded by the magnitude of the input: $\Vert \bm V_{sem} \Vert \leq \Vert \bm W^{cross}_v \Vert \, \Vert \emb(\phi) \Vert$. For a trained model, the $\bm{W}^{cross}_v$ is fixed between different rounds of generation. So the difference in the magnitude of the update between any two formulae is strictly down to the differences in magnitudes of the embeddings of these formulae. By consulting figure~\ref{fig:ltl_model_architecture} again, we can see that after the residual connection that adds $\bm V_{sem}$ to the cross-attention input, there is no other transformation or normalization of the result that occurs until the final layer normalization step after each of the transformer blocks. As has been argued extensively in \cite{elhage_mathematical_2021}, the so-called "residual stream" is a series of independent and additive updates that together produce the model's behavior. In essence, the consecutive transformer blocks produce a large sum of updates to the initial embedding. This is an important fact to understanding how the embedding norm survives the next transformation on its path, the Final Layer Normalization step.
 
-    $$
-    \begin{aligned}
-    \bm{x} &\leftarrow \bm{x} + \mathrm{SelfAttn}(\mathrm{LN}1(\bm{x})) \\
-    \bm{x} &\leftarrow \bm{x} + \mathrm{CrossAttn}(\mathrm{LN}{c}(\bm{x}),d \emb(\phi)) \;=\; \bm{x} + \bm{u}_\ell(\phi) \\
-    \bm{x} &\leftarrow \bm{x} + \mathrm{MLP}(\mathrm{LN}_2(\bm{x}))
-    \end{aligned}
-    $$
+    After having gone through all of the transformer blocks, the input to the Final Layer Normalization step for any given position $t$ can be thought of a sum of two terms:
+    \begin{equation}
+        \bm h^{final}_t = \bm p_t \,+\, \bm u_t(\phi) 
+    \end{equation}
+    where $\bm p_t$ denotes the sum of the non-semantic embedding related updates and biases that the model has added together with initial input to the transformer blocks, and $\bm u_t(\phi)$ denotes the sum of updates coming from the cross-attention injections. The layer normalization standardizes this vector across its $d$ coordinates,
+    \begin{equation}\label{eq:layernorm}
+        \mathrm{LN}(\bm h) \;=\; \bm\gamma \odot \frac{\bm h - \mu(\bm h)\mathbf 1}{\sigma(\bm h)} \;+\; \bm\beta,
+        \qquad
+        \mu(\bm h) = \frac 1d \sum_{i=1}^{d} h_i,
+        \qquad
+        \sigma(\bm h) = \sqrt{\frac 1d \sum_{i=1}^{d} \bigl(h_i - \mu(\bm h)\bigr)^2},
+    \end{equation}
+    with learned gain $\bm\gamma$ and bias $\bm\beta$ \citep{ba_layer_2016}. This operation is invariant to the scale of its input: for any $c > 0$ we have $\mu(c\bm h) = c\,\mu(\bm h)$ and $\sigma(c\bm h) = c\,\sigma(\bm h)$, so the two factors of $c$ cancel and $\mathrm{LN}(c\bm h) = \mathrm{LN}(\bm h)$. Writing $\bm{\tilde h} := \bm h - \mu(\bm h)\mathbf 1$ for the centered vector and noting that $\sigma(\bm h) = \frac{\Vert\bm{\tilde h}\Vert}{\sqrt d}$, Equation~\eqref{eq:layernorm} can be read geometrically: the layer normalization centers its input and then rescales it to the fixed length $\sqrt d$, projecting every hidden state onto a sphere, leaving only its direction. The gain $\bm\gamma$, the bias $\bm\beta$ and the radius $\sqrt d$ are all fixed for a trained model at the time of generation, so the only variable quantity through which $\bm h^{final}_t$ reaches the LM Head is the unit direction of its centered form:
+    \begin{equation}\label{eq:ln_direction}
+        \bm{\hat h}^{final}_t \;:=\;  \frac{\bm{\tilde h}^{final}_t}{\bigl\Vert \bm{\tilde h}^{final}_t \bigr\Vert}.
+    \end{equation}
+    Due to this final layer normalization step, hidden states sharing this direction produce identical logits no matter how far apart they are in length. Whatever magnitude the semantic embedding contributed to $\bm h^{final}_t$ is therefore not transmitted \emph{as} a magnitude. So if it is to affect the generation process beyond this point, it will have to do so by affecting the direction of $\bm{\hat h}^{final}_t$. 
     
-    
-    
-    
+    It does, but as a ratio rather than as an absolute size. Centering is a linear operation, so it distributes over the decomposition, $\bm{\tilde h}^{final}_t = \bm{\tilde p}_t + \bm{\tilde u}_t(\phi)$. Writing each of the two centered terms as its length times its unit direction, $\bm{\tilde p}_t = \Vert\bm{\tilde p}_t\Vert\,\bm{\hat p}_t$ and $\bm{\tilde u}_t(\phi) = \Vert\bm{\tilde u}_t(\phi)\Vert\,\bm{\hat u}_t(\phi)$, the length of the first can be taken outside the sum, and, because $\Vert c\,\bm v\Vert = c\,\Vert\bm v\Vert$ for positive $c$, outside the norm in the denominator as well, where the two occurrences cancel:
+    \begin{equation}\label{eq:ln_mixture}
+    \begin{split}
+        \bm{\hat h}^{final}_t
+        & =\; \frac{\bm{\tilde p}_t + \bm{\tilde u}_t(\phi)}{\bigl\Vert \bm{\tilde p}_t + \bm{\tilde u}_t(\phi) \bigr\Vert} \\[4pt]
+        & =\; \frac{\Vert\bm{\tilde p}_t\Vert \bigl( \bm{\hat p}_t + r_t(\phi)\,\bm{\hat u}_t(\phi) \bigr)}{\Vert\bm{\tilde p}_t\Vert \, \bigl\Vert \bm{\hat p}_t + r_t(\phi)\,\bm{\hat u}_t(\phi) \bigr\Vert} \\[4pt]
+        & =\; \frac{\bm{\hat p}_t + r_t(\phi)\,\bm{\hat u}_t(\phi)}{\bigl\Vert \bm{\hat p}_t + r_t(\phi)\,\bm{\hat u}_t(\phi) \bigr\Vert},
+        \qquad\text{where}\quad
+        r_t(\phi) \;:=\; \frac{\bigl\Vert \bm{\tilde u}_t(\phi) \bigr\Vert}{\bigl\Vert \bm{\tilde p}_t \bigr\Vert} .
+    \end{split}
+    \end{equation}
+    The two centered  lengths have collapsed into the single ratio $r_t(\phi)$, which is the only quantity in this expression that carries information the size of the cross attention injections. So, we find that the embedding's magnitude is not discarded at this step, but it is re-expressed as a mixing weight for the semantic embedding signal.
+
+    The question about normalizing the covariance kernel is a question about what the decoder can see. For two different targets, the denominator of $r_t(\phi)$ is the same for both. Any difference in the mixing weight is therefore a difference in $\Vert\widetilde{\bm u}_t(\phi)\Vert$, which, by the linearity of the injection, is a difference in $\Vert\emb(\phi)\Vert$. Substituting the decomposition of Equation~\eqref{eq:emb_norm}, the mixing weight the decoder receives is proportional to
+    \begin{equation}\label{eq:r_factored}
+        r_t(\phi) \;\propto\; \sigma_\phi \sqrt{\sum_{i=1}^{M} V_{\psi_i} \rho^2_{\phi\psi_i}},
+    \end{equation}
+    and it therefore varies between targets for both of the reasons we described earlier: how variable the target's satisfaction is, and how much of that is captured by the anchor set.
+
+    If we normalize the kernel, we close the first of these reasons and leave the second. Under the Pearson kernel each coordinate becomes $\emb(\phi)_i = \rho_{\phi\psi_i}$, so the target's standard deviation is divided out of every coordinate and $r_t(\phi)$ no longer responds to it at all. The effect is sharpest for two formulae that stand in the same correlational relation to every anchor but differ in base rate: under $k^{\cov}$ their embeddings are scalar multiples of one another, sharing a direction $\widehat{\bm u}_t$ and differing only in $r_t$, so the decoder receives the same conditioning at two different strengths; under normalization they are assigned the identical vector and become indistinguishable. Across our $4{,}000$ validation targets the two factors of Equation~\eqref{eq:r_factored} account for $60.5\%$ and $39.5\%$ of the variability in $\log\Vert\emb(\phi)\Vert$ respectively, so normalization would remove three fifths of the spread in the one quantity the architecture makes available as a magnitude, and would remove exactly the portion of it that tracks the target rather than the anchor bank.
+
+    We want to be careful about what this does and does not establish. It does not show that the decoder reads this mixing weight as a statement about satisfaction variance, nor that it reads it at all; that question is empirical and we take it up in Experiment~3 (Section~\ref{sec:exp3_...}). What the preceding argument establishes is that the architecture transmits the quantity rather than discarding it: the injection is affine in the embedding, the residual stream accumulates it without rescaling, and the normalization steps convert its magnitude into a share rather than erasing it. Normalizing the kernel would remove that information before the model had any opportunity to use it, and would do so on the basis of a property of the embedding geometry rather than any evidence about the decoder.
+
+
     
     Viewed through this lens, the variance sensitivity is a significant boon. By preserving the formula's variance rather than normalizing it away, the covariance kernel is afforded a the degree of freedom that it may learn to exploit. When the model encounters a small magnitude embedding, we want it to interpret this as: \textit{the anchors' behavioral patterns are relatively uninformative for explaining that of the target formula}. If we were to cosine-normalize the kernel, we would rob the architecture of its only mechanism to respond appropriately to the differing informativeness of the formulae's behavioral signals.
 
