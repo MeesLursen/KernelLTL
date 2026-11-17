@@ -1,11 +1,12 @@
-"""Load and verify per-generation validation JSONLs (Experiment 1).
+"""Load and verify per-generation validation JSONLs (shared by all analyses).
 
 Reads the raw records emitted by ``validation_utils`` (``greedy.jsonl`` and
 ``topk_flat.jsonl``), asserts the schema, and runs completeness and
 consistency checks before any statistic is computed. The checks are hard
 failures by default: if a run directory contains duplicated or missing
-targets (e.g. a DDP gather bug) or semantically inconsistent records, the
-analysis refuses to run rather than silently producing wrong numbers.
+targets (e.g. a DDP gather bug), records that do not belong to the dataset
+being read, or semantically inconsistent records, the analysis refuses to run
+rather than silently producing wrong numbers.
 """
 
 from __future__ import annotations
@@ -108,25 +109,41 @@ def read_dataset_size(dataset_dir: Path | None) -> int | None:
     return int(meta["size"])
 
 
-def infer_special_ids(token_rows: pd.Series) -> tuple[int, int]:
-    """Infer (bos_id, eos_id) from stored trajectories, with hard consistency asserts.
+def read_special_ids(tokenizer_dir: Path, token_rows: pd.Series) -> tuple[int, int]:
+    """(bos_id, eos_id) from the saved tokenizer, checked against the stored trajectories.
 
-    BOS is the unanimous first token of every stored sequence (``generate``
-    always emits it). EOS is the unanimous last token over sequences that
-    terminated; length-capped sequences (no EOS) are excluded by taking the
-    modal last token and asserting it accounts for >95% of rows.
+    The ids come from the project's own tokenizer class, so the analysis uses
+    exactly the mapping the model was trained and validated with. As a
+    consistency check, every stored sequence must start with BOS (``generate``
+    always emits it); EOS may be missing from length-capped sequences.
     """
-    firsts = token_rows.str[0]
-    if firsts.nunique() != 1:
-        raise ValueError(f"BOS inference failed: first tokens not unanimous ({firsts.unique()[:5]})")
-    bos = int(firsts.iloc[0])
+    from tokenizer_pretrained_class import LTLTokenizer  # core module; imported only when needed
 
-    lasts = token_rows.str[-1]
-    modal = lasts.mode()
-    eos = int(modal.iloc[0])
-    frac = float((lasts == eos).mean())
-    if frac < 0.95:
-        raise ValueError(f"EOS inference unreliable: modal last token {eos} covers only {frac:.1%}")
-    if eos == bos:
-        raise ValueError("EOS inference collided with BOS")
+    tokenizer = LTLTokenizer.from_pretrained(str(tokenizer_dir))
+    bos, eos = int(tokenizer.bos_token_id), int(tokenizer.eos_token_id)
+    firsts = token_rows.str[0]
+    if not (firsts == bos).all():
+        bad = firsts[firsts != bos]
+        raise ValueError(f"{len(bad)} stored sequences do not start with the tokenizer's BOS id {bos} "
+                         f"(e.g. {bad.unique()[:5]}) -- wrong --tokenizer-dir?")
     return bos, eos
+
+
+def check_alignment(df: pd.DataFrame, dataset_dir: Path, *, name: str) -> None:
+    """Assert every record's target is the dataset row its ``formula_id`` points at.
+
+    ``formula_id`` is a row index into the validation dataset, so a run scored
+    against a different (e.g. rebuilt) dataset would silently misalign. Each
+    record's ``target_formula_str`` must equal line ``formula_id`` of the
+    dataset's ``formulas.jsonl`` (plain text; no tensors are loaded).
+    """
+    formulas = [line.rstrip("\n") for line in open(Path(dataset_dir) / "formulas.jsonl") if line.strip()]
+    ids = df["formula_id"].to_numpy()
+    if ids.min() < 0 or ids.max() >= len(formulas):
+        raise ValueError(f"{name}: formula_id outside the {len(formulas)} dataset rows")
+    expected = pd.Series([formulas[i] for i in ids], index=df.index)
+    bad = df["target_formula_str"] != expected
+    if bad.any():
+        example = df.loc[bad, "formula_id"].iloc[0]
+        raise ValueError(f"{name}: {int(bad.sum())} records do not match {dataset_dir}/formulas.jsonl "
+                         f"(e.g. formula_id {example}) -- run scored against a different dataset?")

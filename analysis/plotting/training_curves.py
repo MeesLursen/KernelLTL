@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-"""Thesis figure: curriculum pretraining curves for the selected base model (run4, constant LR).
+"""Thesis figure: curriculum training curves of the thesis model.
 
 For each of the four curriculum stages this emits a 2x4 panel:
   row 1 -- train vs. eval cross-entropy (nats)
@@ -7,115 +6,95 @@ For each of the four curriculum stages this emits a 2x4 panel:
 
 Markers:
   * dotted vertical line + filled dot  -> the restored checkpoint (min eval cross-entropy),
-    i.e. the epoch actually handed to the next stage / to finetuning.
+    i.e. the epoch actually handed to the next stage.
   * open circle on the distance curve  -> epoch of minimum semantic distance.
   * open square on the rate curve       -> epoch of maximum semantic equivalence rate.
 
-The offset between the restored epoch and the two semantic optima is the semantic
-headroom left open for reinforcement finetuning.
+Input: the per-stage ``logs/metrics_history.jsonl`` files of the trained model,
+written at full precision by the training run's metrics logger.
 
-Usage:  python scripts/plot_pretraining_curves.py
-Outputs: thesis/Figures/pretraining_curves.pdf  and  misc/figures/pretraining_curves.png
+Usage (from the repository root, as a module)::
+
+    python -m analysis.plotting.training_curves \
+        --model-dir <artifacts>/models/CE/final \
+        --output-dir <artifacts>/analysis/figures
+
+Outputs: training_curves.png and training_curves.pdf in --output-dir.
 """
+
 from __future__ import annotations
 
-import ast
-import re
+import sys
+
+if not __package__:
+    sys.exit("Run this as a module from the repository root:  python -m analysis.plotting.training_curves ...")
+
+import argparse
+import json
 from pathlib import Path
 
-import matplotlib
-matplotlib.use("Agg")
+from analysis.plotting.style import (AQUA, BLUE, DARK, INK, INK_2, ORANGE, VIOLET,
+                                     label_point, style_axes)
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 import numpy as np
 
-ROOT = Path(__file__).resolve().parent.parent
-LOG = ROOT / "misc" / "kernelltl_curriculum_24643524.out"   # run4: constant LR, eval_loss selection
-PDF_OUT = ROOT / "thesis" / "Figures" / "pretraining_curves.pdf"
-PNG_OUT = ROOT / "misc" / "figures" / "pretraining_curves.png"
-
 STAGES = ["stage1", "stage2", "stage3", "stage4"]
 
-# palette (dataviz reference instance, print-safe with distinct line styles)
-C_TRAIN = "#2a78d6"   # blue
-C_EVAL = "#eb6834"    # orange
-C_DIST = "#1baf7a"    # aqua
-C_RATE = "#4a3aa7"    # violet
-INK = "#1a1a1a"
-INK_2 = "#5c5c5c"
-GRID = "#e6e6e6"
-RESTORE = "#333333"
-
-plt.rcParams.update({
-    "font.size": 9,
-    "font.family": "sans-serif",
-    "axes.linewidth": 0.8,
-    "axes.edgecolor": "#b0b0b0",
-    "figure.facecolor": "white",
-    "axes.facecolor": "white",
-    "svg.fonttype": "none",
-    "pdf.fonttype": 42,
-})
-
-RE_STAGE = re.compile(r"^Starting (stage\d) \(Run")
-RE_EVALHDR = re.compile(r"^\s*Eval @ epoch ([\d.]+) / step (\d+):")
-RE_SEMDIST = re.compile(r"^\s*eval_semantic_distance:\s*([\d.]+)")
-RE_SEMRATE = re.compile(r"^\s*eval_semantic_equivalent_rate:\s*([\d.]+)")
+# colour roles in this figure
+C_TRAIN, C_EVAL, C_DIST, C_RATE, RESTORE = BLUE, ORANGE, AQUA, VIOLET, DARK
 
 
-def parse_log(path: Path):
-    stage, pending, rows = None, None, {}
-    for line in path.read_text().splitlines():
-        if m := RE_STAGE.match(line):
-            stage = m.group(1)
-            continue
-        if stage is None:
-            continue
-        s = line.strip()
-        if s.startswith("{") and s.endswith("}"):
-            try:
-                d = ast.literal_eval(s)
-            except (ValueError, SyntaxError):
-                continue
-            if not isinstance(d, dict) or "epoch" not in d:
-                continue
-            r = rows.setdefault((stage, float(d["epoch"])), {"epoch": float(d["epoch"])})
-            if "loss" in d:
-                r["train_loss"] = d["loss"]
-            if "eval_loss" in d:
-                r["eval_loss"] = d["eval_loss"]
-            continue
-        if m := RE_EVALHDR.match(line):
-            pending = float(m.group(1))
-            rows.setdefault((stage, pending), {"epoch": pending})
-        elif m := RE_SEMDIST.match(line):
-            rows[(stage, pending)]["sem_dist"] = float(m.group(1))
-        elif m := RE_SEMRATE.match(line):
-            rows[(stage, pending)]["sem_rate"] = float(m.group(1))
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description=__doc__.split("\n")[0],
+                                formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    p.add_argument("--model-dir", required=True, type=Path,
+                   help="Trained model dir holding stage1..stage4/logs/ (e.g. <artifacts>/models/CE/final).")
+    p.add_argument("--output-dir", required=True, type=Path,
+                   help="Where training_curves.png/.pdf are written (e.g. <artifacts>/analysis/figures).")
+    return p.parse_args()
+
+
+def load_metrics(model_dir: Path) -> dict[str, list[dict]]:
+    """Per stage, one row per epoch: train/eval cross-entropy and the two semantic metrics.
+
+    Refuses files that hold more than one run (the logger appends, so a rerun
+    into the same output dir would add a second run whose epoch counter restarts).
+    """
     out = {}
     for st in STAGES:
-        out[st] = sorted((v for k, v in rows.items() if k[0] == st), key=lambda r: r["epoch"])
+        path = model_dir / st / "logs" / "metrics_history.jsonl"
+        train, evals = {}, {}
+        last = {"train_epoch_end": -1.0, "eval_epoch_end": -1.0}
+        with open(path) as fh:
+            for line in fh:
+                r = json.loads(line)
+                kind = r.get("event_type")
+                if kind not in last:
+                    continue
+                ep = float(r["epoch"])
+                if ep <= last[kind]:
+                    raise ValueError(f"{path}: epoch counter goes back ({last[kind]} -> {ep}); "
+                                     "the file holds more than one run")
+                last[kind] = ep
+                if kind == "train_epoch_end":
+                    train[ep] = r["train_loss_mean"]
+                else:
+                    evals[ep] = r
+        if set(train) != set(evals):
+            raise ValueError(f"{path}: train and eval epochs differ")
+        out[st] = [{"epoch": ep,
+                    "train_loss": train[ep],
+                    "eval_loss": evals[ep]["eval_loss"],
+                    "sem_dist": evals[ep]["eval_semantic_distance"],
+                    "sem_rate": evals[ep]["eval_semantic_equivalent_rate"]}
+                   for ep in sorted(train)]
     return out
 
 
-def style(ax):
-    ax.grid(True, color=GRID, linewidth=0.7)
-    ax.set_axisbelow(True)
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
-    ax.tick_params(colors=INK_2, labelsize=8, length=3, width=0.7)
-
-
-def label_point(ax, text, x, y, xmax, dy):
-    right = x > 0.6 * xmax
-    ax.annotate(text, (x, y), xytext=(-4 if right else 4, dy),
-                textcoords="offset points", fontsize=7, color=INK_2,
-                ha="right" if right else "left",
-                va="bottom" if dy > 0 else "top")
-
-
 def main():
-    data = parse_log(LOG)
+    args = parse_args()
+    data = load_metrics(args.model_dir)
     fig, axes = plt.subplots(2, 4, figsize=(13.2, 5.6), constrained_layout=True)
 
     for j, st in enumerate(STAGES):
@@ -133,7 +112,7 @@ def main():
 
         # ---- row 1: cross-entropy ----
         ax = axes[0, j]
-        style(ax)
+        style_axes(ax)
         ax.plot(ep, tr, color=C_TRAIN, lw=1.8, label="train")
         ax.plot(ep, ev, color=C_EVAL, lw=1.8, ls="--", label="eval")
         ax.axvline(re_ep, color=RESTORE, lw=1.0, ls=":", zorder=1)
@@ -146,7 +125,7 @@ def main():
 
         # ---- row 2: semantic metrics ----
         ax = axes[1, j]
-        style(ax)
+        style_axes(ax)
         ax.plot(ep, sd, color=C_DIST, lw=1.8, label="semantic distance")
         ax.plot(ep, sr, color=C_RATE, lw=1.8, ls="--", label="equivalence rate")
         ax.axvline(re_ep, color=RESTORE, lw=1.0, ls=":", zorder=1)
@@ -181,13 +160,14 @@ def main():
                labelcolor=INK_2, loc="lower center", bbox_to_anchor=(0.5, -0.075),
                handletextpad=0.5, columnspacing=1.3)
 
-    PDF_OUT.parent.mkdir(parents=True, exist_ok=True)
-    PNG_OUT.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(PDF_OUT, bbox_inches="tight")
-    fig.savefig(PNG_OUT, dpi=170, bbox_inches="tight")
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    pdf_out = args.output_dir / "training_curves.pdf"
+    png_out = args.output_dir / "training_curves.png"
+    fig.savefig(pdf_out, bbox_inches="tight")
+    fig.savefig(png_out, dpi=170, bbox_inches="tight")
     plt.close(fig)
-    print(f"wrote {PDF_OUT}")
-    print(f"wrote {PNG_OUT}")
+    print(f"wrote {pdf_out}")
+    print(f"wrote {png_out}")
     # echo the marked epochs for the caption
     for st in STAGES:
         rows = data[st]

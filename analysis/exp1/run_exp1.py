@@ -3,8 +3,8 @@
 Consumes the per-generation records of one conditioned validation run (greedy
 + top-K passes) and, optionally, the three embedding-ablation runs (greedy
 only). Emits tidy CSV tables carrying point estimates with 95% percentile-
-bootstrap intervals -- everything the local data-viz layer and the thesis
-tables need, and nothing else. No plotting here.
+bootstrap intervals -- everything the thesis tables and the figures in
+``analysis/plotting/`` need, and nothing else. No plotting here.
 
 Outputs (under --output-dir):
     overall.csv     pass x metric                (thesis tab:exp1_results_overall)
@@ -15,34 +15,38 @@ Outputs (under --output-dir):
     checks.csv      consistency-check violation counts
     manifest.json   inputs, settings, thesis-object -> (file, filter) map
 
-Usage::
+Usage (from the repository root, as a module)::
 
-    python scripts/analysis_exp1/run_exp1.py \
+    python -m analysis.exp1.run_exp1 \
         --run-dir <validation_root>/ce_base \
         --ablation-dir zero=<validation_root>/ce_base_ablation_zero \
         --ablation-dir mean=<validation_root>/ce_base_ablation_mean \
         --ablation-dir shuffle=<validation_root>/ce_base_ablation_shuffle \
         --dataset-dir <artifacts>/datasets/validation \
+        --tokenizer-dir <artifacts>/tokenizer \
         --output-dir <artifacts>/analysis/exp1
 """
 
 from __future__ import annotations
 
+import sys
+
+if not __package__:
+    sys.exit("Run this as a module from the repository root:  python -m analysis.exp1.run_exp1 ...")
+
 import argparse
 import json
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from bootstrap import DEFAULT_B, DEFAULT_SEED, index_matrix, mean_ci          # noqa: E402
-from load import (infer_special_ids, load_greedy, load_topk,                  # noqa: E402
-                  read_dataset_size)
-from metrics import (GREEDY_METRICS, TOPK_METRICS, per_target_greedy,         # noqa: E402
-                     per_target_topk)
+from analysis.common.bootstrap import DEFAULT_B, DEFAULT_SEED, index_matrix, mean_ci
+from analysis.common.load import (check_alignment, load_greedy, load_topk,
+                                  read_dataset_size, read_special_ids)
+from analysis.exp1.metrics import (GREEDY_METRICS, TOPK_METRICS, per_target_greedy,
+                                   per_target_topk)
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,7 +59,10 @@ def parse_args() -> argparse.Namespace:
                    help="Ablation run as name=path (greedy-only). Repeatable.")
     p.add_argument("--dataset-dir", type=Path, default=None,
                    help="Validation dataset dir; metadata.json supplies the expected "
-                        "target count for the completeness check.")
+                        "target count for the completeness check, formulas.jsonl the "
+                        "formula_id alignment check.")
+    p.add_argument("--tokenizer-dir", required=True, type=Path,
+                   help="Saved tokenizer dir; supplies the BOS/EOS ids stripped before self-BLEU.")
     p.add_argument("--output-dir", required=True, type=Path)
     p.add_argument("--top-k", type=int, default=5)
     p.add_argument("--bootstrap-samples", type=int, default=DEFAULT_B)
@@ -106,7 +113,13 @@ def main() -> None:
     df_t, checks = load_topk(args.run_dir, expected_n=expected_n, k=args.top_k)
     all_checks += checks
 
-    bos, eos = infer_special_ids(df_t["token_ids"])
+    if args.dataset_dir is not None:
+        check_alignment(df_g, args.dataset_dir, name=f"{args.run_dir.name}/greedy")
+    # top-K records carry no target string; they must cover exactly the greedy targets
+    if set(df_t["formula_id"]) != set(df_g["formula_id"]):
+        raise SystemExit(f"{args.run_dir}: greedy and top-K passes cover different formula_ids")
+
+    bos, eos = read_special_ids(args.tokenizer_dir, df_t["token_ids"])
     pt_g = per_target_greedy(df_g)
     pt_t = per_target_topk(df_t, k_max=args.top_k, bos=bos, eos=eos)
     depths = sorted(pt_g["target_depth"].unique().tolist())
@@ -152,6 +165,8 @@ def main() -> None:
             raise SystemExit(f"--ablation-dir expects NAME=PATH, got {spec!r}")
         df_a, checks = load_greedy(Path(path), expected_n=expected_n)
         all_checks += checks
+        if args.dataset_dir is not None:
+            check_alignment(df_a, args.dataset_dir, name=f"{Path(path).name}/greedy")
         pt_a = per_target_greedy(df_a)
         for r in slice_rows(pt_a, floor_specs, pass_name="greedy",
                             seed=args.seed, b=args.bootstrap_samples):
@@ -171,6 +186,7 @@ def main() -> None:
         "run_dir": str(args.run_dir),
         "ablation_dirs": args.ablation_dir,
         "dataset_dir": str(args.dataset_dir) if args.dataset_dir else None,
+        "tokenizer_dir": str(args.tokenizer_dir),
         "expected_n_targets": expected_n,
         "top_k": args.top_k,
         "bootstrap": {"samples": args.bootstrap_samples, "seed": args.seed,

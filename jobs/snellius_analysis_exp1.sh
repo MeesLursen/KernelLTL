@@ -27,6 +27,7 @@ VENV_DIR="$HOME_DIR/venv"
 VALIDATION_ROOT="$PROJECT_DIR/artifacts/validation"
 RUN_NAME="ce_base"                                   # conditioned run to analyse
 DATASET_DIR="$PROJECT_DIR/artifacts/datasets/validation"
+TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 OUTPUT_DIR="$PROJECT_DIR/artifacts/analysis/exp1"
 
 TOP_K=5
@@ -51,12 +52,13 @@ export PYTHONPATH="$HOME_DIR:${PYTHONPATH:-}"
 
 # ---------------------------- RUN ------------------------------------------
 CMD=(
-    python -u scripts/analysis_exp1/run_exp1.py
+    python -u -m analysis.exp1.run_exp1
     --run-dir "$VALIDATION_ROOT/$RUN_NAME"
     --ablation-dir "zero=$VALIDATION_ROOT/${RUN_NAME}_ablation_zero"
     --ablation-dir "mean=$VALIDATION_ROOT/${RUN_NAME}_ablation_mean"
     --ablation-dir "shuffle=$VALIDATION_ROOT/${RUN_NAME}_ablation_shuffle"
     --dataset-dir "$DATASET_DIR"
+    --tokenizer-dir "$TOKENIZER_DIR"
     --output-dir "$OUTPUT_DIR"
     --top-k "$TOP_K"
     --bootstrap-samples "$BOOTSTRAP_SAMPLES"
