@@ -2,7 +2,7 @@
 #SBATCH --job-name=kernelltl-ce-hpo-stage1
 #SBATCH --output=logs/kernelltl_ce_hpo_stage1_%j.out
 #SBATCH --error=logs/kernelltl_ce_hpo_stage1_%j.err
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --partition=gpu_h100
 #SBATCH --gpus=4
 #SBATCH --cpus-per-task=64
@@ -13,12 +13,11 @@ set -euo pipefail
 # ============================================================================
 # Staged CE hyperparameter selection on stage 1 (depth-graded datasets + regenerated kernel).
 #
-# Mirrors the thesis protocol (main.tex, "Prior to training..."), selecting on
-# eval_semantic_distance (the semantic objective), not token cross-entropy:
-#   Phase A: LR grid {1e-5, 5e-5, 1e-4, 5e-4} at dropout=0.1, wd=0.01
+# Mirrors the thesis protocol (main.tex, "Prior to training..."):
+#   Phase A: LR grid {5e-6, 1e-5, 5e-5, 1e-4, 5e-4} at dropout=0.1, wd=0.01
 #            (4-GPU DDP, full-fidelity runs, early stopping).
 #   Phase B: Optuna (20 sequential trials) over dropout in [0, 0.2] (step .05)
-#            and weight_decay in [0.0, 0.02], at the Phase-A best LR. Each
+#            and weight_decay in [0.005, 0.02], at the Phase-A best LR. Each
 #            trial trains with DDP across all 4 GPUs (same effective batch as
 #            Phase A). The standard (dropout, wd) is enqueued as the study's
 #            first trial, so the Phase-C trigger compares Optuna's best
@@ -49,20 +48,20 @@ TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 TRAIN_DIR="$PROJECT_DIR/artifacts/datasets/stage1/train"
 EVAL_DIR="$PROJECT_DIR/artifacts/datasets/stage1/eval"
 
-HPO_ROOT="$PROJECT_DIR/artifacts/models/CE/hpo_v3_sem_dist"   # fresh: semdist objective (keeps hpo_v2 eval_loss results intact)
+HPO_ROOT="$PROJECT_DIR/artifacts/models/CE/hpo_v2"     # persistent results
 SCRATCH_BASE="/scratch-local/$USER/KernelLTL"
-SCRATCH_ROOT="$SCRATCH_BASE/models/CE/hpo_v3_sem_dist"
+SCRATCH_ROOT="$SCRATCH_BASE/models/CE/hpo_v2"
 
 # Selection objective. Thesis + existing infra select on eval_semantic_distance;
 # switch to "eval_loss" only if you deliberately change the selection criterion.
-OBJECTIVE_METRIC="eval_semantic_distance"
+OBJECTIVE_METRIC="eval_loss"
 
 # Standard settings (thesis): the Phase-A regularisation, and Phase-C trigger reference.
 STD_DROPOUT=0.1
 STD_WD=0.01
 
 # Phase A / C: LR grid at full fidelity (thesis values).
-LR_VALUES=("1e-5" "5e-5" "1e-4" "5e-4")
+LR_VALUES=("1e-5" "5e-5" "1e-4" "5e-4" "1e-3" "5e-3")
 FULL_EPOCHS=100
 FULL_PATIENCE=10
 FULL_BATCH_SIZE=256            # per device, 4 GPUs -> effective 1024
@@ -73,12 +72,10 @@ N_TRIALS=20
 DROPOUT_MIN=0.0
 DROPOUT_MAX=0.2
 DROPOUT_STEP=0.05
-WD_MIN=0.0
+WD_MIN=0.005
 WD_MAX=0.02
 HPO_EPOCHS=100                  # trial budget; early stopping cuts most trials short
-HPO_PATIENCE=10                 # raised from 5: eval_semantic_distance is jittier than eval_loss,
-                                # so a tighter patience risks stopping a trial before semdist bottoms
-                                # (biasing its objective up). Trials are cheap at stage1; walltime is 48h.
+HPO_PATIENCE=5
 HPO_BATCH_SIZE=256             # per device; x4 GPUs -> effective 1024, same as Phase A
 
 # Phase-C trigger tolerances: "different from standard" means dropout not equal
@@ -256,7 +253,7 @@ OPTUNA_TAG="b_optuna_wd_dropout"
 OPTUNA_OUT_SCRATCH="$SCRATCH_ROOT/$OPTUNA_TAG"
 OPTUNA_OUT_HOME="$HPO_ROOT/$OPTUNA_TAG"
 BEST_RUN_JSON="$OPTUNA_OUT_HOME/logs/hpo_best_run.json"
-STUDY_NAME="ce_hpo_stage1_semdist_wd_dropout"
+STUDY_NAME="ce_hpo_stage1_wd_dropout"
 STUDY_DB="$OPTUNA_OUT_SCRATCH/optuna_study.db"
 STUDY_STORAGE="sqlite:///$STUDY_DB"
 

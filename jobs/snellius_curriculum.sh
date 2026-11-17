@@ -2,7 +2,7 @@
 #SBATCH --job-name=kernelltl-curriculum
 #SBATCH --output=logs/kernelltl_curriculum_%j.out
 #SBATCH --error=logs/kernelltl_curriculum_%j.err
-#SBATCH --time=12:00:00
+#SBATCH --time=20:00:00
 #SBATCH --partition=gpu_h100
 #SBATCH --gpus=4
 #SBATCH --cpus-per-task=64
@@ -38,9 +38,9 @@ TOKENIZER_DIR="$PROJECT_DIR/artifacts/tokenizer"
 # Home output directory (for persisted copies)
 PROJECT_OUTPUT_DIR="$PROJECT_DIR/artifacts/models/CE"
 
-# Run identifier: constant-LR + select/stop on eval_semantic_distance.
-# Kept beside run3 (halving, eval_loss) and run4_constlr (const LR, eval_loss) for comparison.
-RUN_TAG="run5_semdist"
+# Run identifier of curriculum run 4 (SLURM job 24643524), the thesis model. On Snellius its
+# output folder models/CE/run4_constlr was renamed to final_pretrain after the run.
+RUN_TAG="run4_constlr"
 
 # Scratch (fast) storage
 SCRATCH_BASE="/scratch-local/$USER/KernelLTL"
@@ -49,9 +49,15 @@ SCRATCH_OUTPUT_BASE="$SCRATCH_BASE/models/CE"
 # Training defaults (can be overridden per stage)
 DEFAULT_LEARNING_RATE=1e-4
 DEFAULT_BATCH_SIZE=256
+# Warmup is one epoch's worth of steps (warmup_ratio = 1/EPOCHS = STEP_INTERVAL),
+# matching the schedule the HPO was run under. Passed as --warmup-ratio below.
 
-DROPOUT=0.1
-WEIGHT_DECAY=0.01
+# HPO-selected hyperparameters (job 24611750: eval_loss winner c_lr_1e-4)
+#   dropout is applied only at the fresh stage1 init (baked into the config, then
+#   inherited by every later stage via the loaded checkpoint).
+#   weight_decay is passed on every stage so it survives the training_args reload.
+DROPOUT=0.15
+WEIGHT_DECAY=0.015412276933612225
 
 # Mixed precision
 MIXED_PRECISION="--bf16"
@@ -71,6 +77,10 @@ EARLY_STOPPING_THRESHOLD=0.0
 
 # ============================================================================
 
+# Constant peak LR = 1e-4 on every stage (the HPO winner). Each stage still runs its
+# own warmup -> linear-decay-to-0 within-stage, so "constant" means constant *peak*;
+# this removes the between-stage halving that appears to have starved the deeper stages
+# in run3. Isolates the curriculum (data ordering) from any LR anneal.
 STAGE_CONFIGS=(
     "stage1:$PROJECT_DIR/artifacts/datasets/stage1/train:$PROJECT_DIR/artifacts/datasets/stage1/eval:100:1e-4"
     "stage2:$PROJECT_DIR/artifacts/datasets/stage2/train:$PROJECT_DIR/artifacts/datasets/stage2/eval:100:1e-4"
@@ -200,7 +210,7 @@ for i in "${!STAGE_CONFIGS[@]}"; do
         "--dataloader-pin-memory"
         $MIXED_PRECISION
         "--semantic-eval-batch-size" "$EVAL_BATCH_SIZE"
-        "--metric-for-best-model"        "eval_semantic_distance"
+        "--metric-for-best-model"        "eval_loss"
         "--greater-is-better"            "false"
         "--early-stopping-patience" "$EARLY_STOPPING_PATIENCE"
         "--early-stopping-threshold" "$EARLY_STOPPING_THRESHOLD"
