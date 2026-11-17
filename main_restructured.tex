@@ -767,11 +767,11 @@
     \begin{equation}\label{eq:retention_by_group_leverage}
         \lVert\tilde d\rVert^2=\lVert Pu\rVert^2\;\le\;\ell_D\,\lVert u\rVert^2=\frac{|D|}{N}\,\ell_D .
     \end{equation}
-    So again, whatever the anchors, a difference reaches the decoder only as far as their span contains a vector that lies on the traces where the two formulae disagree. And how large the group leverage of $D$ can be is in turn bounded by the single leverages of its traces added up, $\sum_{i\in D}\ell_i$, which we call the \emph{total leverage} of $D$. By equation~\eqref{eq:share_bound}, a vector in $S$ places at most the share $\ell_i$ of its squared length on $\sigma^i$, and hence at most the share $\sum_{i\in D}\ell_i$ on the traces of $D$ together. As no share exceeds one,
+    So again, whatever the anchors, a difference reaches the decoder only as far as their span contains a vector that lies on the traces where the two formulae disagree. And how large the group leverage of $D$ can be is in turn bounded by the single leverages of its traces added up, $L_D = \sum_{i\in D}\ell_i$, which we call the \emph{total leverage} of $D$. By equation~\eqref{eq:share_bound}, a vector in $S$ places at most the share $\ell_i$ of its squared length on $\sigma^i$, and hence at most the share $\sum_{i\in D}\ell_i$ on the traces of $D$ together. As no share exceeds one,
     \begin{equation}\label{eq:group_leverage_ceiling}
-        \ell_D\;\le\;\min\Bigl\{1,\;\sum_{i\in D}\ell_i\Bigr\}.
+        \ell_D\;\le\;\min\Bigl\{1,L_D\Bigr\}.
     \end{equation}
-    The two are different quantities. The group leverage is a share of the squared length of a single vector, and never exceeds one. The total leverage is a part of the budget of equation~\eqref{eq:leverage_budget}, and can be as large as $r$. For an anchor set that divides the leverage evenly, every trace holds $\frac rN$, so that the total leverage of $D$ is $\frac{r|D|}{N}$. Equations~\eqref{eq:retention_by_group_leverage} and~\eqref{eq:group_leverage_ceiling} then give
+    For an anchor set that divides the leverage evenly, every trace holds $\frac rN$, so that $L_D = \frac{r|D|}{N}$. Equations~\eqref{eq:retention_by_group_leverage} and~\eqref{eq:group_leverage_ceiling} then give
     \begin{equation}\label{eq:surviving_length_even}
         \lVert\tilde d\rVert^2\;\le\;r\Bigl(\frac{|D|}{N}\Bigr)^2 ,
     \end{equation}
@@ -898,40 +898,83 @@
 
     Two experiments follow. \textbf{Experiment~1} (section~\ref{sec:exp1_feasibility}) asks whether the decoder recovers a formula from its embedding. We read its validation data along two axes: whether the model \emph{recovers} a correct formula, and whether it \emph{discovers multiple syntactic forms} of the same formula. \textbf{Experiment~2} (section~\ref{sec:exp_diagnosis}) asks, where the decoder fails, whether the representation lost what separates the target from other formulae, or whether the decoder failed to use what the representation kept.
 
-    \RScut{the former Experiment~3, on finetuning the base model with reinforcement learning against a cross-entropy control}
-
     Everything in this chapter uses a single instantiation of the kernel and a single trained decoder. We do not compare alternative instantiations, such as a trace distribution without the second process, an anchor set drawn without the rejection scheme, or a smaller anchor set. Chapter~\ref{chap:kernel} derives what each of these choices does to the representation, and the geometry analysis checks these derivations on the instance we use. What a comparison would add is whether recovery follows the representation across instantiations, and answering that would require training a decoder on each of them, which lies outside the scope of this thesis. Experiment~2 asks the same question within the one instance, by testing whether recovery follows how much of each target the representation keeps.
     \end{RSnewblock}
 
     \section{Kernel instantiation}\label{sec:kernel_instantiation}
-    All the data used in our experiments was produced by our implementation \texttt{KernelLTL} of the covariance kernel detailed in chapter~\ref{chap:kernel}. It was built once and persisted so that every part of the training process could make use of the same anchor set $\Psi$, trace sample $\widehat \Sigma$, feature matrix $F$, and random number generator $RNG$. Because the anchors were selected before any dataset was constructed, this single instantiation fixes the input space for every dataset and model in this chapter: the four curriculum stages, the stage evaluation sets, the validation \RScut{and finetuning} sets, and the base\RScut{, control and finetuned} models are all embedded in, and compared on, the same coordinates. Selecting anchors from any one of these datasets would have tied the representation to that dataset, or required re-embedding at every stage. The kernel was created with a sample of traces of length $T = 20$ with $\mathit{AP} = 5$ atomic propositions, with formulae evaluation fixed at the time index $t_0 = 0$, under a master $RNG$ seed of $1$. The anchor set comprised $M = 1024$ formulae selected by the $k^{\pm}$ rejection scheme detailed in section~\ref{sec:anchor_selection}, at similarity threshold $\tau = 0.5$, with candidates drawn from the sampler of Algorithm~\ref{alg:formula_sampling_algorithm} at maximum depth $6$.
+    All the data used in our experiments was produced by our implementation \texttt{KernelLTL} of the covariance kernel detailed in chapter~\ref{chap:kernel}. It was built once and persisted so that every part of the training process could make use of the same anchor set $\Psi$, trace sample $\widehat \Sigma$, feature matrix $F$, and random number generator $RNG$. Because the anchors were selected before any dataset was constructed, this single instantiation fixes the input space for every dataset and model in this chapter: the four curriculum stages, the stage evaluation sets, the validation sets, and the base models are all embedded in, and compared on, the same coordinates. Selecting anchors from any one of these datasets would have tied the representation to that dataset, or required re-embedding at every stage. The kernel was created with a sample of traces of length $T = 20$ with $\mathit{AP} = 5$ atomic propositions, with formulae evaluation fixed at the time index $t_0 = 0$, under a master $RNG$ seed of $1$. The anchor set comprised $M = 1024$ formulae selected by the $k^{\pm}$ rejection scheme detailed in section~\ref{sec:anchor_selection}, at similarity threshold $\tau = 0.5$, with candidates drawn from the sampler of Algorithm~\ref{alg:formula_sampling_algorithm} at maximum depth $6$.
     
     The trace sample was fixed at $N = 500{,}000$, drawn from the mixture distribution of section~\ref{sec:trace_sampling_details}. The mixture consisted of $70\%$ high-variance, i.i.d.\ Bernoulli$(0.5)$ traces and the remaining $30\%$ were the low-variance, temporally-correlated Markov traces with flip probability $p_{\text{flip}}=0.1$. \RSnew{We fixed $N$ at $500{,}000$ and read off what this size certifies under each of the three conditions of equation~\eqref{eq:n_min}, at confidence $\delta=0.01$ and with $r$ at its maximum of $M=1024$. With probability at least $1-\delta$, two formulae that disagree under $\mathcal T$ on a share $\frac1r$ of the traces do so on the sample up to a relative shortfall of $\varepsilon\approx0.14$ (equation~\eqref{eq:n_shares} with $\pi_{\min}=\frac1r$). A formula unrelated to the anchors keeps about $\frac rN\approx0.002$ of itself by chance (equation~\eqref{eq:n_retention}). And with probability at least $1-\delta$, no two formulae of depth at most $h=6$, the depth of the anchors, that disagree under $\mathcal T$ on a share of $8.2\times10^{-4}$ or more are equivalent on $\widehat\Sigma$ (equation~\eqref{eq:n_identity} with $n_{ap}=5$), a share below $\frac1r\approx9.8\times10^{-4}$.} \RStodo{replace $r=1024$ by the realized rank of $W$ once it is computed, and recompute the three values.} \RStodo{section~\ref{sec:sampling_process} promises to give and defend $\lambda$, $T$, $p_{\text{flip}}$, $k$ and $c$ here. For reference: $(T-1)p_{\text{flip}}=1.9$ lies inside the window of equation~\eqref{eq:flip_window} for $k\le2$ at $\lambda r\approx307$; for $k=3$ the share of persistence is about $9\times10^{-5}$, below $\frac1r$.}
     
     \subsection{Geometry analysis}\label{sec:kernel_geometry}
     \begin{RSplan}
-    Answers RQ1. It concerns the anchors and the trace sample only, so it needs neither the decoder nor the datasets, and every quantity is exact on the sample.
+    Answers RQ1. It concerns the anchors and the trace sample only, so it needs neither the decoder nor the datasets, and every quantity is exact on the sample. It also fixes the three objects with which Experiment~2 measures the representation: the rank $r$, the leverage $\ell_i$ of every trace, and an orthonormal basis of the span $S$ of the anchors. They are computed once, here, and Experiment~2 uses them as they are.
     \end{RSplan}
 
         \subsubsection{Rank}
         \begin{RSplan}
         \begin{itemize}
-            \item The realized rank $r$ of $W$ against the number of anchors $M$, and the eigenvalue spectrum of $W$ (section~\ref{sec:rank}).
-            \item What $r$ implies for the two scales of chapter~\ref{chap:kernel}: the share $\frac1r$ below which a difference is lost, and the chance retention $\frac rN$ (equation~\eqref{eq:n_retention}).
+            \item The realized rank $r$ of $W$ against the number of anchors $M$, and the eigenvalue spectrum of $W$ (section~\ref{sec:rank}). $W$ is computed exactly, from the numbers of traces that satisfy each anchor and each pair of anchors.
+            \item The tolerance below which an eigenvalue counts as zero, read from the gap in the spectrum and stated once. Every later use of $r$ and of $W^{+}$ takes this tolerance.
+            \item If $r<M$: the groups of anchors that are linearly dependent, read from the eigenvectors with eigenvalue zero (section~\ref{sec:limitations}).
+            \item The ratio of the largest to the smallest nonzero eigenvalue. The plain coordinates of the embedding show each direction of $S$ in proportion to its eigenvalue, while the retentions of chapter~\ref{chap:kernel} count every direction of $S$ alike. This ratio says how far the two can come apart.
+            \item What $r$ implies for the two scales of chapter~\ref{chap:kernel}: the share $\frac1r$ below which a difference is lost, and the chance retention $\frac rN$ (equation~\eqref{eq:n_retention}). The three values of section~\ref{sec:kernel_instantiation}, recomputed with the realized $r$.
         \end{itemize}
         \end{RSplan}
 
         \subsubsection{Leverage division}
         \begin{RSplan}
         \begin{itemize}
-            \item The leverage $\ell_i$ of every trace against the even share $\frac rN$ (equations~\eqref{eq:leverage_def} and~\eqref{eq:leverage_extremes}): its quantiles, and its maximum relative to $\frac rN$.
-            \item The split of the total leverage between the two processes of section~\ref{sec:sampling_process}, if the process of each trace was recorded, and the leverage of the all-true and all-false traces.
-            \item Where the division falls short of even, and why, for instance through near-redundant anchors or dependence among groups of anchors (section~\ref{sec:limitations}).
+            \item The leverage $\ell_i$ of every trace against the even share $\frac rN$ (equations~\eqref{eq:leverage_def} and~\eqref{eq:leverage_extremes}): its quantiles, and its minimum and maximum relative to $\frac rN$.
+            \item How uneven the division is, in one figure: the share of the budget $r$ that the traces with the most leverage hold (the top $1\%$ and the top $10\%$), and the share of the traces that hold less than half the even share.
+            \item The split of the total leverage between the two processes of section~\ref{sec:sampling_process}, against their shares $1-\lambda$ and $\lambda$ of the traces, if the process of each trace was recorded, and the leverage of the all-true and all-false traces.
+            \item Where the division falls short of even, and why. From the side of the anchors: for every anchor, the fraction of it that the other anchors predict, and the number of traces over which its unit of leverage is spread (equations~\eqref{eq:anchor_residual} and~\eqref{eq:leverage_update}). This shows the near-redundant anchors and the dependence among groups of anchors (section~\ref{sec:limitations}). From the side of the traces: which traces hold the most leverage and which the least.
         \end{itemize}
         \end{RSplan}
 
+        \subsubsection{Leverage of sets of traces}\label{sec:geom_sets}
+        \begin{RSplan}
+        Experiment~2 holds every difference against the leverage of its disagreement set, which is a set of traces rather than a single one. This part measures what sets of traces hold in this instance.
+        \begin{itemize}
+            \item For a set $D$ of traces: its total leverage $L_D=\sum_{i\in D}\ell_i$ and its group leverage $\ell_D$ (equation~\eqref{eq:group_leverage}, taken over $S$), both computed as in equation~\eqref{eq:leverage_blocks}.
+            \item Sets drawn at random, of sizes from one trace to half of the sample, from the whole sample and from each process: $L_D$ against the even value $\frac{r|D|}{N}$, and $\ell_D$ against its ceiling $\min\{1,L_D\}$ (equation~\eqref{eq:group_leverage_ceiling}). his shows how far below its ceiling the group leverage lies for a set that has nothing to do with the anchors, and how it grows with the size of the set.
+            \item The chance retention, measured: the retention of vectors that are unrelated to the anchors (satisfaction vectors with the order of the traces permuted) against $\frac rN$ (equation~\eqref{eq:n_retention}), with its spread for rare and for balanced vectors.
+        \end{itemize}
+        \end{RSplan}
+
+        \subsubsection{Reference differences}\label{sec:geom_reference}
+        \begin{RSplan}
+        Checks the trace distribution on the instance, as the two parts on rank and leverage check the anchors, and gives the values that section~\ref{sec:sampling_process} promises.
+        \begin{itemize}
+            \item The differences of Table~\ref{tab:reference_shares}, written out with the atomic propositions of the instance and evaluated on $\widehat\Sigma$: $p$ against $\X p$, $p\,\Un\,q$ against $q$, the persistence and the eventuality of $k$ propositions for $k=1,\dots,n_{ap}$, and $c$ changes for $c=1,2$.
+            \item For each (Table~\ref{tab:geom_reference}): the share $|D|/N$ on the sample, against the share under $\mathcal T$ (the shortfall against $\varepsilon$ of equation~\eqref{eq:n_shares}) and against $\frac1r$. Then $L_D$, $\ell_D$ and the retention $R^2$ of the difference, the last against equation~\eqref{eq:retention_even_division}.
+            \item Which $k$ and $c$ the chosen $\lambda$, $T$ and $p_{\text{flip}}$ serve (equation~\eqref{eq:flip_window}), read from the realized retentions and not from the shares alone.
+        \end{itemize}
+        \end{RSplan}
+
+        \begin{table}[ht]
+            \color{orange!85!black}
+            \centering
+            \caption{Reference differences on the instance. The first two columns give the share of the traces on which the two formulae disagree, on the sample and under $\mathcal T$. The persistence and the eventuality take one row per $k$, and the changes one row per $c$. \RStodo{fill in from the geometry analysis}}
+            \label{tab:geom_reference}
+            \begin{tabular}{lccccc}
+                \toprule
+                & \multicolumn{2}{c}{Share} & & & \\
+                \cmidrule(lr){2-3}
+                Difference & on $\widehat\Sigma$ & under $\mathcal T$ & $L_D$ & $\ell_D$ & $R^2$ \\
+                \midrule
+                $p$ vs.\ $\X p$ & & & & & \\
+                $p\,\Un\,q$ vs.\ $q$ & & & & & \\
+                $\G(p_1\land\dots\land p_k)$ vs.\ $\bot$ & & & & & \\
+                $\F(p_1\lor\dots\lor p_k)$ vs.\ $\top$ & & & & & \\
+                $c$ changes of $p$ vs.\ $\bot$ & & & & & \\
+                \bottomrule
+            \end{tabular}
+        \end{table}
+        
     \section{Model training overview}\label{sec:model_training_overview}
-    Model training was split in two phases. The first was the pretraining phase, where we trained a base model with a cross-entropy objective on a curriculum of datasets split by formula depth. \RScut{second phase: finetuning of the base model on a separate finetuning dataset, giving a cross-entropy control and three REINFORCE models, one with a baseline (RB) and two with generalized advantage estimation (GAE)}
+    Model training was split in two phases. The first was the pretraining phase, where we trained a base model with a cross-entropy objective on a curriculum of datasets split by formula depth.
+    \RStodo{rewrite to fit actual training flow.}
     
     \subsection{Curriculum datasets}\label{sec:curriculum_data}
     The formulae used during pretraining were generated with the sampler described in Algorithm~\ref{alg:formula_sampling_algorithm}, in four cumulative rounds of increasing maximum depth. Each round extended the set produced by the previous one and sampled under its own leaf probability range $p_{\text{leaf}}$, listed in Table~\ref{tab:curriculum}. The lower ranges at the later rounds counteract the sampler's bias toward shallow trees as the depth bound grows. The result is a single pool of $890{,}493$ formulae of depth at most $5$, distributed over depths $0$ through $5$ as $22{,}612$, $26{,}041$, $50{,}385$, $110{,}119$, $219{,}448$, and $461{,}888$ formulae respectively. The training set of stage $i$ is this pool restricted to depth at most $i+1$, so that the four stages are \emph{nested}: every formula seen at one stage is seen again at all later stages, and each stage adds only the formulae of the next depth. Because each round draws approximately as many formulae as all previous rounds combined, this restriction approximately doubles the training set at every stage. Each item in the training set stores the formula's AST as well as its $M$-dimensional embedding. Items in the evaluation and validation datasets additionally store the formula's canonical string and satisfaction vector.
@@ -1009,7 +1052,7 @@
     \section{Model validation}\label{sec:model_validation}
     All reported results in this chapter were computed on a held-out validation dataset. The dataset consists of $4{,}000$ formulae, split evenly into subsets of $1{,}000$ formulae for each of the depths $2$ through $5$, with no two formulae having identical satisfaction vectors. Duplicate entries were rejected by hashing each candidate formula's satisfaction vector and comparing the resulting object, rejecting and resampling when the candidate formula's hashed satisfaction vector was already present in the dataset. Additionally, tautological and contradictory formulae were also rejected. At depth $2$ the space of semantically distinct formula is small enough to enumerate exhaustively, and we did so, obtaining a census of every non-trivial depth-$2$ behavior realizable under $\widehat \Sigma$. The depth-$2$ validation items were drawn at random from the equivalence classes of this census, excluding those that were already present in any of the training and evaluation datasets used during the experiments. At depths $3$ through $5$ the space is far too large to enumerate, and the items were instead obtained by rejection sampling with Algorithm~\ref{alg:formula_sampling_algorithm}, discarding any candidate whose satisfaction vector had already been seen in the training data, in the per-stage evaluation data used to select the models, or earlier in the sampling process itself. Our rejection strategy is conservative, it can only reject false equivalencies and can never admit false distinctness. Our notion of identity predicated on the  deterministic hashing of the fixed trace sample, no two formulae that are genuinely logically equivalent could ever be considered distinct after hashing and thus never be selected at the same time. 
     
-    As the training \RScut{and finetuning} dataset descriptions \RSnew{in section~\ref{sec:curriculum_data} make} clear, our validation dataset only contains formulae of depths on which the models were trained. Thus, any claims about \emph{generalization to unseen formulae} put forward in the analysis of the validation results must be interpreted as \emph{generalization to unseen formulae within the training depth range}. We make no claims about extrapolation beyond these depths. Moreover, the depth range is narrower than the training distribution at the lower end: formulae of depth $0$ and $1$, the atomic propositions and the singly-nested operators, were deliberately never held out, for the reason given in section~\ref{sec:curriculum_data}, and so appear nowhere in the validation dataset.
+    As the training dataset descriptions \RSnew{in section~\ref{sec:curriculum_data} make} clear, our validation dataset only contains formulae of depths on which the models were trained. Thus, any claims about \emph{generalization to unseen formulae} put forward in the analysis of the validation results must be interpreted as \emph{generalization to unseen formulae within the training depth range}. We make no claims about extrapolation beyond these depths. Moreover, the depth range is narrower than the training distribution at the lower end: formulae of depth $0$ and $1$, the atomic propositions and the singly-nested operators, were deliberately never held out, for the reason given in section~\ref{sec:curriculum_data}, and so appear nowhere in the validation dataset.
     
     Each model was evaluated on the validation dataset by having it generate responses to the semantic embeddings of the formulae in the dataset. We examined the models under two regimes: one greedy pass where the model generated one sequence per embedding, and one stochastic pass where the model generated five sequences per embedding. See Table~\ref{tab:validation_generation_settings} for an overview of the specific generation arguments used during both passes. The greedy pass probes the model at the mode of its per-step generation policy. Under this strategy it always emits the highest-probability token at every step and so measures the quality of the model's first-choice formula. The stochastic pass instead probes the model's generative distribution. By drawing five independent samples for each embedding it asks whether a correct formula lies anywhere within the set of candidates the model puts forth. The two regimes thus mirror the two ways one might put a specification-mining model to use: one that returns a single specification, and one that returns a list of candidates for a user to inspect. From both passes we recorded the data from which the validation metrics were computed. We specify exactly what what those metrics are in the following section. 
     
@@ -1272,28 +1315,81 @@
     \subsection{Design}\label{sec:diag_design}
         \subsubsection{Representation quantities}
         \begin{RSnewblock}
-        This experiment measures the representation through the quantities of chapter~\ref{chap:kernel}: the variance $\operatorname{Var}(\phi)$ of a formula (equation~\eqref{eq:norm_is_variance}) and the fraction $R^2_\phi$ of it that reaches the decoder (equation~\eqref{eq:formula_error}), and, for a pair of formulae, their squared distance $\lVert d\rVert^2$ and the fraction $R^2_{\phi\phi'}$ of it that reaches the decoder (equation~\eqref{eq:pair_retention}). All of them follow from the satisfaction vectors and the embeddings. Writing $W=U\operatorname{diag}(\lambda)\,U^\top$ for the eigendecomposition of the anchor covariance, and keeping the $r$ eigenvalues above a numerical tolerance, the whitened embedding $a_\phi=\operatorname{diag}(\lambda_r)^{-1/2}\,U_r^\top\emb_\phi$ has $\lVert a_\phi\rVert^2=\lVert\tilde f(\phi)\rVert^2$ and $\lVert a_\phi-a_{\phi'}\rVert^2=\lVert\tilde d\rVert^2$ by equation~\eqref{eq:embedding_reconstruction}, so that
+        This experiment measures the representation through the quantities of chapter~\ref{chap:kernel}: the variance $\operatorname{Var}(\phi)$ of a formula (equation~\eqref{eq:norm_is_variance}) and the fraction $R^2_\phi$ of it that reaches the decoder (equation~\eqref{eq:formula_error}), for a pair of formulae, their squared distance $\lVert d\rVert^2$ and the fraction $R^2_{\phi\phi'}$ of it that reaches the decoder (equation~\eqref{eq:pair_retention}), and, for the set $D$ of traces on which the pair disagrees, its total leverage and its group leverage (section~\ref{sec:sampling_process}). All of them are computed after the fact, from the satisfaction vectors and from the objects fixed in section~\ref{sec:kernel_geometry}. The embedding that the decoder receives is left as it is.
+
+        Equation~\eqref{eq:embedding_reconstruction} gives the reconstruction of a formula from its embedding as $\tilde f(\phi)=X_A^\top W^{+}\emb_\phi$. Since $X_AX_A^\top=W$ and $W^{+}WW^{+}=W^{+}$, its squared length, and that of the reconstruction of a difference, are
         \begin{equation}\label{eq:retention_from_embeddings}
-            R^2_\phi=\frac{\lVert a_\phi\rVert^2}{\operatorname{Var}(\phi)},
+            \lVert\tilde f(\phi)\rVert^2=\emb_\phi^\top W^{+}\emb_\phi,
             \qquad
-            R^2_{\phi\phi'}=\frac{\lVert a_\phi-a_{\phi'}\rVert^2}{\lVert d\rVert^2}.
+            \lVert\tilde d\rVert^2=(\emb_\phi-\emb_{\phi'})^\top W^{+}(\emb_\phi-\emb_{\phi'}),
         \end{equation}
-        The neighbours of a target are the $k$ formulae of the validation dataset that lie closest to it in the geometry of the kernel, that is, with the smallest $\lVert d\rVert^2$, and over these neighbours we report the mean squared distance and the pooled pair retention. \RStodo{state $k$ and the rank tolerance}
+        which, divided by $\operatorname{Var}(\phi)$ and by $\lVert d\rVert^2$, are $R^2_\phi$ and $R^2_{\phi\phi'}$. The pseudo-inverse cannot be left out. Without it, the squared length of the embedding is $\tilde f(\phi)^\top X_A^\top X_A\,\tilde f(\phi)$, which weighs each direction of $S$ by the corresponding eigenvalue of $W$, so that it depends on how the anchors relate to one another as well as on how much of $\phi$ they keep. We evaluate both sides of equation~\eqref{eq:retention_from_embeddings} through one orthonormal basis of $S$. Writing $W=U\operatorname{diag}(\lambda)\,U^\top$ and keeping the $r$ eigenvalues above the tolerance of section~\ref{sec:kernel_geometry}, the columns of
+        \begin{equation*}
+            Q=X_A^\top U_r\operatorname{diag}(\lambda_r)^{-1/2}\;\in\;\mathbb R^{N\times r}
+        \end{equation*}
+        form such a basis, so that $P=QQ^\top$, $\lVert\tilde f(\phi)\rVert^2=\lVert Q^\top f(\phi)\rVert^2$, and the leverage $\ell_i$ is the squared length of the $i$-th row of $Q$.
+
+        The same basis gives the leverage of a set of traces. Let $P_{DD}$ be the block of $P$ whose rows and columns belong to the traces of $D$. Then
+        \begin{equation}\label{eq:leverage_blocks}
+            L_D:=\sum_{i\in D}\ell_i=\operatorname{tr}P_{DD},
+            \qquad
+            \ell_D=\lambda_{\max}(P_{DD}),
+        \end{equation}
+        where $L_D$ is the total leverage of $D$ and $\ell_D$ its group leverage. The second equality holds because, for $v\in S$, the squared length of $v$ on the traces of $D$ is $v^\top PE_DP\,v$, with $E_D$ the diagonal matrix that is one on the traces of $D$ and zero elsewhere, and $PE_DP$ and $E_DPE_D$ have the same nonzero eigenvalues. Each of the two takes the place of a quantity that section~\ref{sec:sampling_process} obtained by assuming an even division. The group leverage is the largest fraction $\lVert Pu\rVert^2/\lVert u\rVert^2$ that any step $u$ confined to $D$ can keep, so that the bound $R^2_{\phi\phi'}\le\ell_D/(1-\frac{|D|}{N})$ of section~\ref{sec:sampling_process} holds for the instance as it is, where equation~\eqref{eq:retention_even_division} required the division to be even. As no retention exceeds one, we write
+        \begin{equation}\label{eq:retention_ceiling}
+            \kappa_D:=\min\Bigl\{1,\;\frac{\ell_D}{1-\frac{|D|}{N}}\Bigr\}
+        \end{equation}
+        for the ceiling that the group leverage of $D$ puts on the retention of any difference on $D$.The mean leverage $L_D/|D|$ of the traces of $D$ is the fraction that a step on $D$ keeps on average when its signs are drawn at random. It takes the place of the chance level $\frac rN$, to which it reduces when the division is even. It is a level of reference and not a bound, as a difference can keep less than it.
+
+        The neighbours of a target are the $k$ formulae of the validation dataset that lie closest to it in the geometry of the kernel, that is, with the smallest $\lVert d\rVert^2$, and over these neighbours we report the mean squared distance and the pooled pair retention. \RStodo{state $k$}
         \end{RSnewblock}
 
         \subsubsection{What the representation keeps of the targets}
         \begin{RSplan}
         \begin{itemize}
-            \item For each of the $4{,}000$ targets, without the decoder: $\operatorname{Var}(\phi)$ and $R^2_\phi$, held against the bound $4r\operatorname{Var}(\phi)$ of equation~\eqref{eq:retention_variance}.
-            \item For each target and its neighbours: $\lVert d\rVert^2$, the disagreement share $|D|/N$ and $R^2_{\phi\phi'}$, held against the bound of equation~\eqref{eq:retention_even_division} and the chance level $\frac rN$.
+            \item For each of the $4{,}000$ targets, without the decoder: $\operatorname{Var}(\phi)$ and $R^2_\phi$, with $D$ the smaller of the set of traces that satisfy $\phi$ and the set that falsify it. $R^2_\phi$ is held against the ceiling $\kappa_D$ of equation~\eqref{eq:retention_ceiling}, and shown next to $4r\operatorname{Var}(\phi)$ of equation~\eqref{eq:retention_variance}.
+            \item For each target and its neighbours: $\lVert d\rVert^2$, the disagreement share $|D|/N$ and $R^2_{\phi\phi'}$, held against $\kappa_D$ and against the chance level $L_D/|D|$, and shown next to equation~\eqref{eq:retention_even_division} and $\frac rN$.
+            \item Equations~\eqref{eq:retention_variance} and~\eqref{eq:retention_even_division} assume an even division, so that on this instance they are lines of reference and not bounds. A point above one of them is a difference that lies on traces holding more than the even share.
             \item Both by depth and by operator.
         \end{itemize}
         \end{RSplan}
 
         \subsubsection{The misses}
         \begin{RSplan}
-        For every valid greedy output $\hat\phi$ that is not equivalent to its target $\phi$: the disagreement share $|D|/N$ between the two and the pair retention $R^2_{\phi\hat\phi}$, computed from the satisfaction vector of $\hat\phi$ on $\widehat\Sigma$. A miss whose difference from the target is retained is the decoder's. One whose difference is retained at about the chance level $\frac rN$, or which holds on a share below $\frac1r$, is the representation's.
+        For every valid greedy output $\hat\phi$ that is not equivalent to its target $\phi$, with $D$ their disagreement set and $u$ the step between them as in section~\ref{sec:sampling_process}, and with the satisfaction vector of $\hat\phi$ computed on $\widehat\Sigma$: the share $|D|/N$, the pair retention $R^2_{\phi\hat\phi}$, the total leverage $L_D$ and the group leverage $\ell_D$.
+        \begin{itemize}
+            \item The retention splits exactly into three factors,
+            \begin{equation}\label{eq:miss_factors}
+                R^2_{\phi\hat\phi}
+                \;=\;\underbrace{\frac{\lVert u\rVert^2}{\lVert d\rVert^2}}_{\text{centering}}
+                \;\cdot\;\underbrace{\vphantom{\frac{\lVert u\rVert^2}{\lVert d\rVert^2}}\ell_D}_{\text{reach}}
+                \;\cdot\;\underbrace{\frac{\lVert\tilde d\rVert^2}{\ell_D\,\lVert u\rVert^2}}_{\text{use}} .
+            \end{equation}
+            The first lies between $1$ and $1/(1-\frac{|D|}{N})$. The second is what the anchors can keep of any difference on the traces of $D$, and depends only on where the two formulae disagree. The third lies between $0$ and $1$, and is how much of that reach this difference uses.
+            \item Three readings, at a threshold $\gamma$ on the retention (Table~\ref{tab:miss_readings}). A miss that is out of reach lies where the anchors hold too little, whatever the difference. A miss that is within reach but not kept lies where they hold enough, but not along this difference. Both are the representation's. A miss that is kept is the decoder's. The headline takes $\gamma=\frac12$, fixed before the misses are computed, and the shares are also given as curves in $\gamma$.
+            \item The even division against the instance: $L_D$ against $\frac{r|D|}{N}$ over the misses, which says whether the misses lie on traces with less than the even share. The number of misses with $L_D<1$ next to the number with $\frac{|D|}{N}<\frac1r$. The two conditions coincide when the division is even.
+            \item For the misses that are not kept: the fraction $\lVert\tilde d\rVert^2/\lVert u\rVert^2$ against the chance level $L_D/|D|$.
+            \item As a reference, the same readings for every target and its nearest neighbour, in bins of $|D|/N$. These pairs were not chosen by the decoder, so that they show what the representation keeps of a pair at that share in general.
+            \item For the misses that are kept: the squared distance $\lVert\emb_\phi-\emb_{\hat\phi}\rVert^2$ between the two embeddings as the decoder receives them, against $\lVert\tilde d\rVert^2$. Their ratio is the eigenvalue of $W$ along the retained difference, and says whether what was kept lies in directions that the plain coordinates show only weakly (section~\ref{sec:kernel_geometry}).
+            \item Invalid outputs have no satisfaction vector and are left out. Their number is stated.
+        \end{itemize}
         \end{RSplan}
+
+        \begin{table}[ht]
+            \color{orange!85!black}
+            \centering
+            \caption{Readings of a miss with target $\phi$, output $\hat\phi$ and disagreement set $D$, at the threshold $\gamma$.}
+            \label{tab:miss_readings}
+            \begin{tabular}{lll}
+                \toprule
+                Reading & Condition & Failure of \\
+                \midrule
+                out of reach & $\ell_D/(1-\frac{|D|}{N})<\gamma$ & representation \\[3pt]
+                within reach, not kept & $\ell_D/(1-\frac{|D|}{N})\ge\gamma$ and $R^2_{\phi\hat\phi}<\gamma$ & representation \\[3pt]
+                kept & $R^2_{\phi\hat\phi}\ge\gamma$ & decoder \\
+                \bottomrule
+            \end{tabular}
+        \end{table}
 
         \subsubsection{Regression of recovery on the representation}
         \begin{RSplan}
@@ -1347,8 +1443,8 @@
     \subsection{Results}\label{sec:diag_results}
     \begin{RSplan}
     \begin{itemize}
-        \item What the representation keeps: $R^2_\phi$ against $\operatorname{Var}(\phi)$ with the bound and the share of targets with $\operatorname{Var}(\phi)<\frac1r$; $R^2_{\phi\phi'}$ against $|D|/N$ with the bound and the chance level; both retentions by depth and by operator.
-        \item The misses: the shares that are the decoder's and the representation's, overall and by depth.
+        \item What the representation keeps: $R^2_\phi$ against $\operatorname{Var}(\phi)$ with its ceiling, the line of equation~\eqref{eq:retention_variance} and the share of targets with $\operatorname{Var}(\phi)<\frac1r$; $R^2_{\phi\phi'}$ against $|D|/N$ with its ceiling and the chance level; both retentions by depth and by operator.
+        \item The misses: $R^2_{\phi\hat\phi}$ against $\kappa_D$ for every miss (Figure~\ref{fig:miss_scatter}). The mean fraction that was out of reach, within reach but not kept, and kept, overall and by depth (Table~\ref{tab:miss_terms}). The shape of the distribution of $R^2_{\phi\hat\phi}$. The kept fraction against the chance level. What an even division would have concluded against what the instance shows.
         \item The regression. M0 and M1: the depth gradient and the operator contrasts. M2: the variance curve. M3: the direct readings, the two retentions as a block, and the predicted recovery with both retentions raised, as the representation's cost in percentage points. The depth gradient at M3 against M1: what remains for the decoder. Which of the stated predictions held.
     \end{itemize}
     \end{RSplan}
@@ -1358,6 +1454,7 @@
     \begin{itemize}
         \item Answer RQ3: how much of the failure mass is the representation's, and how much remains with the decoder.
         \item Where the readings are weakest: the low-variance corner, where high retention cannot occur, and assumptions A1 to A3.
+        \item How far the reading of the misses carries. It attributes fractions of a difference and not misses: no miss is called the representation's or the decoder's as a whole. The fraction within reach but not kept is avoidable in the best case only. A fraction that is kept may still lie in directions of $S$ with small eigenvalues, which reach the decoder at a small scale.
     \end{itemize}
     \end{RSplan}
 
@@ -1383,6 +1480,7 @@
         \item Validation lies within the training depth range (section~\ref{sec:model_validation}).
         \item Identity is equivalence on the sample. It separates formulae that disagree under $\mathcal T$ on a share above the tolerance of equation~\eqref{eq:n_identity}, but not necessarily below it.
         \item The readings of Experiment~2 rest on assumptions A1 to A3 (section~\ref{sec:diag_design}).
+        \item (Limitations.) The attribution of a miss rests on the one output that greedy decoding returned for the target.
     \end{itemize}
     \end{RSplan}
 
