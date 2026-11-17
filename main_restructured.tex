@@ -894,7 +894,7 @@
     
 \chapter{Experiments}\label{chap:experiments}
     \begin{RSnewblock}
-    This chapter puts the representation of chapter~\ref{chap:kernel} to the test, in the order in which the pieces were built. Section~\ref{sec:kernel_instantiation} instantiates the kernel and, in a geometry analysis that needs no decoder, checks whether the instance has the rank and the division of leverage that chapter~\ref{chap:kernel} derives for it. Sections~\ref{sec:model_training_overview} and~\ref{sec:model_validation} describe how the decoder was trained on the resulting embeddings and how it was validated.
+    This chapter puts the representation of chapter~\ref{chap:kernel} to the test, in the order in which the pieces were built. Section~\ref{sec:kernel_instantiation} instantiates the kernel and, in a geometry analysis that needs no decoder, checks whether the instance has the rank and the division of leverage that chapter~\ref{chap:kernel} derives for it, and whether the trace sample gives the reference differences of Table~\ref{tab:reference_shares} the shares derived there. Sections~\ref{sec:model_training_overview} and~\ref{sec:model_validation} describe how the decoder was trained on the resulting embeddings and how it was validated.
 
     Two experiments follow. \textbf{Experiment~1} (section~\ref{sec:exp1_feasibility}) asks whether the decoder recovers a formula from its embedding. We read its validation data along two axes: whether the model \emph{recovers} a correct formula, and whether it \emph{discovers multiple syntactic forms} of the same formula. \textbf{Experiment~2} (section~\ref{sec:exp_diagnosis}) asks, where the decoder fails, whether the representation lost what separates the target from other formulae, or whether the decoder failed to use what the representation kept.
 
@@ -937,7 +937,7 @@
         Experiment~2 holds every difference against the leverage of its disagreement set, which is a set of traces rather than a single one. This part measures what sets of traces hold in this instance.
         \begin{itemize}
             \item For a set $D$ of traces: its total leverage $L_D=\sum_{i\in D}\ell_i$ and its group leverage $\ell_D$ (equation~\eqref{eq:group_leverage}, taken over $S$), both computed as in equation~\eqref{eq:leverage_blocks}.
-            \item Sets drawn at random, of sizes from one trace to half of the sample, from the whole sample and from each process: $L_D$ against the even value $\frac{r|D|}{N}$, and $\ell_D$ against its ceiling $\min\{1,L_D\}$ (equation~\eqref{eq:group_leverage_ceiling}). his shows how far below its ceiling the group leverage lies for a set that has nothing to do with the anchors, and how it grows with the size of the set.
+            \item Sets drawn at random, of sizes from one trace to half of the sample, from the whole sample and from each process: $L_D$ against the even value $\frac{r|D|}{N}$, and $\ell_D$ against its ceiling $\min\{1,L_D\}$ (equation~\eqref{eq:group_leverage_ceiling}). This shows how far below its ceiling the group leverage lies for a set that has nothing to do with the anchors, and how it grows with the size of the set.
             \item The chance retention, measured: the retention of vectors that are unrelated to the anchors (satisfaction vectors with the order of the traces permuted) against $\frac rN$ (equation~\eqref{eq:n_retention}), with its spread for rare and for balanced vectors.
         \end{itemize}
         \end{RSplan}
@@ -1339,7 +1339,7 @@
         \begin{equation}\label{eq:retention_ceiling}
             \kappa_D:=\min\Bigl\{1,\;\frac{\ell_D}{1-\frac{|D|}{N}}\Bigr\}
         \end{equation}
-        for the ceiling that the group leverage of $D$ puts on the retention of any difference on $D$.The mean leverage $L_D/|D|$ of the traces of $D$ is the fraction that a step on $D$ keeps on average when its signs are drawn at random. It takes the place of the chance level $\frac rN$, to which it reduces when the division is even. It is a level of reference and not a bound, as a difference can keep less than it.
+        for the ceiling that the group leverage of $D$ puts on the retention of any difference on $D$. It is a bound and not a maximum: it combines the largest fraction $\ell_D$ that a step $u$ on $D$ can keep of itself with the largest value $1/(1-\frac{|D|}{N})$ of the factor $\lVert u\rVert^2/\lVert d\rVert^2$ by which centering raises a retention, and in general no single step reaches both. The mean leverage $L_D/|D|$ of the traces of $D$ is the fraction that a step on $D$ keeps on average when its signs are drawn at random. It takes the place of the chance level $\frac rN$, to which it reduces when the division is even. It is a level of reference and not a bound, as a difference can keep less than it.
 
         The neighbours of a target are the $k$ formulae of the validation dataset that lie closest to it in the geometry of the kernel, that is, with the smallest $\lVert d\rVert^2$, and over these neighbours we report the mean squared distance and the pooled pair retention. \RStodo{state $k$}
         \end{RSnewblock}
@@ -1356,37 +1356,51 @@
 
         \subsubsection{The misses}
         \begin{RSplan}
-        For every valid greedy output $\hat\phi$ that is not equivalent to its target $\phi$, with $D$ their disagreement set and $u$ the step between them as in section~\ref{sec:sampling_process}, and with the satisfaction vector of $\hat\phi$ computed on $\widehat\Sigma$: the share $|D|/N$, the pair retention $R^2_{\phi\hat\phi}$, the total leverage $L_D$ and the group leverage $\ell_D$.
+        For every valid greedy output $\hat\phi$ that is not equivalent to its target $\phi$, with $D$ their disagreement set and with the satisfaction vector of $\hat\phi$ computed on $\widehat\Sigma$: the share $|D|/N$, the pair retention $R^2_{\phi\hat\phi}$, the total leverage $L_D$, the group leverage $\ell_D$ and the ceiling $\kappa_D$ that it puts on the retention (equation~\eqref{eq:retention_ceiling}).
         \begin{itemize}
-            \item The retention splits exactly into three factors,
-            \begin{equation}\label{eq:miss_factors}
-                R^2_{\phi\hat\phi}
-                \;=\;\underbrace{\frac{\lVert u\rVert^2}{\lVert d\rVert^2}}_{\text{centering}}
-                \;\cdot\;\underbrace{\vphantom{\frac{\lVert u\rVert^2}{\lVert d\rVert^2}}\ell_D}_{\text{reach}}
-                \;\cdot\;\underbrace{\frac{\lVert\tilde d\rVert^2}{\ell_D\,\lVert u\rVert^2}}_{\text{use}} .
+            \item Since $0\le R^2_{\phi\hat\phi}\le\kappa_D\le1$, every miss splits the whole of what separates the target from the output into three terms,
+            \begin{equation}\label{eq:miss_terms}
+                1\;=\;\underbrace{1-\kappa_D}_{\text{out of reach}}
+                \;+\;\underbrace{\kappa_D-R^2_{\phi\hat\phi}}_{\text{within reach, not kept}}
+                \;+\;\underbrace{R^2_{\phi\hat\phi}}_{\text{kept}} .
             \end{equation}
-            The first lies between $1$ and $1/(1-\frac{|D|}{N})$. The second is what the anchors can keep of any difference on the traces of $D$, and depends only on where the two formulae disagree. The third lies between $0$ and $1$, and is how much of that reach this difference uses.
-            \item Three readings, at a threshold $\gamma$ on the retention (Table~\ref{tab:miss_readings}). A miss that is out of reach lies where the anchors hold too little, whatever the difference. A miss that is within reach but not kept lies where they hold enough, but not along this difference. Both are the representation's. A miss that is kept is the decoder's. The headline takes $\gamma=\frac12$, fixed before the misses are computed, and the shares are also given as curves in $\gamma$.
+            The first is a fraction that no difference on the traces of $D$ can keep, and so a lower bound on what was out of reach. The second is the rest of what the representation lost, which the ceiling does not rule out. The third is the fraction that reached the decoder. The first two are the representation's, and the third is what the decoder received and did not use.
+            \item What the three terms are. The third term and the sum of the other two are the parts of the difference that the projection keeps and removes (equation~\eqref{eq:pair_error}). The split of the removed part at $\kappa_D$ is an account of that part, and not a further division of the difference.
+            \item How far the split can be off. As $\kappa_D$ is a bound and not a maximum, part of the second term may be out of reach as well. The step on $D$ that reaches the group leverage keeps the fraction $\ell_D$ of itself, and centering can only raise this, so that the largest retention of a difference on $D$ lies between $\ell_D$ and $\kappa_D$. The first term therefore understates what was out of reach, and the second overstates what could have been kept, by at most $\kappa_D-\ell_D$. This is at most $\ell_D\,\frac{|D|}{N-|D|}$, and never more than $\frac{|D|}{N}$. What could have been kept is itself a best case, as the difference that reaches it need not be one between two formulae.
+            \item The figure (Figure~\ref{fig:miss_scatter}): one point per miss, with $R^2_{\phi\hat\phi}$ on the horizontal axis and $\kappa_D$ on the vertical axis. Every point lies on or above the diagonal. Its height above the diagonal is the second term, and its distance from the top is the first. The points are shaded by the share $|D|/N$, and the distributions of $R^2_{\phi\hat\phi}$ and of $\kappa_D$ are drawn along the axes.
+            \item The summary (Table~\ref{tab:miss_terms}): the mean of each of the three terms over the misses, overall and by depth, next to the mean of $\kappa_D-\ell_D$. The three means sum to one. Every miss counts equally, whatever the size of its disagreement set.
+            \item The shape behind the means. A mean retention can come from misses that all keep about that much, or from some that keep nearly everything and others that keep nearly nothing. The distribution of $R^2_{\phi\hat\phi}$ along the horizontal axis says which, and is described in the text.
+            \item The role of size. $\kappa_D$ can only grow when traces are added to $D$, and $\ell_D\ge L_D/r$, which is the share $|D|/N$ when the division is even. The first term therefore follows the size of the disagreement set to a large extent. This is the dependence on shares that section~\ref{sec:sampling_process} derives, read on the instance.
+            \item Against chance: for every miss, the fraction $\lVert\tilde d\rVert^2/\lVert u\rVert^2$ of the step $u$ between target and output that is kept, against the chance level $L_D/|D|$.
             \item The even division against the instance: $L_D$ against $\frac{r|D|}{N}$ over the misses, which says whether the misses lie on traces with less than the even share. The number of misses with $L_D<1$ next to the number with $\frac{|D|}{N}<\frac1r$. The two conditions coincide when the division is even.
-            \item For the misses that are not kept: the fraction $\lVert\tilde d\rVert^2/\lVert u\rVert^2$ against the chance level $L_D/|D|$.
-            \item As a reference, the same readings for every target and its nearest neighbour, in bins of $|D|/N$. These pairs were not chosen by the decoder, so that they show what the representation keeps of a pair at that share in general.
-            \item For the misses that are kept: the squared distance $\lVert\emb_\phi-\emb_{\hat\phi}\rVert^2$ between the two embeddings as the decoder receives them, against $\lVert\tilde d\rVert^2$. Their ratio is the eigenvalue of $W$ along the retained difference, and says whether what was kept lies in directions that the plain coordinates show only weakly (section~\ref{sec:kernel_geometry}).
+            \item Where the retention is high: the squared distance $\lVert\emb_\phi-\emb_{\hat\phi}\rVert^2$ between the two embeddings as the decoder receives them, against $\lVert\tilde d\rVert^2$. Their ratio is the eigenvalue of $W$ along the retained difference, and says whether what was kept lies in directions that the plain coordinates show only weakly (section~\ref{sec:kernel_geometry}).
             \item Invalid outputs have no satisfaction vector and are left out. Their number is stated.
+            \item What this part does not show. A recovered target has no output to pair it with, so that the misses alone cannot say whether a low retention goes together with failing. That is the question of the regression (equation~\eqref{eq:diag_ladder}).
         \end{itemize}
         \end{RSplan}
+
+        \begin{figure}[ht]
+            \centering
+            \RSfigure{one point per miss, $R^2_{\phi\hat\phi}$ on the horizontal axis and $\kappa_D$ on the vertical axis, with the diagonal, the two distributions along the axes, and the points shaded by $|D|/N$}
+            \caption{Retention of the difference between each missed target and the decoder's output, against the ceiling that the group leverage of their disagreement set puts on it. Every point lies on or above the diagonal. Its height above the diagonal is the second term of equation~\eqref{eq:miss_terms}, and its distance from the top is the first. The shading gives the share of the traces on which the two formulae disagree.}
+            \label{fig:miss_scatter}
+        \end{figure}
 
         \begin{table}[ht]
             \color{orange!85!black}
             \centering
-            \caption{Readings of a miss with target $\phi$, output $\hat\phi$ and disagreement set $D$, at the threshold $\gamma$.}
-            \label{tab:miss_readings}
-            \begin{tabular}{lll}
+            \caption{Mean of each term of equation~\eqref{eq:miss_terms} over the misses, with $95\%$ bootstrap confidence intervals. The three terms sum to one in each row. The last column is the mean of $\kappa_D-\ell_D$, the most by which the first term can understate what was out of reach and the second overstate what could have been kept. \RStodo{fill in from the misses analysis}}
+            \label{tab:miss_terms}
+            \begin{tabular}{lccccc}
                 \toprule
-                Reading & Condition & Failure of \\
+                Target depth & Misses & Out of reach & \shortstack{Within reach,\\not kept} & Kept & \shortstack{Largest\\shift} \\
+                & $n$ & $1-\kappa_D$ & $\kappa_D-R^2_{\phi\hat\phi}$ & $R^2_{\phi\hat\phi}$ & $\kappa_D-\ell_D$ \\
                 \midrule
-                out of reach & $\ell_D/(1-\frac{|D|}{N})<\gamma$ & representation \\[3pt]
-                within reach, not kept & $\ell_D/(1-\frac{|D|}{N})\ge\gamma$ and $R^2_{\phi\hat\phi}<\gamma$ & representation \\[3pt]
-                kept & $R^2_{\phi\hat\phi}\ge\gamma$ & decoder \\
+                All & & & & & \\
+                $2$ & & & & & \\
+                $3$ & & & & & \\
+                $4$ & & & & & \\
+                $5$ & & & & & \\
                 \bottomrule
             \end{tabular}
         \end{table}
@@ -1444,7 +1458,7 @@
     \begin{RSplan}
     \begin{itemize}
         \item What the representation keeps: $R^2_\phi$ against $\operatorname{Var}(\phi)$ with its ceiling, the line of equation~\eqref{eq:retention_variance} and the share of targets with $\operatorname{Var}(\phi)<\frac1r$; $R^2_{\phi\phi'}$ against $|D|/N$ with its ceiling and the chance level; both retentions by depth and by operator.
-        \item The misses: $R^2_{\phi\hat\phi}$ against $\kappa_D$ for every miss (Figure~\ref{fig:miss_scatter}). The mean fraction that was out of reach, within reach but not kept, and kept, overall and by depth (Table~\ref{tab:miss_terms}). The shape of the distribution of $R^2_{\phi\hat\phi}$. The kept fraction against the chance level. What an even division would have concluded against what the instance shows.
+        \item The misses: $R^2_{\phi\hat\phi}$ against $\kappa_D$ for every miss (Figure~\ref{fig:miss_scatter}). The mean fraction that was out of reach, within reach but not kept, and kept, overall and by depth, with the mean of $\kappa_D-\ell_D$ (Table~\ref{tab:miss_terms}). The shape of the distribution of $R^2_{\phi\hat\phi}$. The kept fraction against the chance level. What an even division would have concluded against what the instance shows.
         \item The regression. M0 and M1: the depth gradient and the operator contrasts. M2: the variance curve. M3: the direct readings, the two retentions as a block, and the predicted recovery with both retentions raised, as the representation's cost in percentage points. The depth gradient at M3 against M1: what remains for the decoder. Which of the stated predictions held.
     \end{itemize}
     \end{RSplan}
@@ -1454,7 +1468,7 @@
     \begin{itemize}
         \item Answer RQ3: how much of the failure mass is the representation's, and how much remains with the decoder.
         \item Where the readings are weakest: the low-variance corner, where high retention cannot occur, and assumptions A1 to A3.
-        \item How far the reading of the misses carries. It attributes fractions of a difference and not misses: no miss is called the representation's or the decoder's as a whole. The fraction within reach but not kept is avoidable in the best case only. A fraction that is kept may still lie in directions of $S$ with small eigenvalues, which reach the decoder at a small scale.
+        \item How far the reading of the misses carries. It attributes fractions of a difference and not misses: no miss is called the representation's or the decoder's as a whole. The fraction within reach but not kept overstates what was avoidable by at most $\kappa_D-\ell_D$, and what was avoidable is itself a best case, which a pair of formulae need not reach. A fraction that is kept may still lie in directions of $S$ with small eigenvalues, which reach the decoder at a small scale.
     \end{itemize}
     \end{RSplan}
 
@@ -1480,7 +1494,7 @@
         \item Validation lies within the training depth range (section~\ref{sec:model_validation}).
         \item Identity is equivalence on the sample. It separates formulae that disagree under $\mathcal T$ on a share above the tolerance of equation~\eqref{eq:n_identity}, but not necessarily below it.
         \item The readings of Experiment~2 rest on assumptions A1 to A3 (section~\ref{sec:diag_design}).
-        \item (Limitations.) The attribution of a miss rests on the one output that greedy decoding returned for the target.
+        \item The attribution of a miss rests on the one output that greedy decoding returned for the target.
     \end{itemize}
     \end{RSplan}
 
