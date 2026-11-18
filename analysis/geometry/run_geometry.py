@@ -65,7 +65,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--kernel-dir", required=True, type=Path)
     p.add_argument("--output-dir", required=True, type=Path)
     p.add_argument("--trace-origin", type=Path, default=None,
-                   help="trace_origin.npy from scripts/recover_trace_provenance.py; without it the "
+                   help="trace_origin.npy from the one-off replay of the trace draw (kernel_provenance/; "
+                        "script in git history at d49cac9); without it the "
                         "process of each trace comes from the flip-count rule.")
     p.add_argument("--device", default="auto")
     p.add_argument("--seed", type=int, default=0, help="Seed of the random sets.")

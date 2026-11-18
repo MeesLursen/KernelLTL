@@ -17,8 +17,10 @@ set -euo pipefail
 # plus the fixed objects (spectrum, leverage, trace processes) that Experiment 2
 # reuses. Needs one GPU; counts are exact fp32, all algebra float64.
 #
-# Run AFTER jobs/snellius_recover_trace_provenance.sh (for the per-trace process
-# labels; without them the flip-count rule is used and the manifest says so).
+# Per-trace process labels come from artifacts/kernel_provenance/trace_origin.npy,
+# written by a one-off replay of the December trace draw (job 29426004; the
+# script is in git history at d49cac9). Without the file the flip-count rule is
+# used and the manifest says so.
 # Afterwards: jobs/snellius_analysis_exp2_features.sh.
 # ============================================================================
 
