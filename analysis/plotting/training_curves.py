@@ -17,9 +17,11 @@ Usage (from the repository root, as a module)::
 
     python -m analysis.plotting.training_curves \
         --model-dir <artifacts>/models/CE/final \
-        --output-dir <artifacts>/analysis/figures
+        --output-dir <artifacts>/analysis/figures/training
 
-Outputs: training_curves.png and training_curves.pdf in --output-dir.
+Outputs: training_curves.png and training_curves.pdf in --output-dir. Every
+analysis writes its figures to its own folder under <artifacts>/analysis/figures/
+(training, exp1, geometry, exp2).
 """
 
 from __future__ import annotations
@@ -51,7 +53,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--model-dir", required=True, type=Path,
                    help="Trained model dir holding stage1..stage4/logs/ (e.g. <artifacts>/models/CE/final).")
     p.add_argument("--output-dir", required=True, type=Path,
-                   help="Where training_curves.png/.pdf are written (e.g. <artifacts>/analysis/figures).")
+                   help="Where training_curves.png/.pdf are written (e.g. <artifacts>/analysis/figures/training).")
     return p.parse_args()
 
 
