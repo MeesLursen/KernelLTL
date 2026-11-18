@@ -3,14 +3,18 @@
 #SBATCH --output=logs/kernelltl_analysis_exp2_%j.out
 #SBATCH --error=logs/kernelltl_analysis_exp2_%j.err
 #SBATCH --time=02:00:00
-#SBATCH --partition=rome
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=32G
+#SBATCH --partition=gpu_a100
+#SBATCH --gpus=1
+#SBATCH --cpus-per-task=18
+#SBATCH --mem=120G
 
 set -euo pipefail
 
 # ============================================================================
-# Experiment 2, step 2 of 2 (CPU): feature tables -> statistical tables.
+# Experiment 2, step 2 of 2: feature tables -> statistical tables.
+#
+# CPU work only; it runs on a GPU partition (the only one available), on the
+# 18 cores that come with one A100. The GPU itself is not used.
 #
 # What the representation keeps, the misses (eq. miss_terms), and the regression
 # ladder M0-M3 with its specification search, checks and 10,000-resample
@@ -57,7 +61,7 @@ CMD=(
     --sensitivity-ks "$SENSITIVITY_KS"
     --bootstrap-samples "$BOOTSTRAP_SAMPLES"
     --seed "$SEED"
-    --workers "${SLURM_CPUS_PER_TASK:-16}"
+    --workers "${SLURM_CPUS_PER_TASK:-18}"
 )
 
 echo "Running: ${CMD[*]}"

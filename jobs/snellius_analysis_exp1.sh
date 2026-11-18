@@ -3,8 +3,9 @@
 #SBATCH --output=logs/kernelltl_analysis_exp1_%j.out
 #SBATCH --error=logs/kernelltl_analysis_exp1_%j.err
 #SBATCH --time=00:30:00
-#SBATCH --partition=rome
-#SBATCH --cpus-per-task=16
+#SBATCH --partition=gpu_a100
+#SBATCH --gpus=1
+#SBATCH --cpus-per-task=18
 #SBATCH --mem=32G
 
 set -euo pipefail
@@ -12,7 +13,8 @@ set -euo pipefail
 # ============================================================================
 # Experiment 1 post-hoc analysis: validation JSONLs -> statistical tables.
 #
-# Pure CPU: reads the per-generation records written by snellius_validate_models.sh
+# CPU work only (run on a GPU partition, the only one available; the GPU is
+# not used): reads the per-generation records written by snellius_validate_models.sh
 # and snellius_validate_ablation.sh, emits tidy CSVs (point estimates + 95%
 # percentile-bootstrap CIs) plus a manifest mapping thesis objects to files.
 # No plotting -- data-viz happens locally on the synced tables.
