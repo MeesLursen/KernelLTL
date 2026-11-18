@@ -171,8 +171,8 @@ def main() -> None:
     rho = stats.spearmanr(mi["share"], mi["out_of_reach"]) if len(mi) > 2 else None
     rows.append({"share_from": 0.0, "share_to": 1.0, "metric": "spearman_share_vs_out_of_reach",
                  "estimate": float(rho.statistic) if rho is not None else np.nan,
-                 "ci_lo": np.nan, "ci_hi": np.nan, "n": len(mi),
-                 "n_effective": float(rho.pvalue) if rho is not None else np.nan})
+                 "ci_lo": np.nan, "ci_hi": np.nan, "n": len(mi), "n_effective": len(mi),
+                 "p_value": float(rho.pvalue) if rho is not None else np.nan})
     pd.DataFrame(rows).to_csv(out / "miss_size.csv", index=False)
 
     # ----------------------------- regression ------------------------------ #

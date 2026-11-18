@@ -4,12 +4,14 @@ matplotlib==3.10.3
 numpy==2.3.3
 optuna==4.8.0
 pandas==3.0.2
+scipy==1.17.1
+statsmodels==0.14.6
 torch==2.8.0
 transformers==4.57.6
 
 # Pinned dependencies of torch, transformers and accelerate, at the versions
 # installed in the Snellius environment that trained the thesis model.
-# matplotlib, pandas and optuna resolve their own dependencies.
+# matplotlib, pandas, optuna, scipy and statsmodels resolve their own dependencies.
 certifi==2025.10.5
 charset-normalizer==3.4.3
 filelock==3.20.0
