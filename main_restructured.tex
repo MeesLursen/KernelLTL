@@ -799,7 +799,7 @@
     \end{equation}
     so that, by equations~\eqref{eq:pair_retention} and~\eqref{eq:retention_by_group_leverage}, we get an upper bound on the retention of $d$ for any anchor set
     \begin{equation}\label{eq:retention_ceiling}
-        R^2_{\phi\phi'}\;\le\min\Bigl\{1,\;\frac{\ell_D}{1-\frac{|D|}{N}}\Bigr\}.
+        R^2_{\phi\phi'}=\frac{\lVert \tilde d\rVert^2}{\lVert d\rVert^2}\;\le\min\Bigl\{1,\;\frac{\ell_D}{1-\frac{|D|}{N}}\Bigr\}.
     \end{equation}
     How large the group leverage $\ell_D$ can be is in turn bounded by the single leverages of its traces added up, $L_D = \sum_{i\in D}\ell_i$, which we call the \emph{total leverage} of $D$. By equation~\eqref{eq:share_bound}, a vector in $S$ places at most the share $\ell_i$ of its squared length on $\sigma^i$, and hence at most the share $\sum_{i\in D}\ell_i$ on the traces of $D$ together. As no share exceeds one,
     \begin{equation}\label{eq:group_leverage_ceiling}
@@ -810,7 +810,7 @@
     \begin{equation}\label{eq:surviving_length_even}
         \lVert\tilde d\rVert^2\;\le\;r\Bigl(\frac{|D|}{N}\Bigr)^2 ,
     \end{equation}
-    so that the squared distance that can reach the decoder is at most $r$ times the square of the share of the traces on which the two formulae disagree. In the bound on the retention for any anchor set, the same substitution gives, as no retention exceeds one,
+    so that the squared reconstructed distance is at most $r$ times the square of the share of the traces on which the two formulae disagree. In the bound on the retention for any anchor set, the same substitution gives,
     \begin{equation}\label{eq:retention_even_division}
         R^2_{\phi\phi'}\;\le\;\min\Bigl\{1,\;\frac{r\,|D|}{N-|D|}\Bigr\},
     \end{equation}
