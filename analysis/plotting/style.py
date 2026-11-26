@@ -17,6 +17,7 @@ BLUE = "#2a78d6"
 ORANGE = "#eb6834"
 AQUA = "#1baf7a"
 VIOLET = "#4a3aa7"
+YELLOW = "#f2a600"   # reference slot 4; 2.05:1 on white, so ship it with a direct label
 INK = "#1a1a1a"      # titles and axis labels
 INK_2 = "#5c5c5c"    # tick labels, annotations, legend text
 GRID = "#e6e6e6"

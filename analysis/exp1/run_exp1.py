@@ -153,7 +153,7 @@ def main() -> None:
     ablation_rows = []
     floor_specs = [(m, c) for m, c in GREEDY_METRICS
                    if m in ("semantic_equivalent_rate", "invalid_rate",
-                            "semantic_distance")]
+                            "semantic_distance", "semantic_distance_valid")]
     for r in overall:
         if r["pass"] == "greedy" and r["metric"] in dict(floor_specs):
             ablation_rows.append({"condition": "conditioned", **{k: r[k] for k in
@@ -200,7 +200,7 @@ def main() -> None:
             "fig:exp1_greedy_by_depth": {
                 "file": "by_depth.csv",
                 "filter": "pass=='greedy' & metric in ['semantic_equivalent_rate',"
-                          "'semantic_distance','invalid_rate']"},
+                          "'semantic_distance_valid','invalid_rate']"},
             "fig:exp1_generated_depth": {
                 "file": "by_depth.csv",
                 "filter": "metric=='generated_depth_valid'"},

@@ -16,6 +16,11 @@ Conventions mirrored from the thesis text:
     special tokens stripped; invalid generations are included (the score
     characterises the policy's output diversity as a whole).
   - generated depth: valid generations only (invalid rows carry null depth).
+  - semantic distance over valid generations (``semantic_distance_valid``): the
+    distance where the generation parsed and NaN where it is invalid (greedy);
+    the mean over a target's valid draws, NaN if none parsed (sampling). This is
+    the thesis's main distance figure. ``semantic_distance`` keeps the stored
+    convention, under which an invalid generation counts as distance 1.
 """
 
 from __future__ import annotations
@@ -111,6 +116,8 @@ def per_target_greedy(df: pd.DataFrame) -> pd.DataFrame:
     wrong_valid = (~df["is_invalid"]) & (~df["is_semantic_equivalent"])
     out["wrong_valid_distance"] = np.where(
         wrong_valid, df["semantic_distance"].astype(float), np.nan)
+    out["distance_valid"] = np.where(
+        ~df["is_invalid"].to_numpy(), df["semantic_distance"].astype(float), np.nan)
     return out.set_index("formula_id").sort_index()
 
 
@@ -121,6 +128,7 @@ def per_target_topk(df: pd.DataFrame, *, k_max: int, bos: int, eos: int) -> pd.D
         n = len(g)
         c = int(g["is_semantic_equivalent"].sum())
         gen_depths = g.loc[~g["is_invalid"], "generated_depth"].astype(float)
+        valid_dists = g.loc[~g["is_invalid"], "semantic_distance"].astype(float)
         correct_strs = g.loc[g["is_semantic_equivalent"], "generated_formula_str"]
         token_seqs = [strip_specials(ids, bos, eos) for ids in g["token_ids"]]
         row = {
@@ -129,6 +137,7 @@ def per_target_topk(df: pd.DataFrame, *, k_max: int, bos: int, eos: int) -> pd.D
             "equiv": float(g["is_semantic_equivalent"].mean()),   # per-sample rate = pass@1
             "invalid": float(g["is_invalid"].mean()),
             "distance": float(g["semantic_distance"].mean()),
+            "distance_valid": float(valid_dists.mean()) if len(valid_dists) else np.nan,
             "gen_depth": float(gen_depths.mean()) if len(gen_depths) else np.nan,
             "distinct_correct": float(correct_strs.nunique()),
             "solved": float(c > 0),
@@ -150,6 +159,7 @@ def per_target_topk(df: pd.DataFrame, *, k_max: int, bos: int, eos: int) -> pd.D
 GREEDY_METRICS = [
     ("semantic_equivalent_rate", "equiv"),
     ("semantic_distance", "distance"),
+    ("semantic_distance_valid", "distance_valid"),
     ("invalid_rate", "invalid"),
     ("generated_depth_valid", "gen_depth"),
     ("wrong_valid_distance", "wrong_valid_distance"),
@@ -158,6 +168,7 @@ GREEDY_METRICS = [
 TOPK_METRICS = [
     ("semantic_equivalent_rate", "equiv"),
     ("semantic_distance", "distance"),
+    ("semantic_distance_valid", "distance_valid"),
     ("invalid_rate", "invalid"),
     ("generated_depth_valid", "gen_depth"),
     ("distinct_correct_all", "distinct_correct"),
